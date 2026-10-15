@@ -1,0 +1,15 @@
+# OPERATOR STATE. `make pi-ship` does not overwrite the copy on the
+# Pi (PI_OWNED in the Makefile). The version in git is only the seed
+# for a fresh install, and it will drift from the running one.
+# Edit it on the Pi (`sudo pf tui`, House lists, a/d), then apply.
+#
+# House-segment never-block. Names here (and all their subdomains) are
+# removed from the house sinkhole (house_default.domains + hagezi feed +
+# house.domains) before the compile. This is the only never-block that
+# the house list obeys. The shared never_block.domains keeps registries
+# and Google APIs reachable for agents, and here it would protect ad hosts
+# under google.com. This is also how to disable a shipped default without
+# a change to the repo. A parent frees its children: googleapis.com
+# here would free youtubei.googleapis.com. One per line.
+doubleclick.net
+googleadservices.com

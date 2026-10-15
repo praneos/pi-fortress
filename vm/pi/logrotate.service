@@ -1,0 +1,17 @@
+[Unit]
+Description=pi-fortress log rotation
+Documentation=man:logrotate(8)
+
+[Service]
+Type=oneshot
+# Our conf is at /etc/pi-fortress/logrotate.conf, not in
+# /etc/logrotate.d. Thus the daily logrotate.timer of the distribution never
+# reads it, and the two runs cannot conflict on the same files. The state
+# file is ours for the same reason: logrotate records "last rotated" for
+# each path in it. If we shared /var/lib/logrotate/status with the system
+# run, the run that fired first could decide that the hourly files were done.
+ExecStart=/usr/sbin/logrotate --state /var/lib/pi-fortress/logrotate.state /etc/pi-fortress/logrotate.conf
+# postrotate signals dnsmasq and pf dns through systemctl, and create
+# gives files back to pf-broker/pf-sidecar/pf-dns. Thus: root, no sandbox.
+Nice=10
+IOSchedulingClass=idle

@@ -1,0 +1,55 @@
+[Unit]
+Description=pi-fortress agent enroll (HTTP CA + setup.sh)
+After=network-online.target
+Wants=network-online.target
+# Always restart, with no limit (pf-broker.service gives the reason).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=2
+# Resource caps (pf-broker.service explains the scheme). Bounded maps, a
+# small number of files, and 64 connections of a maximum of 16 KiB of headers.
+MemoryHigh=96M
+MemoryMax=128M
+Environment=GOMEMLIMIT=80MiB
+TasksMax=64
+LimitNOFILE=1024
+OOMScoreAdjust=300
+DynamicUser=yes
+SupplementaryGroups=pf-fortress
+ReadWritePaths=/var/lib/pi-fortress/www/claims
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+# @privileged includes @chown, and a filtered call kills the process. The
+# store keeps the group of a file when it rewrites the file. Without
+# CAP_CHOWN, it can give the file only to a group that this user is in.
+SystemCallFilter=@chown
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine
+ExecStart=/usr/local/sbin/pf www
+
+[Install]
+WantedBy=multi-user.target

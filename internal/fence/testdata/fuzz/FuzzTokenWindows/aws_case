@@ -1,0 +1,2 @@
+go test fuzz v1
+string("AKIAAB3XZ9AB3XZ9AB3XZ9AB akiaab3xz9ab3xz9ab3x AsiaPacificSoutheastRegion asiapacificcommunications \\nASIAAB3XZ9AB3XZ9AB3Xx")

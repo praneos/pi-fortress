@@ -1,0 +1,9 @@
+[Unit]
+Description=pi-fortress ship dead-man: revert an unconfirmed upgrade
+Documentation=file:///opt/pi-fortress/docs/signed_ship.md
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pf ship deadman
+UMask=0022
+TimeoutStartSec=15min

@@ -1,0 +1,21 @@
+#!/bin/bash
+# NetworkManager dispatcher. Per-interface sysctls cannot be in sysctl.d
+# for a VLAN child: the device does not exist when sysctl.d runs. Also,
+# Docker rewrites net.ipv4.ip_forward at each start.
+# Keys for a dotted name use a slash, enp6s0/20, not enp6s0.20.
+iface="$1"
+action="$2"
+case "${action}" in
+  up|dhcp4-change|dhcp6-change) ;;
+  *) exit 0 ;;
+esac
+case "${iface}" in
+  @PARENT@|@AGENT_IF@) ;;
+  *) exit 0 ;;
+esac
+key="${iface//./\/}"
+sysctl -qw "net.ipv4.conf.${key}.forwarding=0" 2>/dev/null || true
+sysctl -qw "net.ipv4.conf.${key}.rp_filter=1" 2>/dev/null || true
+sysctl -qw "net.ipv6.conf.${key}.disable_ipv6=1" 2>/dev/null || true
+sysctl -qw "net.ipv6.conf.${key}.accept_ra=0" 2>/dev/null || true
+exit 0

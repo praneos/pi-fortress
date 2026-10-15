@@ -1,0 +1,69 @@
+[Unit]
+Description=pi-fortress observe (DNS + conntrack)
+After=network-online.target pi-fortress-dns-agent.service
+Wants=pi-fortress-dns-agent.service
+# Always restart, with no limit (pf-broker.service gives the reason).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=2
+# Resource caps (pf-broker.service explains the scheme). The process
+# rebuilds its largest structure from conntrack at each poll, so it grows
+# with the table. 131072 entries (apply.sh) fit in this with spare space.
+MemoryHigh=200M
+MemoryMax=256M
+Environment=GOMEMLIMIT=160MiB
+TasksMax=128
+LimitNOFILE=1024
+OOMScoreAdjust=300
+Group=pf-fortress
+# journalctl _TRANSPORT=kernel for the nft drop lines (ProtectKernelLogs
+# closes /dev/kmsg; -k needs the boot ID, which ProcSubset=pid hides).
+SupplementaryGroups=systemd-journal
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_DAC_READ_SEARCH
+AmbientCapabilities=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+# @privileged includes @chown, and a filtered call kills the process. The
+# state file keeps the group that apply gave it (root:pf-fortress).
+SystemCallFilter=@chown
+ReadWritePaths=/var/lib/pi-fortress /var/log/pi-fortress
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine
+# Write chunking: first-seen rows, offsets
+# and state stay in memory until one of the two limits. A crash loses that data.
+#Environment=PF_OBSERVE_FLUSH_BYTES=10485760
+#Environment=PF_OBSERVE_FLUSH_INTERVAL=15m
+# Outbound volume: the MB that one client may send to one
+# destination in one hour before a `volume` alert. 0 disables the signal.
+#Environment=PF_OBSERVE_VOLUME_MB=500
+# DNS tunnel heuristic: the number of distinct query names a
+# minute, from one client under one registrable domain, that is a sign by
+# itself. 0 disables the signal, and also the label and TXT rules.
+#Environment=PF_OBSERVE_TUNNEL_NAMES=120
+ExecStart=/usr/local/sbin/pf observe run
+
+[Install]
+WantedBy=multi-user.target

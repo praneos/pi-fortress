@@ -1,0 +1,31 @@
+# Shipped defaults for the house-segment sinkhole. THIS FILE IS CODE,
+# not operator state: `make pi-ship` overwrites it at each deploy, and
+# the TUI cannot edit it. To change the defaults, change them here, in
+# git, and ship.
+#
+# The house list is the union of three files, minus house_never_block:
+#   house_default.domains    <- this file. shipped, overwritten
+#   generated/house.domains  <- feeds with "segment": "house" (hagezi)
+#   house.domains            <- the operator's own. never overwritten
+# One name per line. dnsmasq answers 0.0.0.0 for the name and every
+# subdomain. The agent segment reads none of these.
+#
+# To un-block one of these, do NOT delete the line: the next ship puts
+# it back. Put the name in house_never_block.domains. That file stays
+# after `make pi-ship`. Never-block matches a name and all names under
+# it. Thus the apexes here are independent (to free youtube.com does not
+# free youtu.be, ytimg.com or googlevideo.com). But a parent frees its
+# children: googleapis.com there would free youtubei.googleapis.com.
+
+youtube.com
+youtu.be
+youtube-nocookie.com
+ytimg.com
+googlevideo.com
+youtubei.googleapis.com
+
+chess.com
+chesscomfiles.com
+
+soundcloud.com
+sndcdn.com

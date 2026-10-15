@@ -1,0 +1,11 @@
+[Unit]
+Description=pi-fortress WireGuard handshake check every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,13 @@
+# OPERATOR STATE. `make pi-ship` does not overwrite the copy on the Pi
+# (PI_OWNED in the Makefile). git holds only the seed for a fresh
+# install. Edit on the Pi: `sudo pf tui`, Agent lists, then apply.
+#
+# Public IPv4 addresses or CIDRs that the agent segment may reach on TCP
+# 22. Empty means closed. This is the default: all other TCP 22 packets
+# from an agent segment are dropped.
+#
+# SSH goes fully around the fence. A listed host is a raw tunnel:
+# `ssh -D/-L/-R`, ProxyJump and remote commands all skip the resolver
+# gate, the domain lists and the strip. It is also a path for each key
+# that the agent has. Use a forge front door, not a shell that you
+# administer. Git should continue to use https.

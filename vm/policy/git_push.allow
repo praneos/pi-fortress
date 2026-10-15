@@ -1,0 +1,19 @@
+# OPERATOR STATE. `make pi-ship` does not overwrite the copy on the Pi
+# (PI_OWNED in the Makefile). git holds only the seed for a fresh
+# install. Edit on the Pi (no TUI screen yet), then `sudo pf apply`.
+#
+# Repositories the agent segment may push to over git smart HTTP:
+#   <host> <owner>/<repo>    one repo; a ".git" suffix is ignored
+#   <host> <owner>/*         every repo exactly one segment below owner
+# Owner and repo match case-insensitively. The host must match exactly. A
+# GitLab subgroup is the full path: `gitlab.com grp/sub/repo`, `gitlab.com grp/sub/*`.
+#
+# Empty means no pushes. This is the default. The fence refuses the
+# info/refs advertisement and the pack POST of each git-receive-pack
+# with its uniform 503. It logs them to strip.jsonl as
+# git_push_not_allowed. Clone and fetch do not change.
+#
+# This list is not the full write path: the scope of the token is. Refer
+# to docs/git_push.md for what the list does not cover.
+#
+# github.com acme/widget

@@ -1,0 +1,11 @@
+# OPERATOR STATE. `make pi-ship` does not overwrite the copy on the
+# Pi (PI_OWNED in the Makefile). The version in git is only the seed
+# for a fresh install, and it will drift from the running one.
+# Edit it on the Pi (`sudo pf tui`, House lists, a/d), then apply.
+#
+# House-segment-only sinkhole additions (docs/house_gateway.md). One
+# name per line. Subdomains are also blocked. This list is merged with
+# house_default.domains and the feeds marked "segment": "house" in
+# sources.json, minus house_never_block.domains. It never applies to the
+# agent segment. The shipped defaults are in house_default.domains. To
+# un-block one, add its name to house_never_block.domains, not here.

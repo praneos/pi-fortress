@@ -1,0 +1,87 @@
+# OPERATOR STATE. `make pi-ship` does not overwrite the copy on the Pi
+# (PI_OWNED in the Makefile). git holds only the seed for a fresh
+# install. Edit on the Pi: `sudo pf tui`, Agent lists, then apply.
+#
+# With PARANOID=0, this list only decides which hosts stay out of
+# unknown.jsonl. With PARANOID=1, this list and the host column of
+# core.hosts are the ONLY set of names that the agent segment may reach
+# on 443 (docs/paranoid_mode.md). A name allows itself and all its
+# subdomains. Thus do not list a subdomain of a name that is already here.
+github.com
+raw.githubusercontent.com
+objects.githubusercontent.com
+release-assets.githubusercontent.com
+api.anthropic.com
+platform.claude.com
+claude.ai
+api.openai.com
+api.x.ai
+http-intake.logs.us5.datadoghq.com
+registry.npmjs.org
+www.npmjs.com
+pypi.org
+files.pythonhosted.org
+proxy.golang.org
+sum.golang.org
+cloud.google.com
+pf-core-echo.test
+
+# --- build mirrors: read-mostly, no anonymous write sink. Thus the worst
+# that an agent can do with one is fetch. Uncomment what a build needs. A
+# name that nobody fetches should not be on the list.
+#deb.debian.org
+#security.debian.org
+#archive.ubuntu.com
+#security.ubuntu.com
+#ports.ubuntu.com
+#dl-cdn.alpinelinux.org
+#crates.io
+#static.crates.io
+#index.crates.io
+#static.rust-lang.org
+#rubygems.org
+#repo.maven.apache.org
+#repo1.maven.org
+#repo.packagist.org
+#registry.yarnpkg.com
+#nodejs.org
+#golang.org
+#go.dev
+#pkg.go.dev
+#dl.google.com
+#download.docker.com
+
+# --- container registries. A read is a fetch. A push with a token is an
+# upload of all that the agent put in a layer. Consider that as you
+# consider github.com below.
+#registry-1.docker.io
+#auth.docker.io
+#index.docker.io
+#production.cloudflare.docker.com
+#ghcr.io
+#quay.io
+#mcr.microsoft.com
+
+# --- write sinks. Each of these accepts data as its purpose. Thus each
+# one that you add gives a capability and removes a guarantee. That is a
+# fair trade when the agent needs it, and a bad trade when it does not.
+#
+# github.com above is already in this class, but it has no such mark. It
+# carries api.github.com and gist.github.com. Thus an agent that has a
+# token can publish a secret gist today. That is not a reason to remove
+# it. It is the honest price of the list.
+#hooks.slack.com
+#api.slack.com
+#api.telegram.org
+#storage.googleapis.com
+#s3.amazonaws.com
+#sentry.io
+
+# --- considered and rejected. PaaS wildcards (vercel.app, workers.dev,
+# herokuapp.com, netlify.app, pages.dev, fly.dev, onrender.com,
+# repl.co, glitch.me) are where a throwaway exfil endpoint lives. But
+# they also host a large part of the ordinary web. A block on
+# blacklist.domains would really break house browsing, and the agent
+# does not need them denied twice. The same for URL shorteners: a real
+# exfil channel, small bandwidth, high breakage. They are not on either
+# list on purpose. Add them when a session really shows the traffic.

@@ -1,0 +1,227 @@
+#!/bin/bash
+set -euo pipefail
+
+AGENT_ENV="${PF_AGENT_ENV:-/etc/pi-fortress/agent.env}"
+CA_DIR="${PF_CA_DIR:-/etc/pi-fortress}"
+
+sha256_of() { sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
+
+# CA_SHA256 in agent.env pins the CA that this box trusts. Provisioning
+# records it, from PF_CA_SHA256 or (PF_CA_TOFU=1, set only by
+# provision.sh) from the first ca.pem that it fetches. After that, each
+# boot fetches http://PI_IP/ca.pem again over plain HTTP on the agent
+# cable. Without a pin, any device that can answer for PI_IP there could
+# give the box a CA of its choice. With a pin, the box gets the CA that it
+# already trusts.
+record_pin() {
+  local sum="$1"
+  if grep -q '^CA_SHA256=' "${AGENT_ENV}" 2>/dev/null; then
+    sed -i "s/^CA_SHA256=.*/CA_SHA256=${sum}/" "${AGENT_ENV}"
+  else
+    install -d -m 0755 "${AGENT_ENV%/*}"
+    echo "CA_SHA256=${sum}" >>"${AGENT_ENV}"
+  fi
+  echo "agent: pinned the egress CA, sha256 ${sum}, in ${AGENT_ENV}"
+}
+
+# pick_ca sets ca to the CA to trust, or "". First it tries the copy on
+# the gateway: the engine signs with that CA. /vagrant is the desk
+# checkout, and the Pi shares it only in the lab. A real Pi keeps
+# generated/ on its own disk, and no ship copies it back. Thus the file
+# there is absent or is left over from a lab run. A leftover installed
+# cleanly, said "trusted", and then failed all HTTPS requests (Pi,
+# 2026-09-21). The files below are for a gateway that does not answer
+# yet. With a pin, the script skips a file of any origin that does not
+# match it. Thus a mismatch keeps the CA that the box already trusts.
+pick_ca() {
+  local pin="${CA_SHA256:-}" fetched sum candidate
+  ca=""
+  if [[ -n "${pin}" && ! "${pin}" =~ ^[0-9a-f]{64}$ ]]; then
+    echo "agent: CA_SHA256='${pin}' in ${AGENT_ENV} is not a sha256; trusting no new CA" >&2
+    pin=invalid
+  fi
+  fetched="$(mktemp)"
+  if curl -fsS --max-time 5 "http://${PI_IP}/ca.pem" -o "${fetched}" 2>/dev/null \
+     && grep -q "BEGIN CERTIFICATE" "${fetched}"; then
+    sum="$(sha256_of "${fetched}")"
+    if [[ -z "${pin}" && "${PF_CA_TOFU:-0}" == 1 ]]; then
+      record_pin "${sum}"
+      pin="${sum}"
+    fi
+    if [[ -z "${pin}" ]]; then
+      echo "agent: WARNING: no CA_SHA256 in ${AGENT_ENV}; trusting http://${PI_IP}/ca.pem unpinned. Re-provision, or set CA_SHA256 to the Pi's 'sudo sha256sum /var/lib/pi-fortress/www/ca.pem'." >&2
+    fi
+    if [[ -z "${pin}" || "${sum}" == "${pin}" ]]; then
+      install -D -m 0644 "${fetched}" "${CA_DIR}/egress-ca.pem"
+      ca="${CA_DIR}/egress-ca.pem"
+    else
+      echo "agent: http://${PI_IP}/ca.pem has sha256 ${sum}, not the pinned ${pin}; keeping the CA already trusted. If the Pi's CA really changed, set CA_SHA256 in ${AGENT_ENV} to its sha256 or re-provision." >&2
+    fi
+  fi
+  rm -f "${fetched}"
+  [[ -z "${ca}" ]] || return 0
+  local gen_egress=/vagrant/vm/policy/generated/egress-ca.pem gen_mitm=/vagrant/vm/policy/generated/mitm-ca.pem
+  if [[ -n "${PF_GEN_DIR:-}" ]]; then
+    gen_egress="${PF_GEN_DIR}/egress-ca.pem" gen_mitm="${PF_GEN_DIR}/mitm-ca.pem"
+  fi
+  local tries="${PF_CA_WAIT:-20}" i
+  for ((i = 0; i <= tries; i++)); do
+    for candidate in \
+      "${gen_egress}" \
+      "${CA_DIR}/egress-ca.pem" \
+      "${gen_mitm}" \
+      "${CA_DIR}/mitm-ca.pem"
+    do
+      # The first pass also takes the copies on the box. The waits
+      # after it are for the generated/ of the lab Pi to appear.
+      if ((i > 0)) && [[ "${candidate}" == "${CA_DIR}"/* ]]; then
+        continue
+      fi
+      [[ -f "${candidate}" ]] || continue
+      if [[ -n "${pin}" && "$(sha256_of "${candidate}")" != "${pin}" ]]; then
+        continue
+      fi
+      ca="${candidate}"
+      return 0
+    done
+    ((i < tries)) && sleep 2
+  done
+  return 0
+}
+
+# When sourced (by the test), stop at the definitions. In all other uses,
+# the script is run.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+  return 0
+fi
+
+if [[ -f /vagrant/vm/pi/net.env ]]; then
+  # shellcheck source=/dev/null
+  source /vagrant/vm/pi/net.env
+elif [[ -f /etc/pi-fortress/net.env ]]; then
+  # shellcheck source=/dev/null
+  source /etc/pi-fortress/net.env
+else
+  echo "agent: net.env not found" >&2
+  exit 1
+fi
+
+# provision.sh writes this: the NIC that faces the Pi, and the address of
+# this VM when there is more than one agent. net.env has the address of
+# the first agent, and the Pi shares net.env. Thus net.env cannot do it.
+if [[ -f "${AGENT_ENV}" ]]; then
+  # shellcheck source=/dev/null
+  source "${AGENT_ENV}"
+fi
+AGENT_IP="${PF_AGENT_IP:-${AGENT_IP}}"
+
+# Find by network, not by address. With the VirtualBox NAT adapter cut,
+# this must work before anything assigns the address. With more than one
+# agent, the address is different for each VM.
+INT_IF="$(ip -4 -o addr show to "${AGENT_NET}" 2>/dev/null | awk '{print $2; exit}')"
+INT_IF="${INT_IF%%@*}"
+NAT_IF="$(ip -4 -o addr show to "${VBOX_NAT_NET}" 2>/dev/null | awk '{print $2; exit}')"
+NAT_IF="${NAT_IF%%@*}"
+
+# No interface has an agent address yet. When bridged onto the real
+# cable, this is the normal case at boot. Vagrant no longer configures
+# the interface, because it would do that over the ssh session that now
+# uses it. NET_IF is the interface that faced the Pi at provisioning.
+if [[ -z "${INT_IF}" && -n "${NET_IF:-}" && -e "/sys/class/net/${NET_IF}" ]]; then
+  ip link set "${NET_IF}" up
+  ip addr add "${AGENT_IP}/${AGENT_NET##*/}" dev "${NET_IF}" 2>/dev/null || true
+  INT_IF="${NET_IF}"
+fi
+
+if [[ -z "${INT_IF}" ]]; then
+  echo "agent: no interface on ${AGENT_NET} and no NET_IF to bring up" >&2
+  ip -br addr || true
+  exit 1
+fi
+# The nft lock below contains this name. Use the name grammar of render.
+if [[ ! "${INT_IF}" =~ ^[A-Za-z][A-Za-z0-9._-]{0,14}$ ]]; then
+  echo "agent: '${INT_IF}' is not an interface name the lock can carry" >&2
+  exit 1
+fi
+
+ok=0
+for _ in $(seq 1 30); do
+  if ping -c 1 -W 1 "${PI_IP}" >/dev/null 2>&1; then
+    ok=1
+    break
+  fi
+  sleep 2
+done
+if [[ "${ok}" != 1 ]]; then
+  echo "agent: ${PI_IP} not reachable on ${INT_IF} yet; applying routes anyway" >&2
+fi
+
+while ip route del default >/dev/null 2>&1; do
+  :
+done
+ip route add default via "${PI_IP}" dev "${INT_IF}"
+
+if [[ -f /etc/resolv.conf ]]; then
+  chattr -i /etc/resolv.conf 2>/dev/null || true
+fi
+cat >/etc/resolv.conf <<EOF
+nameserver ${PI_IP}
+EOF
+chattr +i /etc/resolv.conf 2>/dev/null || true
+
+install -d -m 0755 /etc/sysctl.d
+cat >/etc/sysctl.d/99-pi-fortress-agent.conf <<'EOF'
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.default.disable_ipv6=1
+net.ipv6.conf.lo.disable_ipv6=1
+EOF
+sysctl -p /etc/sysctl.d/99-pi-fortress-agent.conf >/dev/null 2>&1 || true
+sysctl -w net.ipv6.conf.all.disable_ipv6=1 >/dev/null 2>&1 || true
+sysctl -w net.ipv6.conf.default.disable_ipv6=1 >/dev/null 2>&1 || true
+for _v6 in /proc/sys/net/ipv6/conf/*/disable_ipv6; do
+  echo 1 >"${_v6}" 2>/dev/null || true
+done
+
+install -d -m 0755 /etc/pi-fortress
+lock=/etc/nftables.conf
+cat >"${lock}" <<EOF
+#!/usr/sbin/nft -f
+flush ruleset
+
+table inet agent_lock {
+  chain output {
+    type filter hook output priority filter; policy drop;
+    meta nfproto ipv6 counter drop
+    tcp dport 80 ip daddr != ${PI_IP} counter drop
+    udp dport 443 counter drop
+    tcp dport 853 counter drop
+    udp dport 853 counter drop
+    ct state established,related accept
+    ct state invalid drop
+    oifname != "${INT_IF}" oifname != "lo" counter drop
+    ip daddr ${PI_IP} udp dport 53 accept
+    ip daddr ${PI_IP} tcp dport 53 accept
+    ip daddr ${PI_IP} tcp dport 80 accept
+    ip daddr ${PI_IP} icmp type echo-request accept
+    tcp dport 443 accept
+    tcp dport 22 accept
+  }
+}
+EOF
+chmod 0755 "${lock}"
+nft -f "${lock}"
+
+pick_ca
+if [[ -n "${ca}" ]]; then
+  install -m 0644 "${ca}" /usr/local/share/ca-certificates/pi-fortress-egress.crt
+  rm -f /usr/local/share/ca-certificates/pi-fortress-mitm.crt
+  update-ca-certificates >/dev/null 2>&1 || true
+  echo "agent: trusted egress CA from ${ca}"
+else
+  echo "agent: egress CA not found yet; HTTPS via TLS inspection will fail until apply on pi" >&2
+fi
+
+echo "agent: ${AGENT_IP} default via ${PI_IP} dev ${INT_IF} (NAT_IF=${NAT_IF:-none})"
+# The route to the gateway exists from here. The first run of the timer
+# possibly came before it.
+systemctl start --no-block pi-fortress-agent-clock.timer pi-fortress-agent-clock.service >/dev/null 2>&1 || true

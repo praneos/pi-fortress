@@ -1,0 +1,112 @@
+# Appliance image hygiene: what seal-image.sh removes. image-lint.sh proves
+# it gone before the export of an OVA (docs/release.md). One row for each
+# path: ROLE CHECK PATTERN.
+#   ROLE    both | fence | agent
+#   CHECK   absent  nothing may match the glob
+#           empty   a match may exist but must be zero bytes
+#           locked  the user, if in /etc/shadow, has a ! or * password
+# Sources: grep -rn '/etc/pi-fortress\|/var/lib/pi-fortress' vm internal.
+
+# Per-instance identity. firstboot.sh and systemd regenerate these.
+both   absent /etc/ssh/ssh_host_*
+both   empty  /etc/machine-id
+both   empty  /var/lib/dbus/machine-id
+both   absent /var/lib/systemd/random-seed
+both   absent /var/lib/systemd/credential.secret
+
+# Logins: vagrant's key and sudo, root's password, shell history.
+both   absent /home/vagrant/.ssh
+both   absent /root/.ssh
+both   absent /home/*/.ssh/authorized_keys
+both   absent /etc/sudoers.d/vagrant
+both   locked root
+both   locked vagrant
+agent  locked tester
+both   absent /root/.bash_history
+both   absent /home/*/.bash_history
+both   absent /root/.lesshst
+both   absent /home/*/.lesshst
+both   absent /root/.viminfo
+both   absent /home/*/.viminfo
+both   absent /root/.python_history
+both   absent /home/*/.python_history
+both   absent /root/.wget-hsts
+both   absent /home/*/.wget-hsts
+
+# The builder's checkout and provisioner leftovers.
+both   absent /vagrant/*
+both   absent /tmp/vagrant-*
+both   absent /tmp/pf-appliance
+
+# Fence CA: the engine's private key and every copy of its cert.
+fence  absent /var/lib/pi-fortress/engine/ca.pem
+fence  absent /var/lib/pi-fortress/engine/ca-cert.pem
+fence  absent /var/lib/pi-fortress/mitm/*
+fence  absent /var/lib/pi-fortress/www/ca.pem
+both   absent /etc/pi-fortress/egress-ca.pem
+both   absent /etc/pi-fortress/mitm-ca.pem
+agent  absent /usr/local/share/ca-certificates/pi-fortress-*.crt
+agent  absent /etc/ssl/certs/pi-fortress-*
+
+# Credentials: the store, its lock and quarantine, pastes, claims.
+fence  absent /etc/pi-fortress/broker/secrets.env
+fence  absent /etc/pi-fortress/broker/secrets.env.lock
+fence  absent /etc/pi-fortress/broker/secrets.disabled
+fence  absent /etc/pi-fortress/secrets.env
+fence  absent /etc/pi-fortress/secrets.env.lock
+fence  absent /etc/pi-fortress/secrets.disabled
+both   absent /etc/pi-fortress/agent-env-*.sh
+both   absent /etc/pi-fortress/agent-credentials-*.json
+fence  absent /var/lib/pi-fortress/www/claims/*
+fence  absent /var/lib/pi-fortress/appliance.slot
+both   absent /boot/pi-fortress-canary
+both   absent /boot/pi-fortress-claim
+agent  absent /home/*/.pi-fortress
+agent  absent /root/.pi-fortress
+agent  absent /home/*/.claude
+agent  absent /root/.claude
+agent  absent /home/*/.git-credentials
+agent  absent /root/.git-credentials
+
+# Signed ship: the builder's ship key and signer, uploads.
+fence  absent /var/lib/pi-fortress/pfship/.ssh/*
+fence  absent /etc/pi-fortress/pfship.pub
+fence  absent /etc/pi-fortress/allowed_signers
+fence  absent /var/lib/pi-fortress/incoming/*
+fence  absent /var/lib/pi-fortress/ship-work/*
+fence  absent /var/lib/pi-fortress/releases/*
+
+# WireGuard is issued for each device. The appliance ships none.
+fence  absent /etc/wireguard/*
+fence  absent /etc/pi-fortress/mullvad.conf
+
+# Operator overlays and the lab marker (lab mode enables the echo).
+fence  absent /etc/pi-fortress/lab
+fence  absent /etc/pi-fortress/alert.url
+fence  absent /etc/pi-fortress/net.env.local
+fence  absent /etc/pi-fortress/house.env
+fence  absent /etc/pi-fortress/house.hosts
+
+# Logs and run state.
+both   absent /var/log/pi-fortress/*
+fence  absent /var/lib/pi-fortress/*.offset
+fence  absent /var/lib/pi-fortress/*.last
+fence  absent /var/lib/pi-fortress/observe.json
+fence  absent /var/lib/pi-fortress/journal.cursor
+fence  absent /var/lib/pi-fortress/logrotate.state
+
+# DHCP leases.
+both   absent /var/lib/dhcp/*.leases
+both   absent /var/lib/dhcp/*.lease
+both   absent /var/lib/NetworkManager/*.lease
+fence  absent /var/lib/misc/dnsmasq.leases
+fence  absent /var/lib/pi-fortress/house.leases
+
+# apt caches.
+both   absent /var/cache/apt/archives/*.deb
+both   absent /var/cache/apt/*.bin
+
+# A previous first boot: its marker and what it printed.
+both   absent /var/lib/pi-fortress/firstboot.done
+both   absent /etc/pi-fortress/seat.txt
+both   absent /etc/issue.d/50-pi-fortress-seat.issue

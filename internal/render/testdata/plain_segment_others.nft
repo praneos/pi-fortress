@@ -1,0 +1,277 @@
+#!/usr/sbin/nft -f
+flush ruleset
+
+table inet fortress {
+  set blacklist_v4 {
+    type ipv4_addr
+    flags interval
+    elements = { 203.0.113.9 }
+  }
+
+  set dns_bypass_v4 {
+    type ipv4_addr
+    flags interval
+    elements = { 198.51.100.7 }
+  }
+
+  set resolved_v4 {
+    type ipv4_addr
+    flags timeout
+    timeout 2h
+  }
+
+  set direct_ip_v4 {
+    type ipv4_addr
+    flags interval
+    elements = { 203.0.113.64/26 }
+  }
+
+  set resolved_house_v4 {
+    type ipv4_addr
+    flags timeout
+    timeout 2h
+  }
+
+  set house_direct_ip_v4 {
+    type ipv4_addr
+    flags interval
+    
+  }
+
+  set house_whatsapp_v4 {
+    type ipv4_addr
+    flags interval
+    
+  }
+
+    type ipv4_addr
+    flags timeout
+    timeout 2h
+  }
+
+  set agent_conn_v4 {
+    type ipv4_addr
+    size 65535
+    flags dynamic
+  }
+
+  set house_conn_v4 {
+    type ipv4_addr
+    size 65535
+    flags dynamic
+  }
+
+    type ipv4_addr
+    size 65535
+    flags dynamic
+  }
+
+  set reserved_v4 {
+    type ipv4_addr
+    flags interval
+    elements = {
+      0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8,
+      169.254.0.0/16, 172.16.0.0/12, 192.0.0.0/24, 192.0.2.0/24,
+      192.168.0.0/16, 198.18.0.0/15, 198.51.100.0/24, 203.0.113.0/24,
+      224.0.0.0/4, 240.0.0.0/4
+    }
+  }
+
+  chain filter_prerouting {
+    type filter hook prerouting priority raw; policy accept;
+    iifname "eth0" ip saddr != 10.77.0.0/24 limit rate 10/second burst 20 packets log prefix "pi-fortress agent-spoof: " level info
+    iifname "eth0" ip saddr != 10.77.0.0/24 counter drop
+    iifname "eth2" ip saddr != 10.78.0.0/24 jump house_spoof
+    iifname "eth0" udp dport 53 fib daddr type local notrack
+    iifname "eth2" udp dport 53 fib daddr type local notrack
+    iifname "eth0" meta nfproto ipv6 counter drop
+    iifname "eth0" ip daddr @blacklist_v4 limit rate 10/second burst 20 packets log prefix "pi-fortress agent-blacklist: " level info
+    iifname "eth0" ip daddr @blacklist_v4 counter drop
+    iifname "eth0" ip daddr @dns_bypass_v4 limit rate 10/second burst 20 packets log prefix "pi-fortress agent-doh: " level info
+    iifname "eth0" ip daddr @dns_bypass_v4 counter drop
+    iifname "eth0" udp dport 443 counter drop
+    iifname "eth0" tcp dport 80 ip daddr != 10.77.0.1 counter drop
+    iifname "eth0" tcp dport 22 ip daddr != 198.18.0.0/16 counter drop
+    iifname "eth0" udp dport 53 ip daddr != 10.77.0.1 counter drop
+    iifname "eth0" tcp dport 53 ip daddr != 10.77.0.1 counter drop
+    iifname "eth0" tcp dport 853 limit rate 10/second burst 20 packets log prefix "pi-fortress agent-doh: " level info
+    iifname "eth0" tcp dport 853 counter drop
+    iifname "eth0" udp dport 853 limit rate 10/second burst 20 packets log prefix "pi-fortress agent-doh: " level info
+    iifname "eth0" udp dport 853 counter drop
+    iifname "eth2" meta nfproto ipv6 counter drop
+    iifname "eth2" ip daddr @blacklist_v4 limit rate 10/second burst 20 packets log prefix "pi-fortress house-blacklist: " level info
+    iifname "eth2" ip daddr @blacklist_v4 counter drop
+    iifname "eth2" udp length 156 @th,64,32 0x01000000 limit rate 10/second burst 20 packets log prefix "pi-fortress house-vpn: " level info
+    iifname "eth2" udp length 156 @th,64,32 0x01000000 counter drop
+    iifname "eth2" udp length 100 @th,64,32 0x02000000 limit rate 10/second burst 20 packets log prefix "pi-fortress house-vpn: " level info
+    iifname "eth2" udp length 100 @th,64,32 0x02000000 counter drop
+    iifname "eth2" udp length 72 @th,64,32 0x03000000 limit rate 10/second burst 20 packets log prefix "pi-fortress house-vpn: " level info
+    iifname "eth2" udp length 72 @th,64,32 0x03000000 counter drop
+    iifname "eth2" udp length >= 40 @th,64,32 0x04000000 limit rate 10/second burst 20 packets log prefix "pi-fortress house-vpn: " level info
+    iifname "eth2" udp length >= 40 @th,64,32 0x04000000 counter drop
+    iifname "eth2" meta l4proto { tcp, udp } th dport 1194 limit rate 10/second burst 20 packets log prefix "pi-fortress house-vpn: " level info
+    iifname "eth2" meta l4proto { tcp, udp } th dport 1194 counter drop
+    iifname "eth2" meta l4proto { tcp, udp } th dport 53 accept
+    iifname "eth2" ip daddr @dns_bypass_v4 limit rate 10/second burst 20 packets log prefix "pi-fortress house-doh: " level info
+    iifname "eth2" ip daddr @dns_bypass_v4 counter drop
+    iifname "eth2" udp dport 443 counter drop
+    iifname "eth2" tcp dport 853 limit rate 10/second burst 20 packets log prefix "pi-fortress house-doh: " level info
+    iifname "eth2" tcp dport 853 counter drop
+    iifname "eth2" udp dport 853 limit rate 10/second burst 20 packets log prefix "pi-fortress house-doh: " level info
+    iifname "eth2" udp dport 853 counter drop
+  }
+
+  chain raw_output {
+    type filter hook output priority raw; policy accept;
+    oifname "eth0" meta skuid "pf-dns" udp sport 53 notrack
+    oifname "eth2" meta skuid "pf-dns" udp sport 53 notrack
+  }
+
+  chain resolver_gate {
+    type filter hook prerouting priority -150; policy accept;
+    iifname "eth0" tcp dport 443 ct state new ip daddr != 10.77.0.1 ip daddr != 192.0.2.0/24 ip daddr != @direct_ip_v4 ip daddr != 198.18.0.0/16 limit rate 10/second burst 20 packets log prefix "pi-fortress agent-directip: " level info
+    iifname "eth0" tcp dport 443 ct state new ip daddr != 10.77.0.1 ip daddr != 192.0.2.0/24 ip daddr != @direct_ip_v4 ip daddr != 198.18.0.0/16 counter drop
+    iifname "eth2" tcp dport { 443, 465, 993, 5223, 5228, 8443 } ct state new ip daddr != 10.78.0.1 ip daddr != @house_direct_ip_v4 ip daddr != @reserved_v4 ct mark set ct mark and 0xff0fffff or 0x00100000
+    iifname "eth2" tcp dport 80 ct state new ip daddr != 10.78.0.1 ip daddr != @house_direct_ip_v4 ip daddr != @resolved_house_v4 ip daddr != @house_whatsapp_v4 limit rate 10/second burst 20 packets log prefix "pi-fortress house-directip: " level info
+    iifname "eth2" tcp dport 80 ct state new ip daddr != 10.78.0.1 ip daddr != @house_direct_ip_v4 ip daddr != @resolved_house_v4 ip daddr != @house_whatsapp_v4 counter drop
+  }
+
+  chain prerouting {
+    type nat hook prerouting priority dstnat; policy accept;
+    iifname "eth0" tcp dport 443 redirect to :8080
+  }
+
+  chain input {
+    type filter hook input priority filter; policy drop;
+    iifname "wlan0" meta nfproto ipv6 counter drop
+    iifname "eth0" tcp dport 53 meter agent_dnsflood_tcp { ip saddr limit rate over 200/second burst 400 packets } counter drop
+    iifname "eth0" udp dport 53 meter agent_dnsflood_udp { ip saddr limit rate over 200/second burst 400 packets } counter drop
+    iifname "eth2" tcp dport 53 meter house_dnsflood_tcp { ip saddr limit rate over 200/second burst 400 packets } counter drop
+    iifname "eth2" udp dport 53 meter house_dnsflood_udp { ip saddr limit rate over 200/second burst 400 packets } counter drop
+    ct state established,related accept
+    ct state invalid drop
+    iifname "lo" accept
+    iifname "eth0" meta l4proto tcp ct state new meter agent_newconn { ip saddr limit rate over 50/second burst 200 packets } jump agent_connlimit
+    iifname "eth0" meta l4proto tcp ct state new add @agent_conn_v4 { ip saddr ct count over 128 } jump agent_connlimit
+    iifname "eth0" meta l4proto tcp ct state new ct count over 4096 jump agent_connlimit
+    iifname "eth0" meta l4proto tcp ct state new limit rate over 300/second burst 600 packets jump agent_connlimit
+    iifname "eth0" tcp dport 80 accept
+    iifname "eth0" tcp dport 8080 accept
+    iifname "eth0" tcp dport 53 accept
+    iifname "eth0" udp dport 53 accept
+    iifname "eth0" icmp type echo-request meter agent_ping { ip saddr limit rate over 10/second burst 20 packets } counter drop
+    iifname "eth0" icmp type echo-request accept
+    iifname "eth0" limit rate 10/minute burst 20 packets log prefix "pi-fortress agent-drop: " level warn
+    iifname "eth0" counter drop
+    iifname "eth2" tcp dport 53 accept
+    iifname "eth2" udp dport 53 accept
+    iifname "eth2" udp sport 68 udp dport 67 accept
+    iifname "eth2" icmp type echo-request meter house_ping { ip saddr limit rate over 10/second burst 20 packets } counter drop
+    iifname "eth2" icmp type echo-request accept
+    iifname "eth2" ip saddr 10.78.0.20 tcp dport 22 ct state new limit rate 30/minute burst 60 packets accept
+    iifname "eth2" limit rate 10/minute burst 20 packets log prefix "pi-fortress house-drop: " level warn
+    iifname "eth2" counter drop
+    iifname "wlan0" tcp dport 22 ct state new meter wan_ssh { ip saddr limit rate over 30/minute burst 60 packets } counter drop
+    iifname "wlan0" tcp dport 22 ct state new accept
+    iifname "wlan0" udp sport 67 udp dport 68 accept
+    iifname "wlan0" icmp type echo-request meter wan_ping { ip saddr limit rate over 10/second burst 20 packets } counter drop
+    iifname "wlan0" icmp type echo-request accept
+    iifname "wlan0" counter drop
+  }
+
+  chain output {
+    type filter hook output priority filter; policy accept;
+    oifname "wlan0" meta nfproto ipv6 counter drop
+    meta skuid "pf-broker" ip daddr @blacklist_v4 limit rate 10/second burst 20 packets log prefix "pi-fortress broker-blacklist: " level info
+    meta skuid "pf-broker" ip daddr @blacklist_v4 counter drop
+    meta skuid "pf-broker" ip daddr 9.9.9.9 udp dport 53 accept
+    meta skuid "pf-broker" ip daddr 9.9.9.9 tcp dport 53 accept
+    meta skuid "pf-broker" ip daddr @dns_bypass_v4 limit rate 10/second burst 20 packets log prefix "pi-fortress broker-doh: " level info
+    meta skuid "pf-broker" ip daddr @dns_bypass_v4 counter drop
+    ct state established,related accept
+    oifname "eth0" meta skuid "pf-dns" udp sport 53 ct state untracked accept
+    oifname "eth2" meta skuid "pf-dns" udp sport 53 ct state untracked accept
+    oifname "lo" accept
+    meta skuid "pf-engine" counter drop
+    meta skuid "pf-broker" ip daddr @reserved_v4 counter drop
+    meta skuid "pf-broker" tcp dport 443 accept
+    meta skuid "pf-broker" counter drop
+  }
+
+  chain forward {
+    type filter hook forward priority filter; policy drop;
+    iifname "eth2" ct state new meter house_newconn { ip saddr limit rate over 100/second burst 500 packets } jump house_connlimit
+    iifname "eth2" ct state new add @house_conn_v4 { ip saddr ct count over 1024 } jump house_connlimit
+    iifname "eth2" ct state new ct count over 32768 jump house_connlimit
+    iifname "eth2" ct state new meta l4proto tcp limit rate over 1000/second burst 5000 packets jump house_connlimit
+    iifname "eth2" meta mark and 0x00f00000 == 0x00200000 ct mark set ct mark and 0xff0fffff or 0x00200000 meta mark set meta mark and 0xff0fffff
+    iifname "eth2" meta mark and 0x00f00000 == 0x00300000 ct mark set ct mark and 0xff0fffff or 0x00300000 meta mark set meta mark and 0xff0fffff
+    iifname "eth2" ct mark and 0x00f00000 == 0x00300000 limit rate 10/second burst 20 packets log prefix "pi-fortress house-sni: " level info
+    iifname "eth2" ct mark and 0x00f00000 == 0x00300000 counter reject with tcp reset
+    iifname "eth2" ct mark and 0x00f00000 == 0x00100000 meter house_sni_queue { ip saddr limit rate over 100/second burst 300 packets } jump house_sni_flood
+    iifname "eth2" ct mark and 0x00f00000 == 0x00100000 counter queue num 1
+    ct state established,related accept
+    ct state invalid drop
+    iifname "eth0" ip daddr 198.18.0.0/16 tcp dport 22 counter reject with tcp reset
+    iifname "eth0" oifname "eth2" counter drop
+    iifname "eth2" oifname "eth0" ip saddr 10.78.0.20 ip daddr 10.77.0.10 tcp dport 22 ct state new accept
+    iifname "eth2" oifname "eth0" counter drop
+    iifname "eth0" meta nfproto ipv6 counter drop
+    iifname "eth0" udp dport 443 counter drop
+    iifname "eth0" tcp dport 80 counter drop
+    iifname "eth0" tcp dport 22 counter drop
+    iifname "eth0" counter drop
+    iifname "eth2" meta nfproto ipv6 counter drop
+    iifname "eth2" udp dport 53 reject with icmp type port-unreachable
+    iifname "eth2" tcp dport 53 reject with tcp reset
+    iifname "eth2" ip daddr @reserved_v4 limit rate 10/second burst 20 packets log prefix "pi-fortress house-local: " level info
+    iifname "eth2" ip daddr @reserved_v4 counter drop
+    iifname "eth2" jump house_egress
+    iifname "eth2" oifname "wlan0" accept
+    iifname "eth2" counter drop
+  }
+
+  chain house_egress {
+    tcp dport 80 return
+    tcp dport { 443, 465, 993, 5223, 5228, 8443 } return
+    udp dport 123 return
+    icmp type echo-request limit rate 10/second burst 20 packets return
+    tcp dport 5222 ip daddr @house_whatsapp_v4 return
+    limit rate 10/second burst 20 packets log prefix "pi-fortress house-port: " level info
+    counter drop
+  }
+
+  chain house_sni_flood {
+    limit rate 10/second burst 20 packets log prefix "pi-fortress house-sniflood: " level info
+    counter drop
+  }
+
+  chain agent_connlimit {
+    limit rate 10/second burst 20 packets log prefix "pi-fortress agent-connlimit: " level info
+    meta l4proto tcp counter reject with tcp reset
+    counter drop
+  }
+
+  chain house_connlimit {
+    limit rate 10/second burst 20 packets log prefix "pi-fortress house-connlimit: " level info
+    meta l4proto tcp counter reject with tcp reset
+    counter drop
+  }
+
+    meta l4proto tcp counter reject with tcp reset
+    counter drop
+  }
+
+  chain house_spoof {
+    ip saddr 0.0.0.0 udp sport 68 udp dport 67 ip daddr { 10.78.0.1, 255.255.255.255 } counter return
+    limit rate 10/second burst 20 packets log prefix "pi-fortress house-spoof: " level info
+    counter drop
+  }
+
+  chain postrouting {
+    type nat hook postrouting priority srcnat; policy accept;
+    ip saddr 10.77.0.0/24 oifname "wlan0" counter masquerade
+    ip saddr 10.78.0.0/24 oifname "wlan0" counter masquerade
+    ip saddr 10.79.0.0/30 oifname "wlan0" counter masquerade
+  }
+}

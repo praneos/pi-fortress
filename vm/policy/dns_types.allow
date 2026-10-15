@@ -1,0 +1,23 @@
+# OPERATOR STATE. `make pi-ship` does not overwrite the copy on the Pi
+# (PI_OWNED in the Makefile). git holds only the seed for a fresh
+# install. Edit it in `sudo pf tui`, Agent > Filtering > "DNS record
+# types", or by hand on the Pi, then `sudo pf apply`.
+#
+# The resolver of the agent segment answers only A queries. The Pi gives
+# an empty answer to all other types (TXT, MX, SRV, NULL, ANY, CAA, NS,
+# SOA, a public PTR, ...), and never forwards them. An A answer gets to
+# the agent as a maximum of 16 addresses, under the name that the agent
+# asked for, with no CNAMEs. An LLM over DNS answers with TXT, and a
+# CNAME target is also text.
+#
+# A line here forwards a name and type pair as before:
+#   <name> <TYPE> [<TYPE>...]    exactly that name
+#   *.<name> <TYPE> [<TYPE>...]  every name under it, not <name> itself
+# A type is spelled as dns.jsonl spells it: TXT, MX, SRV, NS, SOA, PTR,
+# CNAME, or TYPE<n> for any other (NULL is TYPE10, ANY TYPE255, CAA
+# TYPE257). AAAA, HTTPS and SVCB are filtered before this list, on all
+# segments. A line with these types changes nothing.
+#
+# A line that does not parse is skipped (journalctl -u
+# pi-fortress-dns-agent-go shows which), and its pairs stay filtered.
+# Empty means no overrides. This is the default.

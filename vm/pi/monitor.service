@@ -1,0 +1,48 @@
+[Unit]
+Description=pi-fortress resource monitor (load, memory, temp, Wi-Fi, per-process)
+After=network-online.target
+# Always restart, with no limit (pf-broker.service gives the reason).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=2
+# Resource caps (pf-broker.service explains the scheme). Bounded maps
+# and a small number of files or sockets.
+MemoryHigh=96M
+MemoryMax=128M
+Environment=GOMEMLIMIT=80MiB
+TasksMax=64
+LimitNOFILE=1024
+OOMScoreAdjust=300
+User=pf-sidecar
+Group=pf-fortress
+LogsDirectory=pi-fortress/monitor
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+ReadWritePaths=/var/log/pi-fortress
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine
+ExecStart=/usr/local/sbin/pf monitor run
+
+[Install]
+WantedBy=multi-user.target

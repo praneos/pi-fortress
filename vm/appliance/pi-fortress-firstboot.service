@@ -1,0 +1,15 @@
+[Unit]
+Description=pi-fortress appliance first boot (keys, canary, placeholder)
+ConditionPathExists=!/var/lib/pi-fortress/firstboot.done
+Wants=network-online.target
+After=network-online.target vboxadd-service.service pi-fortress-agent-routes.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/pi-fortress/appliance/firstboot.sh
+TimeoutStartSec=0
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

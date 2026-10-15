@@ -1,0 +1,17 @@
+# Your own core.hosts lines. Upgrades replace core.hosts and keep this
+# file. pf apply installs the two as one, with this file second. Lines for
+# a host that is already in core.hosts add to it, for kinds and headers.
+#
+#   host KIND[:Header[,Header...]] ...
+#
+# A placeholder is substituted only into Authorization (Bearer or Basic)
+# and X-Api-Key. Name another header after the kind to add it for that
+# host and kind, e.g.
+#
+#   gitlab.com GITLAB_TOKEN:PRIVATE-TOKEN
+#
+# pf enroll mint --header writes these lines for you. Headers that are
+# logged or echoed, or that steer routing, can never be named: User-Agent,
+# Referer, Origin, Host, Via, Forwarded, X-Forwarded-*, X-Real-IP,
+# Content-*, Transfer-Encoding, Connection, Keep-Alive, Upgrade, TE,
+# Trailer and Proxy-*.

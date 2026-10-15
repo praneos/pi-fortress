@@ -1,0 +1,8 @@
+# Copy to vm/policy/alert.url (no .example) to enable outbound alerts.
+# The POST is host/where/rule only. Never the token.
+#
+# Fastest phone path, no account:
+#   https://ntfy.sh/<long-random-topic>
+# Subscribe in the ntfy app. A guessable topic is a public mailbox.
+#
+# Slack incoming-webhook and Discord webhook URLs also work.

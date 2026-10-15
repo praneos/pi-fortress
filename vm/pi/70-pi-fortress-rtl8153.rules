@@ -1,0 +1,9 @@
+# The house adapter enumerates as a driver-CD (0bda:8151, usb-storage).
+# It becomes a NIC (0bda:8153, r8152) only after a StandardEject.
+# This rule matches only the storage personality, so it never fires on the NIC.
+# The switch runs as a unit, not from RUN: udev kills RUN programs that
+# take a long time. If one eject is not sufficient (a cold boot, 2026-09-22),
+# usb-nic-switch.sh escalates to a port reset and a logical unplug.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="08", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="8151", RUN+="/bin/systemctl --no-block start pi-fortress-usb-nic-switch.service"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="08", ATTRS{idVendor}=="0bda", ATTRS{idProduct}=="1a2b", RUN+="/bin/systemctl --no-block start pi-fortress-usb-nic-switch.service"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{bInterfaceClass}=="08", ATTRS{idVendor}=="2357", ATTRS{idProduct}=="0601", RUN+="/bin/systemctl --no-block start pi-fortress-usb-nic-switch.service"

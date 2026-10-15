@@ -1,0 +1,2 @@
+go test fuzz v1
+string("{\"a\":\"x\\nsk-proj-aB3_x-Z9aB3_x-Z9aB3_x-Z9aB3_x-Z9aB3_x-Z9aB3_x\",\"b\":\"y\\tgho_aB3xZ9aB3xZ9aB3xZ9aB3xZ9aB3xZ9aB3xZ9a\",\"c\":\"\\u000aAIzaaB3_x-Z9aB3_x-Z9aB3_x-Z9aB3_x-Z9aB3_\",\"d\":\"\\rnpm_aB3xZ9aB3xZ9aB3xZ9aB3xZ9aB3xZ9aB3xZ9\"}")

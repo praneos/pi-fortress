@@ -1,0 +1,23 @@
+[Unit]
+Description=pi-fortress log rotation, every 15 minutes
+
+[Timer]
+# The DNS query logs were the reason for an hourly run. On a busy segment,
+# dnsmasq.log passes maxsize long before a daily run examines it, and it
+# grows until a run examines it. The Ubuntu logrotate.timer is daily and
+# reads only /etc/logrotate.d. Our conf is not in that directory now.
+#
+# A quarter hour since the resource limits audit: logrotate checks maxsize
+# only when this timer fires. The agent drives the broker logs, and they can
+# grow at megabytes a second. The broker writer has its own size ceiling as
+# the hard stop. This interval sets how long a file can stay at that
+# ceiling and drop rows, before logrotate rotates it and writes start again.
+# Four logrotate runs an hour over a dozen files is a very small load on a Pi.
+OnCalendar=*:0/15
+RandomizedDelaySec=1min
+AccuracySec=1min
+# A Pi that was off at the top of the hour rotates when it is on again.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

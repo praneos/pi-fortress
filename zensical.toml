@@ -1,0 +1,85 @@
+[project]
+site_name = "Pi Fortress"
+site_url = "https://pi-fortress.praneos.ai"
+site_description = "A small box between your AI agent and the internet. The agent never holds your real API keys."
+copyright = "Pi Fortress will be released under Apache-2.0"
+docs_dir = "docs/user_guide"
+site_dir = "build/docs"
+extra_css = ["assets/stylesheets/extra.css"]
+extra_javascript = ["assets/javascripts/extra.js"]
+
+nav = [
+  { "Home" = "index.md" },
+  { "Why it exists" = "why.md" },
+  { "Getting started" = "getting_started.md" },
+  { "Pi 5 setup" = "pi_setup.md" },
+  { "Home network" = "home_network.md" },
+  { "Public Wi-Fi" = "public_wifi.md" },
+  { "Architecture" = "architecture.md" },
+  { "Use cases" = "use_cases.md" },
+  { "Comparison" = "comparison.md" },
+  { "FAQ" = "faq.md" },
+  { "Tutorials" = [
+    { "Overview" = "tutorials/README.md" },
+    { "1. IP, routing and NAT" = "tutorials/01-ip-routing-nat.md" },
+    { "2. VLAN segments" = "tutorials/02-vlan-segments.md" },
+    { "3. DNS, sinkhole and DoH" = "tutorials/03-dns-sinkhole-doh.md" },
+    { "4. TLS interception" = "tutorials/04-tls-interception.md" },
+    { "5. nftables packet path" = "tutorials/05-nftables-packet-path.md" },
+    { "6. HTTP fence and OAuth" = "tutorials/06-http-fence-oauth.md" },
+  ] },
+]
+
+[project.theme]
+custom_dir = "docs/site_overrides"
+language = "en"
+logo = "assets/logos/logo.svg"
+favicon = "assets/logos/favicon.svg"
+features = [
+  "navigation.instant",
+  "navigation.tracking",
+  "navigation.sections",
+  "navigation.top",
+  "navigation.footer",
+  "search.highlight",
+  "content.code.copy",
+  "toc.follow",
+]
+
+# Dark first; the toggle offers light.
+[[project.theme.palette]]
+scheme = "slate"
+primary = "blue"
+accent = "amber"
+toggle.icon = "lucide/sun"
+toggle.name = "Switch to light mode"
+
+[[project.theme.palette]]
+scheme = "default"
+primary = "blue"
+accent = "amber"
+toggle.icon = "lucide/moon"
+toggle.name = "Switch to dark mode"
+
+[project.markdown_extensions.abbr]
+[project.markdown_extensions.admonition]
+[project.markdown_extensions.attr_list]
+[project.markdown_extensions.def_list]
+[project.markdown_extensions.footnotes]
+[project.markdown_extensions.md_in_html]
+[project.markdown_extensions.tables]
+[project.markdown_extensions.toc]
+permalink = true
+[project.markdown_extensions.pymdownx.details]
+[project.markdown_extensions.pymdownx.highlight]
+anchor_linenums = true
+[project.markdown_extensions.pymdownx.inlinehilite]
+[project.markdown_extensions.pymdownx.snippets]
+[project.markdown_extensions.pymdownx.tabbed]
+alternate_style = true
+[project.markdown_extensions.pymdownx.tasklist]
+custom_checkbox = true
+[project.markdown_extensions.pymdownx.superfences]
+custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]

@@ -1,0 +1,287 @@
+# pf-itest -- sudoers drop-in for the pi-fortress integration suite (vm/itest)
+#
+# WHO THIS IS FOR
+#   A dedicated, unprivileged account on a REAL Pi (PF_TARGET=pi, or only
+#   PF_SSH_CONFIG set -- see vm/itest/e2e.go:24-32).  The suite connects to
+#   it over ssh as Host "pi".  Create it with no password and no other groups:
+#       sudo adduser --disabled-password --gecos '' pf-itest
+#   Then set the ssh config of the suite to it (User pf-itest).  It is NOT
+#   for the VirtualBox or cloud lab.  There the account is "vagrant", and the
+#   box already gives it full NOPASSWD:ALL (vm/itest/lab.go:100,
+#   vm/cloudlab/lab.sh:159).  Thus this file adds nothing there.
+#
+# WHAT IT GRANTS (all NOPASSWD, all as root, each argument pinned)
+#   - /usr/bin/true with no arguments -- the passwordless-sudo gate of the
+#     suite (vm/itest/lab.go:72).  Without this, all groups fail at the start.
+#   - three read-only `nft list` commands, with fixed table/chain/set names
+#     (vm/itest/policy_test.go:18, vm/itest/uplink_test.go:15-16)
+#   - three read-only `pf` subcommands, with fixed arguments
+#     (vm/itest policyTests, and opsTests "setup page commands run clean")
+#   - `ss -Hltnp`            (vm/itest/ops_test.go:21)
+#   - `stat` of exactly one file (vm/itest/ops_test.go:26)
+#   - `cat`/`tail` of exactly one log file (vm/itest/ops_test.go:123,134)
+#   - `journalctl -k` with a fixed --since shape and two fixed -g patterns
+#     (vm/itest/e2e.go:128, called from vm/itest/drops_test.go:16,22)
+#
+# WHAT IT DELIBERATELY DOES NOT GRANT
+#   Nothing that writes, deletes, moves, restarts or unshares anything.  These
+#   commands are in vm/itest, and this file EXCLUDES them on purpose:
+#     logrotate -f          rm -rf            cp -a
+#     find ... -exec        unshare -n        nft delete element
+#     systemctl restart     systemctl reboot  update-ca-certificates
+#     chown  chmod  truncate  touch  mkdir    sh -c / bash
+#   Cost, measured on the cloud lab with a default `PF_TARGET=pi` run:
+#   41 pass / 12 skip / 0 fail here.  The same run as a full-sudo account
+#   gives 47 pass.  Exactly 6 leaf subtests:
+#     drops/"direct IP dropped and logged"   1  (nft delete element)
+#     ops/"feeds fail safely"                2  (rm -rf, cp -a, find -exec,
+#                                                unshare -n)
+#     ops/"forced log rotation"              3  (logrotate -f; its fourth
+#                                                child skips anyway)
+#     ops/"reboot"                 already skipped unless PF_E2E_REBOOT=1
+#   Without this file, the same run is 31 pass / 19 skip / 0 fail.  Thus the
+#   allowlist gives 10 more subtests than a bare unprivileged account.
+#   Nothing here grants a shell, an editor, sudoedit, `sudo -u <other>`,
+#   `sudo -i/-s`, or any command whose argument list ends in a wildcard.
+#
+# INSTALL (on the Pi, as root)
+#   sudo install -m 0440 -o root -g root vm/pi/sudoers.d/pf-itest /etc/sudoers.d/pf-itest && sudo visudo -c
+#
+# ---------------------------------------------------------------------------
+# HOW THE ARGUMENT PINNING WORKS -- read this before you edit the file
+# ---------------------------------------------------------------------------
+# 1. sudo joins argv[1..] of the user into ONE string, with a space between
+#    the arguments.  It matches that string against the sudoers argument text
+#    (also joined on whitespace) with fnmatch(3).  This has two results that
+#    people often do not expect:
+#
+#    (a) In *command arguments*, a `*` DOES match `/`.  The "wildcards do not
+#        cross a slash" rule in sudoers(5) applies only to the command PATH.
+#        Thus a rule like
+#              /usr/bin/cat /var/log/pi-fortress/*
+#        would run
+#              sudo cat /var/log/pi-fortress/../../etc/shadow
+#        Because of this, there is NO path glob in this file.  Each file
+#        argument below is a literal, complete path.
+#
+#    (b) The match is one fnmatch over the joined string.  Thus a `*` can
+#        also go past an argument boundary.  A rule like
+#              /usr/bin/tail -n +[0-9]* /var/log/pi-fortress/dns.jsonl
+#        matches `tail -n +5 /etc/shadow /var/log/pi-fortress/dns.jsonl`,
+#        because `*` consumes "5 /etc/shadow".  That is a read of any file as
+#        root.  Thus this file has NO `*` AT ALL.  Where the test gives a
+#        Go variable, fixed-width classes pin the variable.  Each class
+#        consumes exactly one character:
+#          - the line number in `tail -n +N` -> a ladder of [0-9] classes,
+#            one entry for each digit count (1..7 digits, that is, up to
+#            9,999,999 lines of dns.jsonl).  Add an 8th line for a bigger log.
+#          - the `--since` timestamp -> `date '+%Y-%m-%d %H:%M:%S'`
+#            (vm/itest/e2e.go:121), thus exactly YYYY-MM-DD HH:MM:SS.
+#          - the journalctl `-g` prefixes are compile-time constants in
+#            vm/itest/drops_test.go:16,22, thus they are pinned literally.  The
+#            trailing `?` is the trailing space in those Go string literals.  It
+#            matches exactly one character, so nothing can follow.
+#        A `?` is safe here, but a `*` is not: a `?` consumes one character,
+#        so the argument string must still be exactly the correct length.
+#
+# 2. Escape `,` `:` `=` `\` with a backslash inside command arguments --
+#    thus `agent-doh\:` and `12\:34\:56` below.  `%` needs no escape.
+#
+# 3. A Cmnd with NO argument text allows ANY arguments.  Each entry below
+#    gives all of its arguments; `/usr/bin/true ""` means "and no arguments".
+#
+# 4. The tests run most of these WITHOUT an absolute path (`sudo nft ...`,
+#    `sudo ss ...`, `sudo pf ...`).  Before the match, sudo resolves those
+#    against `secure_path` from /etc/sudoers.  Thus this file needs the stock
+#    Debian line, present and not changed:
+#      Defaults secure_path="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+#    Examine it with:  sudo grep secure_path /etc/sudoers
+#    If secure_path is not there, sudo uses the PATH of the caller.  On Debian,
+#    that PATH does not contain /usr/sbin or /usr/local/sbin for a normal user.
+#    Then `sudo nft` / `sudo pf` fail with "command not found", not
+#    with a sudo denial.  Verify each path one time on the Pi:
+#      command -v nft ss stat cat tail true journalctl; ls -l /usr/local/sbin/pf
+#
+# 5. This file sets no `Defaults !requiretty`.  Debian/Raspberry Pi OS ship
+#    sudo without `requiretty`.  The suite runs over `ssh -n` with no tty.  If
+#    a hardening profile on your Pi enables requiretty, add exactly this line:
+#      Defaults!PF_ITEST_GATE,PF_ITEST_RO !requiretty
+#    Do not add a broader line.
+# ---------------------------------------------------------------------------
+
+
+##
+## The passwordless-sudo gate: vm/itest/lab.go:72 runs `sudo -n true`.
+##
+Cmnd_Alias PF_ITEST_GATE = /usr/bin/true ""
+
+##
+## Read-only firewall state.  nft needs CAP_NET_ADMIN.  No group membership
+## gives this, so sudo is the only option.  The table/chain/set names are
+## fixed, so these are exact string matches with no wildcard.
+##   vm/itest/policy_test.go:18   -- already absolute in the test
+##   vm/itest/uplink_test.go:15   -- `sudo nft ...`, resolved through secure_path
+##   vm/itest/uplink_test.go:16
+## NOT granted: `nft list ruleset`, and most important, no `nft add/delete/flush`.
+##
+Cmnd_Alias PF_ITEST_NFT = \
+	/usr/sbin/nft list set inet fortress blacklist_v4, \
+	/usr/sbin/nft list chain inet fortress input, \
+	/usr/sbin/nft list chain inet fortress output
+
+##
+## Read-only `pf` subcommands.  vm/pi/apply.sh:254 and vm/pi/provision.sh:64
+## install pf at /usr/local/sbin/pf (0755 root:root).  This file does NOT grant
+## the sibling symlink /usr/local/sbin/pi-fortress.  sudo matches on the path
+## as typed, and a grant for both doubles the surface for no gain.
+##   vm/itest/policy_test.go:24  -- `pf observe once`
+##   vm/itest/ops_test.go:31     -- the three "setup page" commands
+## Each subcommand is pinned in full: `pf observe once` does not allow
+## `pf observe` with a different argument.  No other subcommand (fetch,
+## apply, enroll, ship, alert, status) is available through this file.
+##
+Cmnd_Alias PF_ITEST_PF = \
+	/usr/local/sbin/pf observe once, \
+	/usr/local/sbin/pf monitor show -n 5, \
+	/usr/local/sbin/pf monitor avg -since 24h
+
+##
+## Only ops/"reboot" uses `pf doctor` (vm/itest/ops_test.go:150).  That test
+## cannot run without `sudo systemctl reboot` (excluded on purpose).  The line
+## stays commented out.  Uncomment it only if you do the reboot manually.
+##
+# Cmnd_Alias PF_ITEST_DOCTOR = /usr/local/sbin/pf doctor
+
+##
+## Two one-shot root reads.
+##
+## `ss -Hltnp`: only root gets values in the -p column (the owner process of
+## each listener).  Thus this command needs root.
+##   vm/itest/ops_test.go:21
+##
+## `stat -c '%a %U' <secrets.env>`: the remote shell removes the quotes.  Thus
+## sudo sees argv `-c`, `%a %U`, `<path>`, which joins to exactly the text
+## below.  This is pinned to ONE file and prints only its mode and owner.
+##   vm/itest/ops_test.go:26
+## Considered and rejected: add the test account to group pf-fortress, so that
+## it can stat the file without sudo.  /etc/pi-fortress/broker is 0750
+## pf-broker:pf-fortress (vm/pi/apply.sh:1003), so that WOULD work.  But it
+## would also give the account read access to all other 0640 pf-fortress
+## files (secrets.disabled, observe.jsonl, strip.jsonl, use.jsonl).  This
+## one-file sudo rule is strictly narrower than the group membership.
+##
+Cmnd_Alias PF_ITEST_OPS = \
+	/usr/bin/ss -Hltnp, \
+	/usr/sbin/ss -Hltnp, \
+	/usr/bin/stat -c %a %U /etc/pi-fortress/broker/secrets.env
+
+##
+## The DNS flood test reads one log file two times (vm/itest/ops_test.go:119
+## has it as a Go const, so the path is a literal here, never a glob).
+##   ops_test.go:123 -- `sudo cat <log> | wc -l`   (the remote shell runs the
+##                      pipe, outside sudo; only `cat` is privileged)
+##   ops_test.go:134 -- `sudo tail -n +N <log>`
+## dns.jsonl is 0640 pf-dns:pf-fortress: pf dns is the only resolver, and
+## it owns the file that it appends to (vm/pi/apply.sh).  The file was
+## dnsmasq.log, 0640 root:root, when dnsmasq could still serve DNS.  apply
+## renames it and the sidecar offset one time.  Group pf-fortress would also
+## work.  It was rejected for the same reason as above: it is a broader grant
+## than a read of this single file.
+## Note 1(b) at the top explains the digit ladder.  Do not "simplify"
+## it to `+[0-9]*`.
+##
+Cmnd_Alias PF_ITEST_DNSLOG = \
+	/usr/bin/cat /var/log/pi-fortress/dns.jsonl, \
+	/usr/bin/tail -n +[0-9] /var/log/pi-fortress/dns.jsonl, \
+	/usr/bin/tail -n +[0-9][0-9] /var/log/pi-fortress/dns.jsonl, \
+	/usr/bin/tail -n +[0-9][0-9][0-9] /var/log/pi-fortress/dns.jsonl, \
+	/usr/bin/tail -n +[0-9][0-9][0-9][0-9] /var/log/pi-fortress/dns.jsonl, \
+	/usr/bin/tail -n +[0-9][0-9][0-9][0-9][0-9] /var/log/pi-fortress/dns.jsonl, \
+	/usr/bin/tail -n +[0-9][0-9][0-9][0-9][0-9][0-9] /var/log/pi-fortress/dns.jsonl, \
+	/usr/bin/tail -n +[0-9][0-9][0-9][0-9][0-9][0-9][0-9] /var/log/pi-fortress/dns.jsonl
+
+##
+## Kernel drop logs for vm/itest/drops_test.go.  vm/itest/e2e.go:128 builds
+##   journalctl -k --no-pager -o cat --since '<ts>' -g '<prefix>'
+## <ts> is `date '+%Y-%m-%d %H:%M:%S'` (e2e.go:121) -> 19 fixed-shape chars.
+## <prefix> is one of two Go string constants (drops_test.go:16 and :22).
+## Each ends in a space.  The trailing `?` matches that one space.  It also
+## anchors the end of the argument string, so nothing can be appended.
+##
+## Be most careful with this entry: journalctl accepts options that
+## MUTATE (--rotate, --vacuum-size, --vacuum-time) and options that read other
+## trees (--file, --root, --image).  One `*` anywhere in these two patterns
+## would match extra arguments.  A caller could then add those options,
+## and the fixed end of the pattern would not stop them.  There
+## is no `*` here, on purpose.
+##
+## Considered and rejected: membership of group `adm` or `systemd-journal`.
+## That would let the account read the journal with no sudo at all.  It
+## grants the WHOLE journal for all time; these two rules grant one -k query
+## with a fixed grep.  The narrower grant wins.
+##
+## Each prefix gets two patterns.  One ends in `\:?` (the trailing space of the
+## Go constant, matched as one character).  One ends in `\:` (if your sudo
+## build drops a trailing space when it joins argv).  They are two exact
+## strings, not a widening: neither has a wildcard that can absorb an
+## extra argument.  If you confirm that one of them is unused, delete it.
+##
+Cmnd_Alias PF_ITEST_KERN = \
+	/usr/bin/journalctl -k --no-pager -o cat --since [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]\:[0-9][0-9]\:[0-9][0-9] -g pi-fortress agent-doh\:?, \
+	/usr/bin/journalctl -k --no-pager -o cat --since [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]\:[0-9][0-9]\:[0-9][0-9] -g pi-fortress agent-doh\:, \
+	/usr/bin/journalctl -k --no-pager -o cat --since [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]\:[0-9][0-9]\:[0-9][0-9] -g pi-fortress agent-directip\:?, \
+	/usr/bin/journalctl -k --no-pager -o cat --since [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] [0-9][0-9]\:[0-9][0-9]\:[0-9][0-9] -g pi-fortress agent-directip\:
+
+##
+## The grant.  If the name of your test account is not pf-itest, change the
+## user name here and in the adduser line at the top.  Keep it a single named
+## user.  Do not change this into a %group.
+##
+pf-itest ALL=(root) NOPASSWD: PF_ITEST_GATE, PF_ITEST_NFT, PF_ITEST_PF, PF_ITEST_OPS, PF_ITEST_DNSLOG, PF_ITEST_KERN
+
+# ---------------------------------------------------------------------------
+# COST -- what a `PF_TARGET=pi` run does with only this file
+# ---------------------------------------------------------------------------
+# The suite itself skips these, not this file:
+#   strip, secrets, setup          -- labOnly(), vm/itest/e2e.go:36-44
+#   house, house-devices, desk     -- cloudlabOnly(), vm/itest/e2e.go:48-53
+#   ops/"reboot"                   -- needs PF_E2E_REBOOT=1, e2e.go:64-69
+#
+# These run, and they are expected to pass (~36 leaf subtests):
+#   policy   26   (blacklist 9, dns 7, egress 8, nft canary 1, observe 1)
+#   drops     2   (needs PF_ITEST_KERN)
+#   uplink    4   (needs PF_ITEST_NFT; uplink_test.go:15-16 run before the
+#                  first t.Run, so a denial there stops all four)
+#   ops       4   (DNS log flood, no pf listener, key file is private,
+#                  setup page commands)
+#
+# These fail because this file refuses a grant that they need (6 leaf subtests):
+#   ops/"feeds fail safely"/"saved copies: STALE, rc 0, lists unchanged"
+#   ops/"feeds fail safely"/"no copies: FAIL, rc 1, lists unchanged"
+#       -> ops_test.go:44,48,52,64: find -exec, unshare -n, rm -rf, cp -a
+#   ops/"forced log rotation"/"pi-fortress-dns-agent-go reopened its log"
+#   ops/"forced log rotation"/"pi-fortress-dns-agent reopened its log"
+#   ops/"forced log rotation"/"pi-fortress-dns-house reopened its log"
+#   ops/"forced log rotation"/"new log has the query"
+#       -> ops_test.go:77 runs `sudo logrotate -f` before the four subtests.
+#          When sudo denies it, t.Fatal() stops the full group.
+#
+# Run those two groups manually, as root, on a Pi that you can disturb.
+#
+# NOTE on the uncommitted work in vm/itest/e2e.go (sudoRefused/skipNoSudo):
+# that change makes a sudo refusal a t.Skip on PF_TARGET=pi.  Thus the suite
+# reports the 6 subtests above as skips, not failures.  Verified end to
+# end on the lab: 0 failures.
+#
+# A refusal here does not look as you would expect.  sudo authenticates
+# BEFORE it tells you if the command matched.  Thus this account (created
+# with no password) never gets
+#     Sorry, user pf-itest is not allowed to execute '/usr/sbin/logrotate ...'
+# It gets this, on stderr:
+#     sudo: a terminal is required to read the password; either use the -S
+#     option to read from standard input or configure an askpass helper
+#     sudo: a password is required
+# The same two lines appear when this file is not there.  Thus "is not in
+# the sudoers file" also never appears.  sudoRefused matches all of them.
+# If you give the test account a password, the "not allowed" text returns.
+# ---------------------------------------------------------------------------

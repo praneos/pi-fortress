@@ -1,0 +1,18 @@
+# Always dropped from the agent NIC. never_block cannot reopen these.
+# The Pi's own dnsmasq still uses DNS_UPSTREAM on the WAN.
+1.1.1.1
+1.0.0.1
+1.1.1.2
+1.1.1.3
+8.8.8.8
+8.8.4.4
+9.9.9.9
+9.9.9.10
+9.9.9.11
+149.112.112.112
+149.112.112.10
+149.112.112.11
+208.67.222.222
+208.67.220.220
+94.140.14.14
+94.140.15.15

@@ -1,0 +1,13 @@
+[Unit]
+Description=pi-fortress signed ship: verify, swap the tree, pf apply
+Documentation=file:///opt/pi-fortress/docs/signed_ship.md
+After=network-online.target
+
+# No sandbox: the unit applies a verified bundle as root. That is its purpose.
+# The upload directory belongs to pfship and is untrusted. pf ship install
+# copies the pair from it before it reads a byte.
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pf ship install
+UMask=0022
+TimeoutStartSec=45min

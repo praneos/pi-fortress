@@ -1,0 +1,22 @@
+github.com GITHUB_TOKEN
+api.github.com GITHUB_TOKEN
+api.anthropic.com CLAUDE_OAT CLAUDE_ORT ANTHROPIC_API_KEY
+platform.claude.com CLAUDE_OAT CLAUDE_ORT
+console.anthropic.com CLAUDE_OAT CLAUDE_ORT
+api.openai.com OPENAI_API_KEY
+api.x.ai XAI_API_KEY
+pf-core-echo.test *
+# CANARY is the challenge credential (docs/challenge_rules.md). It is bound
+# nowhere, and a * line does not cover it: any appearance of its live value
+# off the fence is a bypass. To make substitution attackable too, enrol a
+# throwaway provider key with a 5 USD cap as CANARY. Bind it to that
+# provider in core.hosts.local (lines for one host add up):
+# api.openai.com CANARY
+#
+# A placeholder is substituted only into Authorization (Bearer or Basic)
+# and X-Api-Key, plus each header that a line declares for its kind as
+# KIND:Header[,Header...], e.g. gitlab.com GITLAB_TOKEN:PRIVATE-TOKEN.
+# Put such lines in core.hosts.local, which upgrades keep. Upgrades replace
+# this file. User-Agent, Referer, Origin, Host, Via, Forwarded,
+# X-Forwarded-*, X-Real-IP, Content-*, Transfer-Encoding, Connection,
+# Keep-Alive, Upgrade, TE, Trailer and Proxy-* can never be declared.

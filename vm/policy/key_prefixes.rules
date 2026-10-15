@@ -1,0 +1,43 @@
+# name	regexp	[KIND]
+#
+# Each rule must start with a literal prefix (ghp_, AKIA, sk-). The
+# broker does not start with a rule that has no prefix, because the stream
+# scan uses the prefixes to find where a key can start.
+#
+# A leading \b is a boundary that also counts the escapes that can come
+# before a token in text: \n \t \r \b \f \xXX \uXXXX and %XX. The rules
+# with a distinctive prefix have no leading \b, and match at any start.
+# sk-, sk_live_, AIza and npm_ keep one, because they occur inside
+# ordinary words and identifiers (task-, flask-admin-, base64, pnpm_).
+# Each length is a minimum, and no rule has a closing \b. Thus a key
+# continues to its natural end (key_prefixes.md).
+#
+# The two AWS rules each occur two times under one name. First: upper
+# case, as AWS issues them, to the natural end, at any start. Second: any
+# case, only at the exact length. Thus a case-flipped key is still caught,
+# and a lower-case name such as asiapacificcommunications.com is not a key.
+github_classic	ghp_[A-Za-z0-9]{36,}	GITHUB_TOKEN
+github_fine	github_pat_[A-Za-z0-9]{22,}_[A-Za-z0-9]{59,}	GITHUB_TOKEN
+github_oauth	gho_[A-Za-z0-9]{36,}	GITHUB_TOKEN
+github_user	ghu_[A-Za-z0-9]{36,}	GITHUB_TOKEN
+github_server	ghs_[A-Za-z0-9]{36,}	GITHUB_TOKEN
+github_refresh	ghr_[A-Za-z0-9]{36,}	GITHUB_TOKEN
+anthropic	sk-ant-api03-[A-Za-z0-9_-]{93,}AA[A-Za-z0-9_-]*	ANTHROPIC_API_KEY
+anthropic_admin	sk-ant-admin01-[A-Za-z0-9_-]{20,}
+anthropic_oat	sk-ant-oat01-[A-Za-z0-9_-]{20,}	CLAUDE_OAT
+anthropic_ort	sk-ant-ort01-[A-Za-z0-9_-]{20,}	CLAUDE_ORT
+openai_legacy	\bsk-[A-Za-z0-9]{48,}	OPENAI_API_KEY
+openai_proj	\bsk-proj-[A-Za-z0-9_-]{40,}	OPENAI_API_KEY
+openai_svcacct	\bsk-svcacct-[A-Za-z0-9_-]{40,}	OPENAI_API_KEY
+openai_admin	\bsk-admin-[A-Za-z0-9_-]{40,}	OPENAI_API_KEY
+openai_none	\bsk-None-[A-Za-z0-9_-]{40,}	OPENAI_API_KEY
+xai	xai-[A-Za-z0-9_]{60,}	XAI_API_KEY
+aws_akia	(?-i:AKIA[A-Z0-9]{16,})
+aws_akia	\bAKIA[A-Z0-9]{16}\b
+aws_asia	(?-i:ASIA[A-Z0-9]{16,})
+aws_asia	\bASIA[A-Z0-9]{16}\b
+google_api	\bAIza[0-9A-Za-z_-]{35,}
+huggingface	hf_[A-Za-z]{34,}
+npm	\bnpm_[A-Za-z0-9]{36,}
+stripe_live	\bsk_live_[0-9a-zA-Z]{24,}
+gitlab_pat	glpat-[A-Za-z0-9_-]{20,}

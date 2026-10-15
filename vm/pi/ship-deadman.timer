@@ -1,0 +1,18 @@
+[Unit]
+Description=pi-fortress ship dead-man: check for an unconfirmed upgrade past its deadline
+Documentation=file:///opt/pi-fortress/docs/signed_ship.md
+
+# Persistent systemd units, not systemd-run. A transient timer that is set
+# immediately after a successful ship does not survive the reboot that an
+# upgrade often causes. A reboot that loses the dead-man is the time when it
+# is most important (docs/signed_ship.md, "Confirm or revert"). OnBootSec
+# catches an upgrade whose confirm was already overdue when the box started
+# again. After that, OnUnitActiveSec checks each minute.
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+Persistent=true
+Unit=pi-fortress-ship-deadman.service
+
+[Install]
+WantedBy=timers.target

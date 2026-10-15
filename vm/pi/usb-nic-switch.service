@@ -1,0 +1,18 @@
+[Unit]
+Description=pi-fortress: switch USB NICs out of driver-CD mode
+Documentation=file:///opt/pi-fortress/docs/user_guide/home_network.md
+# Early, before the network is configured. Thus a house adapter that is
+# connected at power-on is a NIC before anything looks for HOUSE_IF. The
+# udev rule starts this unit again at each plug event.
+DefaultDependencies=no
+After=local-fs.target systemd-udevd.service systemd-udev-trigger.service
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/lib/pi-fortress/usb-nic-switch.sh
+TimeoutStartSec=90
+
+[Install]
+WantedBy=sysinit.target

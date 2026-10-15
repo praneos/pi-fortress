@@ -1,0 +1,9 @@
+go test fuzz v1
+string("0")
+string("")
+string("\xb5")
+string("0")
+string("")
+string("")
+int(5)
+bool(true)

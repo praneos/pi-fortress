@@ -1,0 +1,23 @@
+# OPERATOR STATE. `make pi-ship` does not overwrite the copy on the Pi
+# (PI_OWNED in the Makefile). git holds only the seed for a fresh
+# install. Edit on the Pi: `sudo pf tui`, Agent lists, then apply.
+example.com
+example.net
+example.org
+google.com
+gstatic.com
+googleapis.com
+cloudflare.com
+github.com
+githubusercontent.com
+pypi.org
+pythonhosted.org
+npmjs.com
+registry.npmjs.org
+debian.org
+ubuntu.com
+vagrantup.com
+hashicorp.com
+mullvad.net
+am.i.mullvad.net
+mullvad.org

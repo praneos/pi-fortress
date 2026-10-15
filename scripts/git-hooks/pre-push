@@ -1,0 +1,25 @@
+#!/bin/bash
+# Refuses a push whose tip carries private content anywhere in its tree
+# (scripts/leak_check.sh). It scans the tree of each ref in the push, not
+# the working copy. The commits in between are what pre-commit saw.
+# Installed by `make hooks`.
+set -euo pipefail
+
+top="$(git rev-parse --show-toplevel)"
+tmp="$(mktemp -d)"
+trap 'rm -rf "${tmp}"' EXIT
+
+refs=0
+while read -r _local_ref local_sha _remote_ref _remote_sha; do
+  refs=$((refs + 1))
+  # A deleted ref pushes nothing.
+  [[ "${local_sha}" =~ ^0+$ ]] && continue
+  rm -rf "${tmp}/tree"
+  mkdir -p "${tmp}/tree"
+  git archive "${local_sha}" | tar -x -C "${tmp}/tree"
+  echo "pre-push: scanning ${local_sha}"
+  "${top}/scripts/leak_check.sh" -C "${tmp}/tree"
+done
+
+# Run by hand (no refs on stdin): the working tree, the whole of it.
+[[ "${refs}" -gt 0 ]] || "${top}/scripts/leak_check.sh"

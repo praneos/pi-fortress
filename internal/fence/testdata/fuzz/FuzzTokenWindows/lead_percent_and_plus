@@ -1,0 +1,2 @@
+go test fuzz v1
+string("q=a%20sk-aB3xZ9aB3xZ9aB3xZ9aB3xZ9aB3xZ9aB3xZ9aB3xZ9aB3xZ9aB&r=b%3Dsk_live_aB3xZ9aB3xZ9aB3xZ9aB3xZ9a&s=c%0Aglpat-aB3_x-Z9aB3_x-Z9aB3_x-&t=d+sk-None-aB3_x-Z9aB3_x-Z9aB3_x-Z9aB3_x-Z9aB3_x-Z9a")

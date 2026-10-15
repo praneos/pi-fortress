@@ -1,0 +1,11 @@
+[Unit]
+Description=pi-fortress signed ship: watch the pfship upload directory
+Documentation=file:///opt/pi-fortress/docs/signed_ship.md
+
+[Path]
+PathChanged=/var/lib/pi-fortress/incoming
+DirectoryNotEmpty=/var/lib/pi-fortress/incoming
+Unit=pi-fortress-ship.service
+
+[Install]
+WantedBy=multi-user.target

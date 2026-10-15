@@ -1,0 +1,409 @@
+.pf-hero {
+  text-align: center;
+}
+
+.pf-hero .pf-hero-logo {
+  width: 7rem;
+  height: auto;
+}
+
+.pf-hero h1 {
+  margin-top: 0.4em;
+}
+
+.pf-charts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem;
+  align-items: end;
+}
+
+.pf-focus-toggle {
+  display: none;
+}
+
+/* The side panels are drawers below 60em, so the toggle has no use there. */
+@media screen and (min-width: 60em) {
+  .pf-focus-toggle {
+    display: inline-block;
+  }
+
+  html.pf-focus .md-sidebar--primary,
+  html.pf-focus .md-sidebar--secondary {
+    display: none;
+  }
+
+  html.pf-focus .md-content {
+    max-width: 52rem;
+    margin: 0 auto;
+  }
+
+  html.pf-focus .md-typeset {
+    font-size: 0.95rem;
+  }
+}
+
+.pf-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.pf-chart--animated {
+  cursor: pointer;
+}
+
+.pf-chart-title {
+  font-size: 18px;
+  font-weight: 600;
+  text-anchor: middle;
+  fill: var(--md-default-fg-color);
+}
+
+.pf-chart-unit,
+.pf-chart-label {
+  font-size: 14px;
+  text-anchor: middle;
+  fill: var(--md-default-fg-color--light);
+}
+
+.pf-chart-value {
+  font-size: 14px;
+  font-weight: 600;
+  text-anchor: middle;
+  fill: var(--md-default-fg-color);
+  opacity: 0;
+  transition: opacity 0.3s;
+}
+
+.pf-chart-value.pf-show {
+  opacity: 1;
+}
+
+.pf-chart-axis {
+  stroke: var(--md-default-fg-color--lighter);
+}
+
+.pf-chart-bar {
+  fill: #fb7185;
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  transform: scaleY(0);
+  transition: transform 0.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.pf-chart-bar--last {
+  fill: #e11d48;
+}
+
+.pf-chart-bar.pf-grow {
+  transform: scaleY(1);
+}
+
+.pf-chart-bar.pf-static {
+  transition: none;
+}
+
+/* Diagrams: a neutral slate base. Pages colour the nodes that carry a
+   meaning with classDef (Pi Fortress, agent, service, attacker). */
+[data-md-color-scheme="slate"] {
+  --md-mermaid-node-bg-color: #1e293b;
+  --md-mermaid-node-fg-color: #e2e8f0;
+  --md-mermaid-edge-color: #94a3b8;
+  --md-mermaid-label-bg-color: #0f172a;
+  --md-mermaid-label-fg-color: #cbd5e1;
+  --md-mermaid-sequence-actor-bg-color: #1e293b;
+  --md-mermaid-sequence-actor-fg-color: #e2e8f0;
+  --md-mermaid-sequence-actor-border-color: #64748b;
+  --md-mermaid-sequence-actor-line-color: #64748b;
+  --md-mermaid-sequence-actorman-bg-color: #1e293b;
+  --md-mermaid-sequence-actorman-line-color: #64748b;
+  --md-mermaid-sequence-box-bg-color: #0f172a;
+  --md-mermaid-sequence-box-fg-color: #e2e8f0;
+  --md-mermaid-sequence-label-bg-color: #1e293b;
+  --md-mermaid-sequence-label-fg-color: #e2e8f0;
+  --md-mermaid-sequence-loop-bg-color: #0f172a;
+  --md-mermaid-sequence-loop-border-color: #64748b;
+  --md-mermaid-sequence-loop-fg-color: #e2e8f0;
+  --md-mermaid-sequence-message-fg-color: #e2e8f0;
+  --md-mermaid-sequence-message-line-color: #94a3b8;
+  --md-mermaid-sequence-note-bg-color: #334155;
+  --md-mermaid-sequence-note-border-color: #64748b;
+  --md-mermaid-sequence-note-fg-color: #e2e8f0;
+  --md-mermaid-sequence-number-bg-color: #60a5fa;
+  --md-mermaid-sequence-number-fg-color: #0b1220;
+}
+
+[data-md-color-scheme="default"] {
+  --md-mermaid-node-bg-color: #f1f5f9;
+  --md-mermaid-node-fg-color: #0f172a;
+  --md-mermaid-edge-color: #64748b;
+  --md-mermaid-label-bg-color: #ffffff;
+  --md-mermaid-label-fg-color: #334155;
+  --md-mermaid-sequence-actor-bg-color: #f1f5f9;
+  --md-mermaid-sequence-actor-fg-color: #0f172a;
+  --md-mermaid-sequence-actor-border-color: #94a3b8;
+  --md-mermaid-sequence-actor-line-color: #94a3b8;
+  --md-mermaid-sequence-actorman-bg-color: #f1f5f9;
+  --md-mermaid-sequence-actorman-line-color: #94a3b8;
+  --md-mermaid-sequence-box-bg-color: #f8fafc;
+  --md-mermaid-sequence-box-fg-color: #0f172a;
+  --md-mermaid-sequence-label-bg-color: #f1f5f9;
+  --md-mermaid-sequence-label-fg-color: #0f172a;
+  --md-mermaid-sequence-loop-bg-color: #f8fafc;
+  --md-mermaid-sequence-loop-border-color: #94a3b8;
+  --md-mermaid-sequence-loop-fg-color: #0f172a;
+  --md-mermaid-sequence-message-fg-color: #1e293b;
+  --md-mermaid-sequence-message-line-color: #64748b;
+  --md-mermaid-sequence-note-bg-color: #e2e8f0;
+  --md-mermaid-sequence-note-border-color: #94a3b8;
+  --md-mermaid-sequence-note-fg-color: #0f172a;
+  --md-mermaid-sequence-number-bg-color: #3b82f6;
+  --md-mermaid-sequence-number-fg-color: #ffffff;
+}
+
+/* Animated request flow on the home page. One 10 s loop, four steps. */
+.pf-flow svg {
+  display: block;
+  width: 100%;
+  max-width: 900px;
+  height: auto;
+  margin: 0 auto;
+}
+
+.pf-flow svg.pf-flow--tall {
+  max-width: 420px;
+}
+
+.pf-flow-box {
+  fill: var(--md-default-bg-color);
+  stroke: #64748b;
+  stroke-width: 2;
+}
+
+.pf-flow-box--pf {
+  fill: url(#pf-shield);
+  stroke: #93c5fd;
+}
+
+.pf-flow-box--agent {
+  stroke: #a78bfa;
+}
+
+.pf-flow-box--ok {
+  stroke: #34d399;
+}
+
+.pf-flow-box--bad {
+  stroke: #f87171;
+}
+
+.pf-flow-name {
+  font-size: 17px;
+  font-weight: 700;
+  text-anchor: middle;
+  fill: var(--md-default-fg-color);
+}
+
+.pf-flow-sub {
+  font-size: 12px;
+  text-anchor: middle;
+  fill: var(--md-default-fg-color--light);
+}
+
+.pf-flow-pf-text {
+  fill: #0b1220;
+}
+
+.pf-flow-line {
+  stroke: var(--md-default-fg-color--lighter);
+  stroke-width: 2;
+  stroke-dasharray: 6 6;
+  fill: none;
+}
+
+.pf-flow-chip rect {
+  stroke-width: 2;
+}
+
+.pf-flow-chip text {
+  font-size: 12px;
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+.pf-flow-chip--ph rect {
+  fill: var(--md-default-bg-color);
+  stroke: #a78bfa;
+  stroke-dasharray: 4 3;
+}
+
+.pf-flow-chip--ph text {
+  fill: #a78bfa;
+}
+
+.pf-flow-chip--key rect {
+  fill: #fbbf24;
+  stroke: #f59e0b;
+}
+
+.pf-flow-chip--key text {
+  fill: #422006;
+}
+
+.pf-flow-chip--bad rect {
+  fill: var(--md-default-bg-color);
+  stroke: #f87171;
+  stroke-dasharray: 4 3;
+}
+
+.pf-flow-chip--bad text {
+  fill: #f87171;
+}
+
+.pf-flow-ok {
+  fill: #10b981;
+}
+
+.pf-flow-x,
+.pf-flow-alert {
+  fill: #ef4444;
+}
+
+.pf-flow-mark {
+  font-size: 13px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+.pf-flow-anim {
+  opacity: 0;
+}
+
+.pf-flow-steps {
+  margin-top: 0.4rem;
+}
+
+.pf-flow-steps li {
+  transition: opacity 0.3s;
+}
+
+.pf-flow.pf-play .pf-flow-anim {
+  animation-duration: 10s;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+}
+
+.pf-flow.pf-play .pf-a1 { animation-name: pf-a1; }
+.pf-flow.pf-play .pf-a2 { animation-name: pf-a2; }
+.pf-flow.pf-play .pf-ok { animation-name: pf-ok; }
+.pf-flow.pf-play .pf-a3 { animation-name: pf-a3; }
+.pf-flow.pf-play .pf-a4 { animation-name: pf-a4; }
+.pf-flow.pf-play .pf-x  { animation-name: pf-x; }
+
+.pf-flow.pf-play .pf-flow-steps li {
+  opacity: 0.35;
+  animation: 10s infinite step-end;
+}
+
+.pf-flow.pf-play .pf-flow-steps li:nth-child(1) { animation-name: pf-s1; }
+.pf-flow.pf-play .pf-flow-steps li:nth-child(2) { animation-name: pf-s2; }
+.pf-flow.pf-play .pf-flow-steps li:nth-child(3) { animation-name: pf-s3; }
+.pf-flow.pf-play .pf-flow-steps li:nth-child(4) { animation-name: pf-s4; }
+
+@keyframes pf-a1 {
+  0%   { opacity: 0; transform: translate(var(--ax), var(--ay)); }
+  3%   { opacity: 1; transform: translate(var(--ax), var(--ay)); }
+  19%  { opacity: 1; transform: translate(var(--px), var(--py)); }
+  22%, 100% { opacity: 0; transform: translate(var(--px), var(--py)); }
+}
+
+@keyframes pf-a2 {
+  0%, 22% { opacity: 0; transform: translate(var(--px), var(--py)); }
+  25%  { opacity: 1; transform: translate(var(--px), var(--py)); }
+  40%  { opacity: 1; transform: translate(var(--kx), var(--ky)); }
+  44%, 100% { opacity: 0; transform: translate(var(--kx), var(--ky)); }
+}
+
+@keyframes pf-ok {
+  0%, 39% { opacity: 0; }
+  42%, 47% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+@keyframes pf-a3 {
+  0%, 50% { opacity: 0; transform: translate(var(--ax), var(--ay)); }
+  53%  { opacity: 1; transform: translate(var(--ax), var(--ay)); }
+  68%  { opacity: 1; transform: translate(var(--px), var(--py)); }
+  71%, 100% { opacity: 0; transform: translate(var(--px), var(--py)); }
+}
+
+@keyframes pf-a4 {
+  0%, 70% { opacity: 0; transform: translate(var(--px), var(--py)); }
+  73%  { opacity: 1; transform: translate(var(--px), var(--py)); }
+  80%  { opacity: 1; transform: translate(var(--mx), var(--my)); }
+  82%  { opacity: 1; transform: translate(calc(var(--mx) - 8px), calc(var(--my) - 2px)); }
+  84%  { opacity: 1; transform: translate(calc(var(--mx) + 4px), calc(var(--my) + 1px)); }
+  86%  { opacity: 1; transform: translate(calc(var(--mx) - 4px), calc(var(--my) - 1px)); }
+  95%  { opacity: 1; transform: translate(var(--mx), var(--my)); }
+  98%, 100% { opacity: 0; transform: translate(var(--mx), var(--my)); }
+}
+
+@keyframes pf-x {
+  0%, 81% { opacity: 0; }
+  84%, 96% { opacity: 1; }
+  99%, 100% { opacity: 0; }
+}
+
+@keyframes pf-s1 { 0% { opacity: 1; } 22% { opacity: 0.35; } }
+@keyframes pf-s2 { 0% { opacity: 0.35; } 22% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes pf-s3 { 0% { opacity: 0.35; } 50% { opacity: 1; } 71% { opacity: 0.35; } }
+@keyframes pf-s4 { 0% { opacity: 0.35; } 71% { opacity: 1; } }
+
+.pf-flow svg {
+  cursor: pointer;
+}
+
+.pf-flow.pf-paused .pf-flow-anim,
+.pf-flow.pf-paused .pf-flow-steps li {
+  animation-play-state: paused !important;
+}
+
+/* Reduced motion: the same story with fades only. No slide and no shake. */
+@media (prefers-reduced-motion: reduce) {
+  .pf-flow.pf-play .pf-a1 { animation-name: pf-f1; }
+  .pf-flow.pf-play .pf-a2 { animation-name: pf-f2; }
+  .pf-flow.pf-play .pf-a3 { animation-name: pf-f3; }
+  .pf-flow.pf-play .pf-a4 { animation-name: pf-f4; }
+}
+
+@keyframes pf-f1 {
+  0%, 23%, 100% { opacity: 0; transform: translate(var(--apx), var(--apy)); }
+  4%, 19% { opacity: 1; transform: translate(var(--apx), var(--apy)); }
+}
+
+@keyframes pf-f2 {
+  0%, 22%, 46%, 100% { opacity: 0; transform: translate(var(--pkx), var(--pky)); }
+  26%, 42% { opacity: 1; transform: translate(var(--pkx), var(--pky)); }
+}
+
+@keyframes pf-f3 {
+  0%, 50%, 72%, 100% { opacity: 0; transform: translate(var(--apx), var(--apy)); }
+  54%, 68% { opacity: 1; transform: translate(var(--apx), var(--apy)); }
+}
+
+@keyframes pf-f4 {
+  0%, 71%, 98%, 100% { opacity: 0; transform: translate(var(--mx), var(--my)); }
+  75%, 95% { opacity: 1; transform: translate(var(--mx), var(--my)); }
+}
+
+.pf-chart--fade .pf-chart-bar {
+  transform: none;
+  opacity: 0;
+  transition: opacity 0.5s;
+}
+
+.pf-chart--fade .pf-chart-bar.pf-grow {
+  opacity: 1;
+}

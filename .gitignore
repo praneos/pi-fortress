@@ -1,0 +1,36 @@
+.vagrant/
+*.log
+*.box
+
+vm/policy/generated/
+
+# Live tokens and the ntfy/webhook mailbox. Commit the .example files.
+vm/policy/secrets.env
+vm/policy/alert.url
+
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/
+
+# Cross-compiled CLI (host build, CGO_ENABLED=0).
+vm/pi/pf
+/bin/
+testdata/streams/0*.txt
+tmp.*
+
+# Public release artifacts (make release).
+dist/
+
+# Built docs site (make docs).
+build/
+
+# Cache of wrangler (make docs-push). It holds the name of the Cloudflare account.
+.wrangler/

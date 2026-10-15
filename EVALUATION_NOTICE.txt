@@ -1,0 +1,9 @@
+Pi Fortress: EARLY ACCESS
+
+- Pi Fortress is licensed under the Apache License, version 2.0
+  (Apache-2.0). The full text is in LICENSE.
+- Provided as is, without warranty of any kind. Use at your own risk.
+- This is an early-access release. Do not put production credentials
+  behind it.
+- Source and releases: https://github.com/nrnjn42/pi-fortress
+- Reporting security issues: SECURITY.md

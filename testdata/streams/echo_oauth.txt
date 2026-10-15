@@ -1,0 +1,6 @@
+POST /v1/oauth/token HTTP/1.1
+Host: pf-core-echo.test
+Content-Type: application/json
+Content-Length: 79
+
+{"grant_type":"refresh_token","refresh_token":"pf_b0b1b2b3b4b5b6b7_CLAUDE_ORT"}

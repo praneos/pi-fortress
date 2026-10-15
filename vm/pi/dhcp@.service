@@ -1,0 +1,92 @@
+[Unit]
+Description=pi-fortress DHCP for segment %i (dnsmasq)
+After=network-online.target
+Wants=network-online.target
+# Always restart, with no limit (pf-broker.service gives the reason).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=2
+# Resource caps (pf-broker.service explains the scheme). A dnsmasq that does
+# only DHCP, for a maximum of a few hundred leases, uses a few MiB. It is not
+# Go, so no GOMEMLIMIT. It is DHCP like the house DHCP, so the same OOM score.
+MemoryHigh=48M
+MemoryMax=64M
+TasksMax=64
+LimitNOFILE=1024
+OOMScoreAdjust=100
+# systemd does the privilege drop, not dnsmasq. The dnsmasq drop has a
+# getuid() == 0 guard. When dnsmasq starts as this account, it never calls
+# setgroups/setgid/capset/prctl/setuid -- the full @privileged block that
+# the sibling units deny. It keeps the three capabilities that the DHCP
+# half uses. It gets them as ambient capabilities, not carried through a
+# setuid with CAP_SETUID: NET_BIND_SERVICE for :67,
+# NET_RAW for the ping-before-offer ICMP socket and SO_BINDTODEVICE,
+# NET_ADMIN for the SIOCSARP cache injection. CAP_SETGID, CAP_SETUID,
+# CAP_CHOWN and CAP_DAC_OVERRIDE are removed with the drop that needed them.
+#
+# Each DHCP instance has its own account (dhcp_account, lib/dhcp.sh).
+# Thus an instance cannot write the lease file or the log of a different
+# instance, or send a signal to it.
+#
+# Group: the primary group of the account. The compiled-in default
+# of dnsmasq is "dip", the dial-out group, which dnsmasq does not need. No
+# file on the box has the group nogroup. The two files that this daemon
+# writes are pf-dhcp-%i:root 0640 (apply.sh, seg_dhcp_sync).
+#
+# One instance for each segment with DHCP=on. %i is the segment name
+# (lib/dhcp.sh gives the reason that there is not one dnsmasq for all of
+# them). All other lines are the same as the house unit, line for line.
+User=pf-dhcp-%i
+Group=nogroup
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_NET_RAW
+AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_NET_RAW
+RuntimeDirectory=pi-fortress-dhcp-%i
+# --user is still here, although systemd already set the uid. dnsmasq
+# resolves it to a passwd entry and fchowns its log to that uid, if it is
+# root or not ("failure of the chown call is OK", log.c). The flag names
+# the account that we already run as. Thus that call is a no-op on a
+# file we own. Without the flag, dnsmasq uses its built-in default,
+# "nobody", and logs one EPERM warning at each start.
+# --conf-file also stops dnsmasq from reading /etc/dnsmasq.conf. No line
+# here names a --conf-dir, so dnsmasq never reads /etc/dnsmasq.d of the package.
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/pi-fortress/dhcp-%i.conf --user=pf-dhcp-%i --pid-file=/run/pi-fortress-dhcp-%i/dnsmasq.pid
+ExecReload=+/bin/kill -HUP $MAINPID
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+# AF_INET is for :67 and the ping-before-offer raw socket. AF_NETLINK is
+# for the route socket that bind-dynamic watches for the segment address.
+# AF_UNIX is for the nss lookup and /dev/log. No AF_PACKET: on Linux, dnsmasq
+# reads DHCP from a UDP socket with IP_PKTINFO, not from a packet socket.
+RestrictAddressFamilies=AF_INET AF_NETLINK AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+# @privileged includes @chown, and a filtered call kills the process.
+# dnsmasq makes only the log fchown above. CAP_CHOWN is not in the
+# bounding set, so that call can only set the owner that the file
+# already has.
+SystemCallFilter=@chown
+ReadWritePaths=/var/lib/pi-fortress /var/log/pi-fortress
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www
+
+[Install]
+WantedBy=multi-user.target

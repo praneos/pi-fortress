@@ -1,0 +1,25 @@
+[Unit]
+Description=pi-fortress WireGuard handshake check
+After=network-online.target wg-quick@wg0.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/pf alert wg -if wg0 -max 3m
+# wg show needs CAP_NET_ADMIN. The strip alerter (pf-sidecar) must not
+# get it. Thus this unit runs as root and does one exec.
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK
+ReadWritePaths=/var/lib/pi-fortress
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine

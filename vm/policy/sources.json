@@ -1,0 +1,60 @@
+{
+  "comment": "Machine-readable feed list. Human rationale is in docs/risk_model.md.",
+  "user_agent": "pi-fortress/0.1 (lab)",
+  "timeout_sec": 60,
+  "max_ips": 20000,
+  "max_domains": 300000,
+  "feeds": [
+    {
+      "id": "urlhaus-domains-online",
+      "kind": "domains",
+      "format": "plain",
+      "url": "https://malware-filter.gitlab.io/malware-filter/urlhaus-filter-domains-online.txt",
+      "license": "CC0-1.0",
+      "why": "Distribution hostnames currently marked online, derived from abuse.ch URLhaus. Small, security-only, not an adblock list."
+    },
+    {
+      "id": "spamhaus-drop",
+      "kind": "ips",
+      "format": "spamhaus",
+      "url": "https://www.spamhaus.org/drop/drop.txt",
+      "license": "Spamhaus DROP terms",
+      "why": "Don't Route Or Peer netblocks. High-confidence, prefix-sized, meant for network gear. Good egress drop list."
+    },
+    {
+      "id": "feodo-tracker",
+      "kind": "ips",
+      "format": "plain",
+      "url": "https://feodotracker.abuse.ch/downloads/ipblocklist.txt",
+      "license": "abuse.ch terms",
+      "why": "Current Feodo/Dridex-family IPs. Tiny. Skip if empty or stale."
+    },
+    {
+      "id": "phishing-army",
+      "kind": "domains",
+      "format": "plain",
+      "url": "https://phishing.army/download/phishing_army_blocklist.txt",
+      "license": "CC BY-NC 4.0",
+      "why": "Phishing hostnames aggregated from PhishTank, OpenPhish and others, deduplicated against common allowlists. This is what the house segment loses when the AP's DPI engine goes; the agent segment gets it for free. Non-commercial license (CC BY-NC): fine for personal and home use."
+    },
+    {
+      "id": "hagezi-pro",
+      "kind": "domains",
+      "format": "plain",
+      "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/pro.txt",
+      "segment": "house",
+      "license": "GPL-3.0",
+      "why": "Ads, trackers, telemetry and some badware, the 'hand brush' tier with few false positives. House segment only: bedtime Instagram and ad blocking are family policy, not a blocklist feed, and never touch the agent. Wildcard entries; dnsmasq address= blocks subdomains anyway."
+    },
+    {
+      "id": "hagezi-doh-vpn-proxy-bypass",
+      "kind": "domains",
+      "format": "plain",
+      "url": "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/doh-vpn-proxy-bypass-onlydomains.txt",
+      "segment": "house",
+      "role": "vpn",
+      "license": "GPL-3.0",
+      "why": "DoH, VPN, Tor and proxy services a device could use to go around the house resolver. House only, and served only while HOUSE_BLOCK_VPN is on (role vpn): the ruleset drops WireGuard and OpenVPN themselves, this stops a VPN app from reaching its provider to sign in or fetch servers. Carries dns.controld.com; a HOUSE_PRIVATE_DNS endpoint still resolves, the more specific name wins. Also carries tailscale.com and Cloudflare WARP."
+    }
+  ]
+}

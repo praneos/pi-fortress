@@ -1,0 +1,15 @@
+#!/bin/bash
+# Refuses a commit whose staged files carry private content
+# (scripts/leak_check.sh). It scans the index, not the working copy: a
+# leak that is staged and then removed by a local edit is still committed.
+# Installed by `make hooks`.
+set -euo pipefail
+
+top="$(git rev-parse --show-toplevel)"
+mapfile -t -d '' files < <(git diff --cached --name-only -z --diff-filter=ACMR)
+[[ "${#files[@]}" -gt 0 ]] || exit 0
+
+tmp="$(mktemp -d)"
+trap 'rm -rf "${tmp}"' EXIT
+git checkout-index -z --prefix="${tmp}/" --stdin < <(printf '%s\0' "${files[@]}")
+"${top}/scripts/leak_check.sh" -C "${tmp}" -- "${files[@]}"

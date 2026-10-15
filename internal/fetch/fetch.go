@@ -1,0 +1,738 @@
+// Package fetch downloads the blocklist feeds named in sources.json and parses
+// them into domain and IP lists on disk. pf fetch, the TUI and internal/admin
+// call it.
+package fetch
+
+import (
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"pi-fortress/internal/policycompile"
+)
+
+type Spec struct {
+	Comment    string `json:"comment,omitempty"`
+	UserAgent  string `json:"user_agent"`
+	TimeoutSec int    `json:"timeout_sec"`
+	MaxIPs     int    `json:"max_ips"`
+	MaxDomains int    `json:"max_domains"`
+	Feeds      []Feed `json:"feeds"`
+	// Seeded is each feed id that a ship has offered this box. MergeSeed
+	// adds a shipped feed only when its id is not here, so a feed that the
+	// operator deleted stays deleted.
+	Seeded []string `json:"seeded,omitempty"`
+}
+
+type Feed struct {
+	ID     string `json:"id"`
+	Kind   string `json:"kind"`
+	Format string `json:"format"`
+	URL    string `json:"url"`
+	// Segment "house" keeps a domains feed off the agent segment: ads and
+	// trackers are a family concern, not a blocklist feed.
+	// Empty
+	// means every segment.
+	Segment string `json:"segment,omitempty"`
+	// Role "vpn" puts a house feed in its own list
+	// (policycompile.HouseVPNFile). The house resolver serves that list
+	// only while HOUSE_BLOCK_VPN is on. So when the key is off, VPN apps
+	// resolve again, and the ad feeds stay on.
+	Role string `json:"role,omitempty"`
+	// nil means enabled. The field is written only when an operator
+	// disables a feed.
+	Enabled *bool  `json:"enabled,omitempty"`
+	License string `json:"license,omitempty"`
+	Why     string `json:"why,omitempty"`
+}
+
+func (f Feed) On() bool { return f.Enabled == nil || *f.Enabled }
+
+// validate refuses a sources.json that decodes but does not mean
+// anything. JSON decoding only proves the types, and each value below
+// changes what a feed is. A misspelled segment selector reads as the
+// shared one, and sends a full ad-blocking category to the agents. An
+// unrecognised format quietly falls through to the plain parser, and reads
+// a hosts file as one name per line. A negative cap slices the merged list
+// backwards, and crashes the process. None of these show at fetch time. So
+// they are refused before any download, cache or write.
+//
+// The one mismatch that is not refused here is a house feed that is not
+// domains. Run reports that as a SKIP, so the rest of the run continues.
+// A house selector on an IP feed is the one combination that an operator
+// selects by accident, and it costs nothing else.
+func (s *Spec) validate() error {
+	for _, x := range []struct {
+		key string
+		val int
+	}{{"max_ips", s.MaxIPs}, {"max_domains", s.MaxDomains}, {"timeout_sec", s.TimeoutSec}} {
+		if x.val < 0 {
+			return fmt.Errorf("sources.json: %s=%d is negative", x.key, x.val)
+		}
+	}
+	seen := map[string]bool{}
+	for _, f := range s.Feeds {
+		if _, ok := cacheName(f.ID); !ok {
+			return fmt.Errorf("sources.json: '%s' is not a feed id; letters, digits, dot, dash and underscore, up to 64 of them", f.ID)
+		}
+		if seen[f.ID] {
+			return fmt.Errorf("sources.json: two feeds are called '%s'; the id names the feed's last-good copy, so both would overwrite one file", f.ID)
+		}
+		seen[f.ID] = true
+		if f.URL == "" {
+			return fmt.Errorf("sources.json: feed '%s' has no url", f.ID)
+		}
+		if f.Kind != "domains" && f.Kind != "ips" {
+			return fmt.Errorf("sources.json: feed '%s' has kind '%s'; it is domains or ips", f.ID, f.Kind)
+		}
+		switch f.Format {
+		case "", "plain":
+		case "hosts":
+			if f.Kind != "domains" {
+				return fmt.Errorf("sources.json: feed '%s' is format hosts and kind %s; a hosts file carries names", f.ID, f.Kind)
+			}
+		case "spamhaus":
+			if f.Kind != "ips" {
+				return fmt.Errorf("sources.json: feed '%s' is format spamhaus and kind %s; that list carries addresses", f.ID, f.Kind)
+			}
+		default:
+			return fmt.Errorf("sources.json: feed '%s' has format '%s'; it is plain, hosts or spamhaus", f.ID, f.Format)
+		}
+		if f.Segment != "" && !knownSegment(f.Segment) {
+			return fmt.Errorf("sources.json: feed '%s' names segment '%s', which is not a segment; leave it out for every segment", f.ID, f.Segment)
+		}
+		if f.Role != "" && (f.Role != "vpn" || f.Segment != policycompile.SegmentFor(policycompile.AllowByDefault).Name || f.Kind != "domains") {
+			return fmt.Errorf("sources.json: feed '%s' has role '%s'; the only role is vpn, on a house domains feed", f.ID, f.Role)
+		}
+	}
+	return nil
+}
+
+func knownSegment(name string) bool {
+	for _, s := range policycompile.Segments {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// ParseHosts reads hosts-file format ("0.0.0.0 example.com") into
+// domains.
+//
+// A hosts record can carry several names for one address, and the feed
+// asks to block each of them. When only the first name was read, the rest
+// stayed reachable, but the report counted the record as taken. So the
+// coverage of the feed was quietly smaller than what it said. A name that
+// does not parse is skipped alone. Before, one numeric or malformed alias
+// cost the record each valid name behind it.
+func ParseHosts(body string) []string {
+	var out []string
+	for line := range strings.SplitSeq(body, "\n") {
+		tok := policycompile.StripLine(line)
+		if tok == "" {
+			continue
+		}
+		f := strings.Fields(tok)
+		if len(f) < 2 {
+			continue
+		}
+		switch f[0] {
+		case "0.0.0.0", "127.0.0.1", "::", "::1":
+		default:
+			continue
+		}
+		for _, name := range f[1:] {
+			// "0.0.0.0 0.0.0.0" and similar: an address is not a name,
+			// although four numeric labels satisfy the domain grammar.
+			if _, err := netip.ParseAddr(name); err == nil {
+				continue
+			}
+			if parsed, ok := parseToken(name, "domains"); ok {
+				out = append(out, parsed)
+			}
+		}
+	}
+	return out
+}
+
+type Fetcher struct {
+	PolicyDir string
+	OutDir    string
+	// Get, when set, replaces the HTTP client fully. The final URL is
+	// then taken to be the requested one.
+	Get func(url, ua string, timeout time.Duration) (string, error)
+	// Now dates a stale feed against its cached copy; nil means time.Now.
+	Now func() time.Time
+	web *client
+}
+
+func (f *Fetcher) now() time.Time {
+	if f.Now != nil {
+		return f.Now()
+	}
+	return time.Now()
+}
+
+func Defaults(policyDir, outDir string) *Fetcher {
+	return &Fetcher{PolicyDir: policyDir, OutDir: outDir}
+}
+
+const (
+	maxHops = 3
+	maxBody = 8 << 20
+)
+
+var testNet1 = netip.MustParsePrefix("192.0.2.0/24")
+
+func publicAddr(a netip.Addr) bool {
+	a = a.Unmap()
+	if !a.IsValid() || a.IsUnspecified() || a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() || a.IsLinkLocalMulticast() || a.IsMulticast() || a.IsInterfaceLocalMulticast() {
+		return false
+	}
+	if !a.Is4() {
+		return a.IsGlobalUnicast()
+	}
+	if testNet1.Contains(a) {
+		return false
+	}
+	for _, p := range policycompile.Reserved {
+		if p.Contains(a) {
+			return false
+		}
+	}
+	return true
+}
+
+// client resolves each host itself, and dials only addresses that passed
+// the public check. So a rebinding resolver cannot pass the check with one
+// answer and steer the dial with a different answer.
+type client struct {
+	public func(netip.Addr) bool
+	tls    *tls.Config
+}
+
+type page struct {
+	body  string
+	final string
+}
+
+func (c *client) dial(ctx context.Context, network, hostport string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		return nil, err
+	}
+	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return nil, err
+	}
+	if len(addrs) == 0 {
+		return nil, fmt.Errorf("%s: no addresses", host)
+	}
+	for i, a := range addrs {
+		addrs[i] = a.Unmap()
+		if !c.public(addrs[i]) {
+			return nil, fmt.Errorf("%s resolves to %s: not public", host, addrs[i])
+		}
+	}
+	d := net.Dialer{Timeout: 10 * time.Second}
+	for _, a := range addrs {
+		conn, derr := d.DialContext(ctx, network, net.JoinHostPort(a.String(), port))
+		if derr == nil {
+			return conn, nil
+		}
+		err = derr
+	}
+	return nil, err
+}
+
+func checkURL(u *url.URL) error {
+	if u.Scheme != "https" {
+		return fmt.Errorf("%s: only https", u.Redacted())
+	}
+	if u.Hostname() == "" {
+		return fmt.Errorf("%s: no host", u.Redacted())
+	}
+	return nil
+}
+
+func (c *client) get(rawURL, ua string, timeout time.Duration) (page, error) {
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return page{}, err
+	}
+	if err := checkURL(req.URL); err != nil {
+		return page{}, err
+	}
+	if ua != "" {
+		req.Header.Set("User-Agent", ua)
+	}
+	hc := &http.Client{
+		Timeout: timeout,
+		Transport: &http.Transport{
+			DialContext:         c.dial,
+			TLSClientConfig:     c.tls,
+			TLSHandshakeTimeout: 10 * time.Second,
+		},
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxHops {
+				return fmt.Errorf("more than %d redirects", maxHops)
+			}
+			return checkURL(req.URL)
+		},
+	}
+	resp, err := hc.Do(req)
+	if err != nil {
+		return page{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return page{}, fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+	// One byte past the cap, so the code can tell a body that reaches the cap
+	// from a body that stops just under it. LimitReader alone gives back an
+	// ordinary EOF at the boundary, and then a truncated feed looks like a
+	// complete one. All after the cut is silently no longer blocked. The
+	// token where the cut landed can still satisfy the domain grammar, and
+	// block a name that the publisher never listed. A feed that grew past
+	// the cap is a failure like all others. So the run uses the last copy
+	// that was whole.
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+	if err != nil {
+		return page{}, err
+	}
+	if len(b) > maxBody {
+		return page{}, fmt.Errorf("feed is larger than %d bytes", maxBody)
+	}
+	return page{body: string(b), final: resp.Request.URL.String()}, nil
+}
+
+func parseDomain(token string) (string, bool) {
+	got, ok := policycompile.ParseDomain(token)
+	if !ok {
+		return "", false
+	}
+	if strings.HasSuffix(got, ".localhost") || strings.HasSuffix(got, ".local") {
+		return "", false
+	}
+	return got, true
+}
+
+func parseToken(token, kind string) (string, bool) {
+	if kind == "ips" {
+		return policycompile.ParseIPv4(token)
+	}
+	return parseDomain(token)
+}
+
+func ParsePlain(body, kind string) []string {
+	var out []string
+	for line := range strings.SplitSeq(body, "\n") {
+		tok := policycompile.StripLine(line)
+		if tok == "" {
+			continue
+		}
+		token := strings.Fields(tok)[0]
+		if parsed, ok := parseToken(token, kind); ok {
+			out = append(out, parsed)
+		}
+	}
+	return out
+}
+
+func ParseSpamhaus(body string) []string {
+	var out []string
+	for raw := range strings.SplitSeq(body, "\n") {
+		if strings.HasPrefix(strings.TrimLeft(raw, " \t"), ";") {
+			continue
+		}
+		tok := policycompile.StripLine(raw)
+		if tok == "" {
+			continue
+		}
+		token := strings.Fields(tok)[0]
+		if parsed, ok := policycompile.ParseIPv4(token); ok {
+			out = append(out, parsed)
+		}
+	}
+	return out
+}
+
+func readListFile(path, kind string) []string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	seen := map[string]struct{}{}
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		tok := policycompile.StripLine(line)
+		if tok == "" {
+			continue
+		}
+		parsed, ok := parseToken(tok, kind)
+		if !ok && kind == "domains" {
+			name := strings.ToLower(strings.TrimRight(tok, "."))
+			if name != "" {
+				parsed, ok = name, true
+			}
+		}
+		if ok {
+			if _, dup := seen[parsed]; dup {
+				continue
+			}
+			seen[parsed] = struct{}{}
+			out = append(out, parsed)
+		}
+	}
+	return out
+}
+
+func neverIPSet(tokens []string) []netip.Prefix {
+	var out []netip.Prefix
+	for _, t := range tokens {
+		if p, err := netip.ParsePrefix(t); err == nil && p.Addr().Is4() {
+			out = append(out, p.Masked())
+			continue
+		}
+		if a, err := netip.ParseAddr(t); err == nil && a.Is4() {
+			out = append(out, netip.PrefixFrom(a, 32))
+		}
+	}
+	return out
+}
+
+func uniq(items []string) []string {
+	seen := map[string]struct{}{}
+	var out []string
+	for _, it := range items {
+		if _, ok := seen[it]; ok {
+			continue
+		}
+		seen[it] = struct{}{}
+		out = append(out, it)
+	}
+	return out
+}
+
+func readSpec(policy string) (Spec, error) {
+	var spec Spec
+	raw, err := os.ReadFile(filepath.Join(policy, "sources.json"))
+	if err != nil {
+		return spec, err
+	}
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		return spec, err
+	}
+	return spec, spec.validate()
+}
+
+// settings gives the run values of the spec, with each zero replaced by
+// its default.
+func (s *Spec) settings() (ua string, timeout time.Duration, maxIPs, maxDoms int) {
+	ua = s.UserAgent
+	if ua == "" {
+		ua = "pi-fortress/0.1"
+	}
+	// 60 s per feed: hagezi-pro is about 5 MB. On 2026-09-25, 30 s timed out
+	// on the Wi-Fi uplink of the Pi, but the same file took 2 s a minute
+	// later. A miss only causes a fallback to the last good copy.
+	timeout = time.Duration(s.TimeoutSec) * time.Second
+	if timeout == 0 {
+		timeout = 60 * time.Second
+	}
+	maxIPs, maxDoms = s.MaxIPs, s.MaxDomains
+	if maxIPs == 0 {
+		maxIPs = 20000
+	}
+	if maxDoms == 0 {
+		maxDoms = 50000
+	}
+	return ua, timeout, maxIPs, maxDoms
+}
+
+func toSet(items []string) map[string]struct{} {
+	m := map[string]struct{}{}
+	for _, it := range items {
+		m[it] = struct{}{}
+	}
+	return m
+}
+
+func (f *Fetcher) get(u, ua string, timeout time.Duration) (page, error) {
+	if f.Get != nil {
+		body, err := f.Get(u, ua, timeout)
+		return page{body: body, final: u}, err
+	}
+	web := f.web
+	if web == nil {
+		web = &client{public: publicAddr}
+	}
+	return web.get(u, ua, timeout)
+}
+
+func parseFeed(feed Feed, body string) []string {
+	switch feed.Format {
+	case "spamhaus":
+		return ParseSpamhaus(body)
+	case "hosts":
+		return ParseHosts(body)
+	default:
+		return ParsePlain(body, feed.Kind)
+	}
+}
+
+// feedItems downloads and parses one feed. When that fails, it gives the
+// last-good copy, and stale tells why. ok is false when the feed has no
+// last-good copy.
+func (f *Fetcher) feedItems(outDir, ua string, timeout time.Duration, feed Feed, report *[]string) (items []string, stale string, ok bool) {
+	why := ""
+	pg, gerr := f.get(feed.URL, ua, timeout)
+	if gerr != nil {
+		why = gerr.Error()
+	} else {
+		if pg.final != feed.URL {
+			*report = append(*report, "REDIRECT "+feed.ID+": "+pg.final)
+		}
+		items = parseFeed(feed, pg.body)
+		// A feed that answers with an error page parses to nothing.
+		// To treat that as a feed with no entries would drop each
+		// name that it carries, so it is a failure like all others.
+		if len(items) == 0 {
+			why = "answered with nothing to parse"
+		}
+	}
+	if why == "" {
+		if err := writeCache(outDir, feed, items); err != nil {
+			// This is not a failure of this run: the feed answered, and its
+			// names are in the lists below. The next run suffers, with no
+			// fallback. So the operator learns about it now, and does not
+			// discover it during an outage.
+			*report = append(*report, "WARN "+feed.ID+": last-good copy not saved: "+err.Error())
+		}
+		return items, "", true
+	}
+	cached, when, ok := readCache(outDir, feed)
+	if !ok {
+		*report = append(*report, "FAIL "+feed.ID+": "+why)
+		return nil, "", false
+	}
+	return cached, " (last good " + Ago(f.now().Sub(when)) + ": " + why + ")", true
+}
+
+func dropNever(items []string, kind string, neverNets []netip.Prefix, neverDoms map[string]struct{}) []string {
+	var kept []string
+	for _, item := range items {
+		if kind == "ips" && policycompile.IsNeverIP(item, neverNets) {
+			continue
+		}
+		if kind == "domains" && policycompile.IsNeverDomain(item, neverDoms) {
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return kept
+}
+
+func anyFail(report []string) bool {
+	for _, line := range report {
+		if strings.HasPrefix(line, "FAIL") {
+			return true
+		}
+	}
+	return false
+}
+
+func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
+	policy := f.PolicyDir
+	outDir := f.OutDir
+	if outDir == "" {
+		outDir = filepath.Join(policy, "generated")
+	}
+	spec, err := readSpec(policy)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	ua, timeout, maxIPs, maxDoms := spec.settings()
+	agent := policycompile.SegmentFor(policycompile.DenyByDefault)
+	house := policycompile.SegmentFor(policycompile.AllowByDefault)
+	neverNets := neverIPSet(readListFile(filepath.Join(policy, agent.File("never_block.ips")), "ips"))
+	neverDoms := toSet(readListFile(filepath.Join(policy, agent.File("never_block.domains")), "domains"))
+	houseNever := toSet(readListFile(filepath.Join(policy, house.File("never_block.domains")), "domains"))
+	var ips, domains, houseDomains, houseVPN []string
+	sample := ""
+	seen := map[string]bool{}
+	// feedOf remembers which feed carried each item, and the first feed wins.
+	// feeds.map gives it to pf compile.
+	feedOf := map[string]string{}
+	for _, feed := range spec.Feeds {
+		seen[feed.ID] = true
+		if !feed.On() {
+			report = append(report, "SKIP "+feed.ID+": disabled")
+			continue
+		}
+		toHouse := feed.Segment == house.Name
+		if toHouse && feed.Kind != "domains" {
+			report = append(report, "SKIP "+feed.ID+": "+house.Name+" segment feeds must be domains")
+			continue
+		}
+		items, stale, ok := f.feedItems(outDir, ua, timeout, feed, &report)
+		if !ok {
+			continue
+		}
+		never, label := neverDoms, feed.Kind
+		if toHouse {
+			never, label = houseNever, house.Name+" domains"
+		}
+		kept := uniq(dropNever(items, feed.Kind, neverNets, never))
+		for _, item := range kept {
+			if _, dup := feedOf[item]; !dup {
+				feedOf[item] = feed.ID
+			}
+		}
+		verb := "OK"
+		if stale != "" {
+			verb = "STALE"
+		}
+		report = append(report, fmt.Sprintf("%s %s: %d %s%s", verb, feed.ID, len(kept), label, stale))
+		switch {
+		case toHouse && feed.Role == "vpn":
+			houseVPN = append(houseVPN, kept...)
+		case toHouse:
+			houseDomains = append(houseDomains, kept...)
+		case feed.Kind == "ips":
+			ips = append(ips, kept...)
+		default:
+			domains = append(domains, kept...)
+			if sample == "" && len(kept) > 0 {
+				sample = kept[0]
+			}
+		}
+	}
+	pruneCache(outDir, seen)
+	ipOut := truncate(uniq(ips), maxIPs, "ips", &report)
+	domOut := truncate(uniq(domains), maxDoms, "domains", &report)
+	houseOut := truncate(uniq(houseDomains), maxDoms, house.Name+" domains", &report)
+	vpnOut := truncate(uniq(houseVPN), maxDoms, house.Name+" vpn domains", &report)
+	repText := lines(report)
+	// houseOut also counts. A run in which only the house feeds answered
+	// used to be called a total failure, and the house list that it did
+	// fetch was discarded with the rest. So the ad and tracker blocks, which
+	// are the reason for the family segment, stopped because an unrelated
+	// agent feed was down.
+	if anyFail(report) && len(ipOut) == 0 && len(domOut) == 0 && len(houseOut) == 0 && len(vpnOut) == 0 {
+		// Lists stay as they were. Only the report records the outage,
+		// so the Feeds screen does not show the OK lines of yesterday.
+		_ = commit(outDir, []struct{ name, text string }{{"fetch.report", repText}})
+		return report, 0, 0, fmt.Errorf("all feeds failed")
+	}
+	sampleText := ""
+	if sample != "" {
+		sampleText = sample + "\n"
+	}
+	files := []struct {
+		name string
+		text string
+	}{
+		{agent.Sinkhole("ips"), lines(ipOut)},
+		{agent.Sinkhole("domains"), lines(domOut)},
+		{house.Sinkhole("domains"), lines(houseOut)},
+		{filepath.Base(policycompile.HouseVPNFile), lines(vpnOut)},
+		{FeedsMap, feedsMap(feedOf, ipOut, domOut, houseOut, vpnOut)},
+		{"sample.domain", sampleText},
+		{"fetch.report", repText},
+	}
+	if err := commit(outDir, files); err != nil {
+		return report, 0, 0, err
+	}
+	return report, len(ipOut), len(domOut), nil
+}
+
+func truncate(items []string, max int, label string, report *[]string) []string {
+	if len(items) <= max {
+		return items
+	}
+	*report = append(*report, fmt.Sprintf("TRUNCATED %s to %d (had %d)", label, max, len(items)))
+	return items[:max]
+}
+
+// FeedsMap is the generated file that names the feed behind each item that
+// the lists carry: "<item>\t<feed id>" per line, in list order.
+const FeedsMap = "feeds.map"
+
+func feedsMap(feedOf map[string]string, lists ...[]string) string {
+	var b strings.Builder
+	for _, items := range lists {
+		for _, item := range items {
+			if id, ok := feedOf[item]; ok {
+				b.WriteString(item + "\t" + id + "\n")
+			}
+		}
+	}
+	return b.String()
+}
+
+func lines(items []string) string {
+	text := strings.Join(items, "\n")
+	if text != "" {
+		text += "\n"
+	}
+	return text
+}
+
+// commit stages each file in a temp dir inside outDir, and renames each
+// file over its target. So a run that dies half way leaves the previous
+// generated set in place.
+func commit(outDir string, files []struct{ name, text string }) error {
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return err
+	}
+	tmp, err := os.MkdirTemp(outDir, ".fetch-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	for _, f := range files {
+		if err := os.WriteFile(filepath.Join(tmp, f.name), []byte(f.text), 0644); err != nil {
+			return err
+		}
+	}
+	for _, f := range files {
+		if err := os.Rename(filepath.Join(tmp, f.name), filepath.Join(outDir, f.name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// CountWarnings reads the report lines of a run, and says how many feeds
+// did not come back fresh. FAIL is a feed with nothing to fall back on.
+// STALE is a feed served from its last copy. Run returns a nil error for
+// each run in which something answered. So callers that need one number
+// for the log (the audit entry, the seat) count from here. They do not
+// parse the report again with their own idea of the verbs.
+func CountWarnings(report []string) (fails, stale int) {
+	for _, line := range report {
+		verb, _, _ := strings.Cut(line, " ")
+		switch verb {
+		case "FAIL":
+			fails++
+		case "STALE":
+			stale++
+		}
+	}
+	return fails, stale
+}

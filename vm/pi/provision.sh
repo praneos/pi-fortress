@@ -1,0 +1,385 @@
+#!/bin/bash
+set -euo pipefail
+# A file that > writes gets its mode from the umask.  sudo or the shell of
+# the operator can give a looser umask than the umask of root.
+umask 022
+
+# SRC is the checkout that provisions this box. The lab mounts it at
+# /vagrant. A real Pi passes SRC=/opt/pi-fortress, so it needs no symlink
+# at /vagrant for these paths (docs/user_guide/pi_setup.md). This check
+# runs before apt, so a wrong SRC costs nothing. apply.sh still resolves
+# /vagrant itself.
+SRC="${SRC:-/vagrant}"
+if [[ ! -d "${SRC}/vm/pi" || ! -d "${SRC}/vm/policy" ]]; then
+  echo "pi-fortress: SRC=${SRC} is not a pi-fortress checkout" >&2
+  exit 1
+fi
+
+# Only on a Raspberry Pi, a lab VM (both Vagrantfiles provision with
+# PF_LAB=1) or with PF_ALLOW_ANY_HOST=1: this installs packages and
+# rewrites system configuration. On a desktop, that is damage. The model
+# test is pf_host_guard in apply.sh. PF_TEST_MODEL is the stand-in of
+# apply_test for the device-tree file.
+_model_file="${PF_TEST_MODEL:-/proc/device-tree/model}"
+_model="$(tr -d '\0' 2>/dev/null <"${_model_file}" || true)"
+if [[ "${PF_ALLOW_ANY_HOST:-}" != 1 && "${_model}" != *"Raspberry Pi"* && "${PF_LAB:-}" != 1 ]]; then
+  echo "pi-fortress: provision.sh refuses to run on ${HOSTNAME:-this host} (${_model:-no Raspberry Pi model in ${_model_file}}; not a lab VM, PF_LAB unset). It installs packages and rewrites system configuration. PF_ALLOW_ANY_HOST=1 runs it anyway." >&2
+  exit 1
+fi
+
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update
+apt-get install -y --no-install-recommends \
+  nftables dnsmasq wireguard wireguard-tools curl tcpdump iproute2 ca-certificates dnsutils conntrack usb-modeswitch logrotate rsync python3 chrony
+# chrony replaces systemd-timesyncd (the package conflicts with it, so apt
+# removes it). apply writes an NTS-only chrony.conf. Reason: with plain NTP
+# on an uplink that the owner does not control, that network can move the
+# clock, and with it each certificate check on the box.
+
+# agent-net, house-net, each segment and the VLAN trunk are all
+# NetworkManager profiles (vm/pi/lib/netman.sh). A Pi OS Lite image does
+# not always ship NetworkManager. Then apply refuses, and the box never
+# gets an address. Not in the lab: there ifupdown owns eth0 and eth1 from
+# the Vagrant private_network. The nmcli block of apply must stay skipped
+# there. A second configurator on those interfaces can make the box
+# unreachable during the provision.
+if [[ "${PF_LAB:-}" != 1 ]]; then
+  apt-get install -y --no-install-recommends network-manager
+fi
+
+install -d -m 0755 /etc/pi-fortress /usr/local/lib/pi-fortress
+if [[ "${PF_LAB:-}" == 1 ]]; then
+  touch /etc/pi-fortress/lab
+fi
+# The lists of the operator, seeded one time. With a tree at /vagrant or
+# /opt/pi-fortress, apply, the TUI, pf fetch and pf backup all read and
+# edit vm/policy of the tree (base.PolicyDir). These copies are the policy
+# only of a box with no tree, where /etc/pi-fortress is the one source of
+# truth. In both cases, a re-provision must not put the shipped defaults
+# back over what the operator blocked, allowed or disabled.
+# This step does not merge sources.json as a ship merges it
+# (fetch.MergeSeed): a box with no tree gets no ship.
+for _f in blacklist.ips blacklist.domains never_block.ips never_block.domains direct_ip.allow sources.json; do
+  if [[ ! -e "/etc/pi-fortress/${_f}" ]]; then
+    install -m 0644 "${SRC}/vm/policy/${_f}" "/etc/pi-fortress/${_f}"
+  fi
+done
+cp "${SRC}"/vm/policy/doh.ips /etc/pi-fortress/doh.ips
+cp "${SRC}"/vm/policy/doh.domains /etc/pi-fortress/doh.domains
+install -m 0755 "${SRC}"/vm/pi/apply.sh /usr/local/lib/pi-fortress/apply.sh
+install -d -m 0755 /usr/local/lib/pi-fortress/lib
+install -m 0644 "${SRC}"/vm/pi/lib/*.sh /usr/local/lib/pi-fortress/lib/
+install -m 0755 "${SRC}"/vm/pi/status.sh /usr/local/lib/pi-fortress/status.sh
+install -m 0644 "${SRC}"/vm/pi/net.env /etc/pi-fortress/net.env
+if [[ "${PF_LAB:-}" == 1 ]]; then
+  # The desk seat as a plain segment. On the real Pi, an operator copies
+  # segments.d/desk.env.example and edits it. The lab writes it, because
+  # the one field that is different is the interface. Only the box knows
+  # on which adapter the hypervisor put the segment. Undotted: a
+  # VirtualBox internal network carries no 802.1Q tags, and render reads
+  # an undotted IF= as a plain ethernet port.
+  # shellcheck source=/dev/null
+  source "${SRC}"/vm/pi/net.env
+  # The house segment, in the same way: on a real Pi, the operator writes
+  # house.env.example manually, for a USB adapter. Only this box knows
+  # which adapter the hypervisor gave it. The admin address is a DHCP
+  # reservation, not a static lease, so the lab also tests house.hosts.
+  # The reservation flow of the TUI edits that file.
+  house_if="$(ip -4 -o addr show to "${LAB_HOUSE_IP}/32" 2>/dev/null | awk '{sub(/@.*/, "", $2); print $2; exit}')"
+  if [[ -z "${house_if}" ]]; then
+    echo "pi-fortress: no interface holds ${LAB_HOUSE_IP}; the house segment is not installed" >&2
+  else
+    cat >/etc/pi-fortress/house.env <<EOF
+HOUSE_IF=${house_if}
+HOUSE_NET=${LAB_HOUSE_NET}
+HOUSE_IP=${LAB_HOUSE_IP}
+HOUSE_DHCP_START=${LAB_HOUSE_IP%.*}.100
+HOUSE_DHCP_END=${LAB_HOUSE_IP%.*}.199
+HOUSE_ADMIN_IP=${LAB_HOUSE_ADMIN_IP}
+HOUSE_DNS_UPSTREAM=${LAB_HOUSE_DNS_UPSTREAM}
+EOF
+    chmod 0644 /etc/pi-fortress/house.env
+    # Seeded one time. The reservations of the TUI are in this file. The
+    # gw.sh of the cloud lab reserved its own house MAC (a libvirt MAC, not
+    # LAB_HOUSE_MAC) before this runs. A re-provision must keep both.
+    if [[ ! -s /etc/pi-fortress/house.hosts ]]; then
+      printf '%s,%s,house\n' "${LAB_HOUSE_MAC}" "${LAB_HOUSE_ADMIN_IP}" >/etc/pi-fortress/house.hosts
+    fi
+    chmod 0644 /etc/pi-fortress/house.hosts
+  fi
+  desk_if="$(ip -4 -o addr show to "${DESK_IP}/32" 2>/dev/null | awk '{sub(/@.*/, "", $2); print $2; exit}')"
+  if [[ -z "${desk_if}" ]]; then
+    echo "pi-fortress: no interface holds ${DESK_IP}; the desk segment is not installed" >&2
+  else
+    install -d -m 0755 /etc/pi-fortress/segments.d
+    cat >/etc/pi-fortress/segments.d/desk.env <<EOF
+IF=${desk_if}
+NET=${DESK_NET}
+IP=${DESK_IP}
+ADMIN=yes
+SSH_TO=${AGENT_IP}-${AGENT_IP%.*}.$((${AGENT_IP##*.} + 2))
+EOF
+    chmod 0644 /etc/pi-fortress/segments.d/desk.env
+  fi
+fi
+cp "${SRC}"/vm/policy/core.hosts /etc/pi-fortress/core.hosts
+cp "${SRC}"/vm/policy/allow.domains /etc/pi-fortress/allow.domains
+cp "${SRC}"/vm/policy/dns_types.allow /etc/pi-fortress/dns_types.allow
+cp "${SRC}"/vm/policy/key_prefixes.rules /etc/pi-fortress/key_prefixes.rules
+cp "${SRC}"/vm/policy/git_push.allow /etc/pi-fortress/git_push.allow
+install -m 0644 "${SRC}"/vm/pi/observe.service /etc/systemd/system/pi-fortress-observe.service
+install -m 0644 "${SRC}"/vm/pi/alert.service /etc/systemd/system/pi-fortress-alert.service
+install -m 0644 "${SRC}"/vm/pi/www.service /etc/systemd/system/pi-fortress-www.service
+# Log rotation. apply.sh installs it again from PI_LIB on each run. This is
+# the copy that PI_LIB points to on a real Pi. It goes to
+# /etc/pi-fortress/logrotate.conf, and our own timer runs it each hour. It
+# is not in /etc/logrotate.d, where only the daily run of the system sees it.
+install -m 0644 "${SRC}"/vm/pi/logrotate.conf /usr/local/lib/pi-fortress/logrotate.conf
+install -m 0644 "${SRC}"/vm/pi/logrotate.conf /etc/pi-fortress/logrotate.conf
+install -m 0644 "${SRC}"/vm/pi/logrotate.service /etc/systemd/system/pi-fortress-logrotate.service
+install -m 0644 "${SRC}"/vm/pi/logrotate.timer /etc/systemd/system/pi-fortress-logrotate.timer
+rm -f /etc/logrotate.d/pi-fortress
+install -m 0644 "${SRC}"/vm/agent/setup.sh /usr/local/lib/pi-fortress/agent-setup.sh
+# apply copies this seed to allow.<segment>.domains for a plain segment
+# that has no such file yet (docs/paranoid_mode.md). apply looks in PI_LIB.
+install -m 0644 "${SRC}"/vm/pi/allow.segment.domains.example /usr/local/lib/pi-fortress/allow.segment.domains.example
+
+for _bin in "${SRC}/bin/pf" "${SRC}/vm/pi/pf"; do
+  if [[ -x "${_bin}" ]]; then
+    install -m 0755 "${_bin}" /usr/local/sbin/pf
+    break
+  fi
+done
+if [[ ! -x /usr/local/sbin/pf ]]; then
+  echo "pi-fortress: pf missing (make split-bin)" >&2
+  exit 1
+fi
+ln -sfn pf /usr/local/sbin/pi-fortress
+
+# Forwarding ships OFF. Before, it was 1 here, persisted and applied again
+# at each boot. But the ruleset that makes forwarding safe was only
+# conditional: an apply that failed before it installed /etc/nftables.conf
+# left the stock Debian accept-policy file. provision then enabled
+# and started that file -- an open router between the agent segment and the
+# uplink, announced by one line on stderr. apply.sh enables forwarding at
+# runtime after it loads our ruleset. The nftables.service drop-in that it
+# installs does the same at boot. Thus the two can never be out of sync again.
+cat >/etc/sysctl.d/99-pi-fortress.conf <<'EOF'
+net.ipv4.ip_forward=0
+net.ipv6.conf.all.forwarding=0
+net.ipv6.conf.all.disable_ipv6=1
+net.ipv6.conf.default.disable_ipv6=1
+net.ipv6.conf.lo.disable_ipv6=1
+net.netfilter.nf_conntrack_acct=1
+net.ipv4.tcp_syncookies=1
+net.ipv4.conf.all.rp_filter=1
+net.ipv4.conf.default.rp_filter=1
+net.ipv4.conf.all.accept_redirects=0
+net.ipv4.conf.default.accept_redirects=0
+net.ipv4.conf.all.secure_redirects=0
+net.ipv4.conf.default.secure_redirects=0
+net.ipv4.conf.all.send_redirects=0
+net.ipv4.conf.default.send_redirects=0
+net.ipv4.conf.all.accept_source_route=0
+net.ipv4.conf.default.accept_source_route=0
+net.ipv4.icmp_echo_ignore_broadcasts=1
+net.ipv4.icmp_ignore_bogus_error_responses=1
+net.ipv4.conf.all.arp_ignore=1
+net.ipv4.conf.default.arp_ignore=1
+net.ipv4.conf.all.arp_announce=2
+net.ipv4.conf.default.arp_announce=2
+kernel.kptr_restrict=2
+kernel.dmesg_restrict=1
+kernel.unprivileged_bpf_disabled=2
+kernel.yama.ptrace_scope=2
+fs.protected_symlinks=1
+fs.protected_hardlinks=1
+fs.protected_fifos=2
+fs.protected_regular=2
+fs.suid_dumpable=0
+EOF
+sysctl -e --system >/dev/null
+
+# Key-only SSH, but only after a key is installed: to enforce it on a
+# box with no authorized_keys is a lockout, not a hardening.
+if compgen -G "/home/*/.ssh/authorized_keys" >/dev/null && [[ -n "$(cat /home/*/.ssh/authorized_keys 2>/dev/null)" ]]; then
+  install -d -m 0755 /etc/ssh/sshd_config.d
+  cat >/etc/ssh/sshd_config.d/99-pi-fortress.conf <<'EOF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PermitRootLogin no
+EOF
+  if sshd -t 2>/dev/null; then
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+  else
+    rm -f /etc/ssh/sshd_config.d/99-pi-fortress.conf
+    echo "pi-fortress: sshd rejected the key-only drop-in; password auth left as is" >&2
+  fi
+else
+  echo "pi-fortress: no authorized_keys under /home; sshd password auth left as is" >&2
+fi
+
+# Raspberry Pi OS ships avahi enabled. The gateway must not announce itself
+# on the segments that it fences. Also, its own multicast loops back in on
+# each segment, and the input chain drops and logs it: 18 lines each
+# minute, shown in the TUI as pi_input events from the address of the Pi
+# (Pi, 2026-09-21). The cost: <hostname>.local does not resolve after this.
+# Each page here reaches the Pi by address.
+systemctl disable --now avahi-daemon.socket avahi-daemon.service >/dev/null 2>&1 || true
+systemctl disable --now bluetooth.service >/dev/null 2>&1 || true
+systemctl disable --now hciuart.service >/dev/null 2>&1 || true
+rfkill block bluetooth >/dev/null 2>&1 || true
+if [[ -f /boot/firmware/config.txt ]] && ! grep -q '^dtoverlay=disable-bt' /boot/firmware/config.txt; then
+  echo "dtoverlay=disable-bt" >>/boot/firmware/config.txt
+fi
+
+apt-get install -y --no-install-recommends unattended-upgrades
+cat >/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+cat >/etc/apt/apt.conf.d/52-pi-fortress-upgrades <<'EOF'
+Unattended-Upgrade::Origins-Pattern {
+  "origin=Debian,codename=${distro_codename},label=Debian-Security";
+  "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
+  "origin=Raspberry Pi Foundation,codename=${distro_codename}";
+};
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Automatic-Reboot "false";
+EOF
+systemctl enable unattended-upgrades >/dev/null 2>&1 || true
+
+systemctl disable --now dnsmasq 2>/dev/null || true
+systemctl mask dnsmasq 2>/dev/null || true
+install -m 0644 "${SRC}"/vm/pi/70-pi-fortress-rtl8153.rules /etc/udev/rules.d/70-pi-fortress-rtl8153.rules
+udevadm control --reload-rules >/dev/null 2>&1 || true
+udevadm trigger --subsystem-match=usb --action=add >/dev/null 2>&1 || true
+# Still soft, on purpose: a first boot with no cables in cannot settle
+# the segments. An exit here leaves a half-installed box that cannot
+# finish. The soft warning was dangerous because of ip_forward=1 above:
+# before, a failed apply meant an open router. Now forwarding is off until
+# an apply loads the ruleset, so a failed apply gives a Pi that routes
+# nothing. The warning says that. It does not imply that the box is only untidy.
+# pf install runs this from a scratch copy before it publishes a tree.
+# Then pf ship applies the published tree. An apply here would read the
+# stale install under /usr/local/lib and report a failure that is not real.
+if [[ "${PF_SHIP_APPLIES:-}" == 1 ]]; then
+  echo "pi-fortress: first apply left to pf ship, which applies the published tree next"
+else
+  /usr/local/sbin/pf apply ||
+    echo "pi-fortress: the first apply left segments unsettled (above); the Pi forwards nothing until an apply succeeds -- run 'sudo pf apply' again once the cables are in" >&2
+fi
+systemctl daemon-reload
+systemctl enable nftables
+systemctl enable pi-fortress-observe
+systemctl enable pi-fortress-alert
+systemctl enable pi-fortress-www
+systemctl disable --now pi-fortress-mitm.service >/dev/null 2>&1 || true
+systemctl restart nftables
+systemctl restart pi-fortress-observe
+systemctl restart pi-fortress-alert
+systemctl restart pi-fortress-www
+
+# Signed ship (docs/signed_ship.md). pfship can write only the upload
+# directory, through rrsync. Its home is outside /home, so the key-only
+# check above never counts it. root owns its authorized_keys.
+PF_INCOMING=/var/lib/pi-fortress/incoming
+PF_SHIP_HOME=/var/lib/pi-fortress/pfship
+PF_SHIP_PUBKEY="${PF_SHIP_PUBKEY:-/etc/pi-fortress/pfship.pub}"
+install -d -m 0755 /var/lib/pi-fortress
+if ! id -u pfship >/dev/null 2>&1; then
+  useradd --system --user-group --no-create-home --home-dir "${PF_SHIP_HOME}" --shell /bin/sh pfship
+fi
+# '*' is no password, not locked: without PAM, sshd refuses keys for '!'.
+usermod -p '*' pfship
+install -d -m 0755 -o root -g root "${PF_SHIP_HOME}" "${PF_SHIP_HOME}/.ssh"
+install -d -m 0700 -o pfship -g pfship "${PF_INCOMING}"
+RRSYNC=""
+for _r in /usr/bin/rrsync /usr/share/doc/rsync/scripts/rrsync; do
+  if [[ -x "${_r}" ]]; then
+    RRSYNC="${_r}"
+    break
+  fi
+done
+if [[ -z "${RRSYNC}" ]]; then
+  echo "pi-fortress: rrsync not found at /usr/bin/rrsync (rsync >= 3.2.4 ships it, bookworm and trixie do); pfship gets no key and signed ship stays off" >&2
+elif [[ ! -f "${PF_SHIP_PUBKEY}" ]]; then
+  echo "pi-fortress: ${PF_SHIP_PUBKEY} missing; pfship gets no key (docs/signed_ship.md, setup)" >&2
+else
+  _ship_key="$(grep -m1 -E '^(ssh-ed25519|sk-ssh-ed25519@openssh.com|ecdsa-sha2-nistp256|sk-ecdsa-sha2-nistp256@openssh.com) ' "${PF_SHIP_PUBKEY}" | cut -d' ' -f1,2 || true)"
+  if [[ -z "${_ship_key}" ]]; then
+    echo "pi-fortress: ${PF_SHIP_PUBKEY} holds no ed25519 or ecdsa public key; pfship gets no key" >&2
+  elif grep -qsF -- "${_ship_key#* }" /home/*/.ssh/authorized_keys /root/.ssh/authorized_keys; then
+    echo "pi-fortress: the pfship key is also a login key; make a separate one (docs/signed_ship.md). pfship gets no key" >&2
+  else
+    printf 'restrict,command="%s -wo %s" %s pfship\n' "${RRSYNC}" "${PF_INCOMING}" "${_ship_key}" >"${PF_SHIP_HOME}/.ssh/authorized_keys.tmp"
+    install -m 0644 -o root -g root "${PF_SHIP_HOME}/.ssh/authorized_keys.tmp" "${PF_SHIP_HOME}/.ssh/authorized_keys"
+    rm -f "${PF_SHIP_HOME}/.ssh/authorized_keys.tmp"
+  fi
+fi
+if [[ -n "${PF_ALLOWED_SIGNERS:-}" ]]; then
+  install -m 0644 -o root -g root "${PF_ALLOWED_SIGNERS}" /etc/pi-fortress/allowed_signers
+fi
+if [[ ! -f /etc/pi-fortress/allowed_signers ]]; then
+  echo "pi-fortress: /etc/pi-fortress/allowed_signers missing; pf ship install refuses every bundle until it exists" >&2
+fi
+install -m 0644 "${SRC}"/vm/pi/ship.path /etc/systemd/system/pi-fortress-ship.path
+install -m 0644 "${SRC}"/vm/pi/ship.service /etc/systemd/system/pi-fortress-ship.service
+systemctl daemon-reload
+systemctl enable --now pi-fortress-ship.path
+
+# Passwordless sudo (docs/signed_ship.md): with it, a stolen login key is
+# root. This removes a file only on request, only if each rule in it is
+# "user ... NOPASSWD: ALL", and only for a user with a password to type. It
+# puts the file back if visudo or sudo -l disagrees after. Never in apply.sh:
+# there, a wrong guess would remove the sudo access of the operator again
+# on each run.
+if [[ "${PF_REMOVE_NOPASSWD:-0}" != "1" ]]; then
+  for _f in /etc/sudoers.d/*; do
+    if [[ -f "${_f}" ]] && grep -qsE '^[^#]*NOPASSWD:[[:space:]]*ALL' "${_f}"; then
+      echo "pi-fortress: ${_f} grants passwordless sudo for ALL; left in place (PF_REMOVE_NOPASSWD=1 removes it, docs/signed_ship.md)" >&2
+    fi
+  done
+else
+  _bk=/var/backups/pi-fortress-sudoers
+  install -d -m 0700 -o root -g root "${_bk}"
+  for _f in /etc/sudoers.d/*; do
+    [[ -f "${_f}" ]] || continue
+    grep -qsE '^[^#]*NOPASSWD' "${_f}" || continue
+    _rules="$(grep -vE '^[[:space:]]*(#|$)' "${_f}" || true)"
+    if grep -qvE '^[[:space:]]*[a-z_][a-z0-9_-]*[[:space:]]+ALL[[:space:]]*=[[:space:]]*(\([^)]*\)[[:space:]]*)?NOPASSWD:[[:space:]]*ALL[[:space:]]*$' <<<"${_rules}"; then
+      echo "pi-fortress: ${_f} has rules other than 'user ALL=(ALL) NOPASSWD: ALL' (a group, a command list, a continuation); left in place, edit it by hand" >&2
+      continue
+    fi
+    _ok=1
+    _users="$(awk '{print $1}' <<<"${_rules}" | sort -u)"
+    for _u in ${_users}; do
+      _st="$(passwd -S "${_u}" 2>/dev/null | awk '{print $2}' || true)"
+      if [[ "${_st}" != "P" ]]; then
+        echo "pi-fortress: ${_f}: ${_u} has no usable password (passwd -S status '${_st}'); set one with 'sudo passwd ${_u}' first. Left in place" >&2
+        _ok=0
+      fi
+    done
+    [[ "${_ok}" == "1" ]] || continue
+    _saved="${_bk}/$(basename "${_f}").$(date +%Y%m%dT%H%M%S)"
+    mv "${_f}" "${_saved}"
+    _why=""
+    if ! visudo -c >/dev/null 2>&1; then
+      _why="visudo -c failed"
+    else
+      for _u in ${_users}; do
+        if ! sudo -l -U "${_u}" 2>/dev/null | grep -qE '^[[:space:]]*\(ALL( : ALL)?\)[[:space:]]+ALL[[:space:]]*$'; then
+          _why="${_u} would lose sudo entirely (not in group sudo?)"
+        fi
+      done
+    fi
+    if [[ -n "${_why}" ]]; then
+      mv "${_saved}" "${_f}"
+      echo "pi-fortress: ${_f}: ${_why}; restored" >&2
+    else
+      echo "pi-fortress: removed ${_f} (saved as ${_saved}); sudo now asks for a password" >&2
+    fi
+  done
+  visudo -c >/dev/null
+fi

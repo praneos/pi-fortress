@@ -1,0 +1,12 @@
+# OPERATOR STATE. `make pi-ship` does not overwrite the copy on the
+# Pi (PI_OWNED in the Makefile). The version in git is only the seed
+# for a fresh install, and it will drift from the running one.
+# Edit it on the Pi (`sudo pf tui`, House lists, a/d), then apply.
+#
+# The addresses that your endpoint is pinned to, one per line, no ranges
+# (the range of a provider also has its public resolvers). House devices
+# may reach these on tcp 853 (DoT) and 443 (DoH) while HOUSE_PRIVATE_DNS=on.
+# QUIC to them stays dropped. Off, or empty: inert.
+# Control D:
+#76.76.2.22
+#76.76.10.22

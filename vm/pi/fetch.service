@@ -1,0 +1,31 @@
+[Unit]
+Description=pi-fortress blocklist feed refresh
+After=network-online.target
+Wants=network-online.target
+# Limits the lock retries below: 20 starts in one hour, then the unit fails.
+StartLimitIntervalSec=1h
+StartLimitBurst=20
+
+[Service]
+Type=oneshot
+# --refresh is apply --local plus the feed download, in one process. Thus
+# it holds the apply lock for both, and cannot interleave with an apply that
+# an operator starts from the TUI. It reloads nft and the resolvers. It does
+# not restart the fence, because a restart drops live agent connections at
+# any hour that this timer fires. The compiled list is then newer than the
+# copy in the fence until the next operator apply. apply.sh and the TUI
+# both show this. They do not leave it for the operator to find.
+ExecStart=/usr/local/sbin/pf apply --refresh
+# 75 means that a different apply has the lock (a ship, the TUI, an operator).
+# Without a retry, that one collision loses the refresh for the day.
+# systemd 252 (bookworm) refuses RestartForceExitStatus= on a oneshot and
+# drops the full unit. Thus each failure retries, with StartLimit as the limit.
+Restart=on-failure
+# 3 is "applied, not settled" from apply.sh: the feeds are in, and a segment
+# interface is missing (a house adapter that is not connected, or not yet a
+# NIC). A retry cannot connect it, so 3 is not a failure to retry.
+SuccessExitStatus=3
+RestartSec=2min
+TimeoutStartSec=15min
+Nice=10
+IOSchedulingClass=idle

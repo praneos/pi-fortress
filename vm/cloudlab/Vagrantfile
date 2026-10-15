@@ -1,0 +1,128 @@
+# frozen_string_literal: true
+
+# Cloud lab: the post-cutover Pi topology as libvirt VMs on one KVM host
+# (docs/cloud_lab.md). Operate it with vm/cloudlab/lab.sh. That script sets
+# VAGRANT_CWD to this directory. The VirtualBox lab in the repo root is
+# separate and unchanged.
+#
+#   gw     the Pi 5: WAN on mgmt, trunk (VLAN 20 agents, VLAN 79 desk), house
+#   agent  agent VMs on VLAN 20, 10.77.0.10 and up
+#   desk   the desktop seat, a trunk port with the desk VLAN
+#   house  a house device, DHCP from the gw, the reserved admin address
+
+ROOT = File.expand_path("../..", __dir__)
+CLIENT = File.join(__dir__, "guest", "client.sh")
+
+def load_env(path)
+  File.readlines(path, chomp: true).each_with_object({}) do |line, env|
+    next if line.strip.empty? || line.start_with?("#")
+
+    key, value = line.split("=", 2)
+    env[key] = value.to_s
+  end
+end
+
+LAB = load_env(File.join(__dir__, "lab.env"))
+# SSH_TO in segments.d/desk.env covers 10.77.0.10-12. Thus the maximum is three.
+AGENT_COUNT = ENV.fetch("PF_AGENT_COUNT", "2").to_i.clamp(1, 3)
+# The gw itself writes generated/. A later `vagrant rsync` never deletes
+# excluded paths. .vagrant/ has the key of each VM.
+RSYNC_EXCLUDE = [".git/", ".vagrant/", "/vendor/", "/bin/", "/dist/", "/vm/policy/generated/", "/.pi-fortress-stage/"].freeze
+
+# What an agent gets, as in the root Vagrantfile: its own scripts, the
+# topology, and the public CA. It does not get the checkout. The tree has
+# vm/policy/alert.url. The path of the webhook URL in that file is a
+# bearer token. vagrant uploads the provisioners. These are the files
+# that the provisioners read from /vagrant.
+AGENT_RSYNC_ARGS = %w[
+  --verbose --archive --delete --delete-excluded -z --copy-links
+  --include=/vm/ --include=/vm/agent/ --include=/vm/agent/**
+  --include=/vm/pi/ --include=/vm/pi/net.env
+  --include=/vm/policy/ --include=/vm/policy/generated/
+  --include=/vm/policy/generated/*-ca.pem --exclude=*
+].freeze
+
+# A NIC on a host bridge. auto_config: false, because the guest scripts
+# own all addresses. Vagrant would give the trunk port an address.
+def segment_nic(vm, bridge, mac)
+  vm.network "public_network", type: "bridge", dev: bridge, mode: "bridge", mac: mac, auto_config: false
+end
+
+def client_env(mgmt_mac, lab_mac)
+  { "MGMT_MAC" => mgmt_mac, "LAB_MAC" => lab_mac }
+end
+
+Vagrant.configure("2") do |config|
+  config.vm.box = ENV.fetch("PF_BOX", "debian/bookworm64")
+  config.vm.box_check_update = false
+  config.vm.boot_timeout = 600
+  # One-way copy: root in a client VM must not edit what the host runs next.
+  config.vm.synced_folder ROOT, "/vagrant", type: "rsync", rsync__exclude: RSYNC_EXCLUDE
+
+  config.vm.provider "libvirt" do |lv|
+    lv.default_prefix = "pfcl-"
+    lv.memory = 1024
+    lv.cpus = 1
+    lv.management_network_name = "pf-mgmt"
+    lv.management_network_address = LAB["MGMT_NET"]
+    lv.management_network_keep = true
+  end
+
+  config.vm.define "gw", primary: true do |gw|
+    gw.vm.hostname = "pi-fortress"
+    gw.vm.provider "libvirt" do |lv|
+      lv.memory = 2048
+      lv.cpus = 2
+      lv.management_network_mac = LAB["GW_MGMT_MAC"]
+    end
+    segment_nic(gw.vm, LAB["TRUNK_BR"], LAB["GW_TRUNK_MAC"])
+    segment_nic(gw.vm, LAB["HOUSE_BR"], LAB["GW_HOUSE_MAC"])
+    gw.vm.provision "lab-net", type: "shell", path: File.join(__dir__, "guest", "gw.sh"),
+                               env: LAB
+    gw.vm.provision "bootstrap", type: "shell", path: File.join(ROOT, "vm/pi/provision.sh"), env: { "PF_LAB" => "1" }
+    gw.vm.provision "apply", type: "shell", path: File.join(ROOT, "vm/pi/apply.sh"), run: "always"
+  end
+
+  config.vm.define "house" do |h|
+    h.vm.hostname = "house"
+    h.vm.provider("libvirt") { |lv| lv.management_network_mac = LAB["HOUSE_MGMT_MAC"] }
+    segment_nic(h.vm, LAB["HOUSE_BR"], LAB["HOUSE_MAC"])
+    # Pool devices. guest/house-ns.sh moves each one into its own netns.
+    segment_nic(h.vm, LAB["HOUSE_BR"], LAB["HOUSE_PHONE_MAC"])
+    segment_nic(h.vm, LAB["HOUSE_BR"], LAB["HOUSE_IOT_MAC"])
+    h.vm.provision "lab-net", type: "shell", path: CLIENT, args: ["house"],
+                              env: client_env(LAB["HOUSE_MGMT_MAC"], LAB["HOUSE_MAC"])
+                                .merge("PHONE_MAC" => LAB["HOUSE_PHONE_MAC"], "IOT_MAC" => LAB["HOUSE_IOT_MAC"])
+  end
+
+  config.vm.define "desk" do |d|
+    d.vm.hostname = "desk"
+    d.vm.provider("libvirt") { |lv| lv.management_network_mac = LAB["DESK_MGMT_MAC"] }
+    segment_nic(d.vm, LAB["TRUNK_BR"], LAB["DESK_MAC"])
+    d.vm.provision "lab-net", type: "shell", path: CLIENT, args: ["desk"],
+                              env: client_env(LAB["DESK_MGMT_MAC"], LAB["DESK_MAC"])
+  end
+
+  (1..AGENT_COUNT).each do |n|
+    name = n == 1 ? "agent" : "agent#{n}"
+    host = 9 + n
+    ip = "10.77.0.#{host}"
+    mgmt_mac = "#{LAB['AGENT_MGMT_MAC_PREFIX']}:#{format('%02d', host)}"
+    mac = "#{LAB['AGENT_MAC_PREFIX']}:#{format('%02d', host)}"
+    env = client_env(mgmt_mac, mac).merge("PF_AGENT_IP" => ip)
+
+    config.vm.define name do |a|
+      a.vm.hostname = name
+      a.vm.synced_folder ROOT, "/vagrant", type: "rsync", rsync__args: AGENT_RSYNC_ARGS
+      a.vm.provider("libvirt") { |lv| lv.management_network_mac = mgmt_mac }
+      segment_nic(a.vm, LAB["AGENT_BR"], mac)
+      a.vm.provision "lab-net", type: "shell", path: CLIENT, args: ["agent"], env: env
+      a.vm.provision "bootstrap", type: "shell", path: File.join(ROOT, "vm/agent/provision.sh"),
+                                  env: { "PF_AGENT_IP" => ip, "PF_BRIDGED" => "0",
+                                         "PF_AGENT_SUDO" => ENV["AGENT_SUDO"].to_s == "1" ? "1" : "0" }
+      a.vm.provision "ca", type: "shell", path: CLIENT, args: ["ca"], env: env
+      a.vm.provision "routes", type: "shell", path: File.join(ROOT, "vm/agent/routes.sh"), run: "always",
+                               env: { "PF_AGENT_IP" => ip }
+    end
+  end
+end

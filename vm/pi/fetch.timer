@@ -1,0 +1,15 @@
+[Unit]
+Description=pi-fortress blocklist feed refresh, daily
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+# Without this delay, all pi-fortress boxes in the field send requests to
+# the same feeds in the same second.
+RandomizedDelaySec=2h
+AccuracySec=5min
+# A Pi that was off at 04:00 refreshes when it is on again. It does not
+# wait one day. The feeds are useful only while they are current.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

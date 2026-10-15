@@ -1,0 +1,9 @@
+# OPERATOR STATE. `make pi-ship` does not overwrite the copy on the Pi
+# (PI_OWNED in the Makefile). git holds only the seed for a fresh
+# install. Edit on the Pi: `sudo pf tui`, House lists, then apply --local.
+#
+# House only. Agent segments read direct_ip.allow. Addresses or CIDRs that
+# a house device may connect to on 80 and 443 when the house resolver did
+# not give them first (HOUSE_BLOCK_DIRECT_IP=on). The use case is a device
+# or app that dials a fixed address, for example a TV or a printer cloud.
+# One address or CIDR per line, /24 at the widest.

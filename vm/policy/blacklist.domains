@@ -1,0 +1,85 @@
+# OPERATOR STATE. `make pi-ship` does not overwrite the copy on the Pi
+# (PI_OWNED in the Makefile). git holds only the seed for a fresh
+# install. Edit on the Pi: `sudo pf tui`, Agent lists, then apply.
+pi-fortress-block.test
+
+# The full product of each destination below is "accept data from
+# anyone and hand it back anywhere". They have no place on a home
+# network. A block on them costs nothing that anyone will miss.
+#
+# This list, not allow.domains, is the durable half of the fence.
+#
+# The agent segment is already deny-by-default. Thus for the agent, these
+# are a second layer. But blocklists run before the allow oracle and
+# still win (corepolicy.Forward.Allowed). Thus a sink stays closed even
+# if someone in a hurry widens allow.domains later.
+#
+# The house segment is the real reason that they are here. house.domains
+# and house_default.domains are sinkholes, not allow lists: a laptop or a
+# phone on the house may reach all names that are not on one. For the
+# house, this list is the full fence.
+#
+# To un-block, name the domain in never_block.domains. Never delete the
+# line here.
+
+# --- out-of-band / webhook catchers: an agent's C2 rendezvous of choice
+webhook.site
+requestbin.com
+pipedream.net
+beeceptor.com
+requestcatcher.com
+hookbin.com
+mockbin.org
+interact.sh
+oast.fun
+oast.pro
+oast.live
+oast.site
+oast.online
+oast.me
+burpcollaborator.net
+dnslog.cn
+ceye.io
+
+# --- anonymous paste: text out, no account, no trace
+pastebin.com
+hastebin.com
+dpaste.com
+dpaste.org
+termbin.com
+paste.ee
+controlc.com
+rentry.co
+justpaste.it
+telegra.ph
+
+# --- anonymous file drops: the same, for bytes
+transfer.sh
+file.io
+bashupload.com
+oshi.at
+gofile.io
+catbox.moe
+uguu.se
+anonfiles.com
+tmpfiles.org
+0x0.st
+
+# --- reverse tunnels: turn any box on either segment into an ingress
+ngrok.com
+ngrok.io
+ngrok-free.app
+ngrok.app
+trycloudflare.com
+localtunnel.me
+loca.lt
+serveo.net
+pagekite.me
+
+# --- dynamic DNS: a name that moves is a name a fence cannot reason about
+duckdns.org
+no-ip.com
+ddns.net
+dynu.com
+hopto.org
+zapto.org

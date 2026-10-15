@@ -1,0 +1,22 @@
+[Unit]
+Description=pi-fortress desk lock (no forwarding, nothing on the agent VLAN)
+DefaultDependencies=no
+Before=network-pre.target
+Wants=network-pre.target
+After=nftables.service
+# A restart of nftables.service flushes the full ruleset, and pf_desk_lock
+# with it. Thus a restart or stop of nftables also applies here, and
+# WantedBy below starts the lock again each time nftables starts.
+PartOf=nftables.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/pi-fortress/desk-lock.nft
+# Do the second-uplink check again two minutes later, after NetworkManager
+# starts all that it autoconnects. Warn only (setup.sh boot-check): a
+# check that blocked egress could cut the only working uplink of a desk.
+ExecStartPost=-/usr/bin/systemd-run --no-block --on-active=2min --unit=pf-desk-uplink-check --setenv=PARENT=@PARENT@ --setenv=AGENT_VLAN=@AGENT_VLAN@ --setenv=DESK_VLAN=@DESK_VLAN@ --setenv=DESK_GW=@DESK_GW@ @RESTORE_LIB@/setup.sh boot-check
+
+[Install]
+WantedBy=multi-user.target nftables.service

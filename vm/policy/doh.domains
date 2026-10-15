@@ -1,0 +1,31 @@
+# Sinkholed in dnsmasq. never_block does not apply (cloudflare.com
+# would otherwise protect cloudflare-dns.com).
+cloudflare-dns.com
+mozilla.cloudflare-dns.com
+chrome.cloudflare-dns.com
+security.cloudflare-dns.com
+family.cloudflare-dns.com
+one.one.one.one
+1dot1dot1dot1.cloudflare-dns.com
+dns.google
+dns.google.com
+dns64.dns.google
+dns.quad9.net
+dns10.quad9.net
+dns11.quad9.net
+dns.adguard.com
+dns.adguard-dns.com
+unfiltered.adguard-dns.com
+family.adguard-dns.com
+doh.opendns.com
+doh.familyshield.opendns.com
+doh.cleanbrowsing.org
+dns.nextdns.io
+firefox.dns.nextdns.io
+dns.sb
+doh.dns.sb
+doh.pub
+dns.alidns.com
+doh.dns.apple.com
+mask.icloud.com
+mask-h2.icloud.com

@@ -1,0 +1,11 @@
+# OPERATOR STATE. `make pi-ship` does not overwrite the copy on the Pi
+# (PI_OWNED in the Makefile). git holds only the seed for a fresh
+# install. Edit on the Pi: `sudo pf tui`, Agent lists, then apply.
+#
+# Agent segments only. The house has house_direct_ip.allow. Addresses or
+# CIDRs that an agent may connect to on 443 when the Pi resolver did not
+# give them first. Empty means that the address of each HTTPS origin
+# server must come from a DNS answer. That closes curl --resolve and
+# /etc/hosts as a way around the domain lists. Nothing on an agent
+# segment needed an entry here. The use case is a service that gives
+# addresses through its own API, not DNS, and that is not agent traffic.

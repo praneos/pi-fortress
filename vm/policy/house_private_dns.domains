@@ -1,0 +1,11 @@
+# OPERATOR STATE. `make pi-ship` does not overwrite the copy on the
+# Pi (PI_OWNED in the Makefile). The version in git is only the seed
+# for a fresh install, and it will drift from the running one.
+# Edit it on the Pi (`sudo pf tui`, House lists, a/d), then apply.
+#
+# Your own secure-DNS endpoints that the house segment may use while
+# HOUSE_PRIVATE_DNS=on: <profile>.dns.<provider>.<tld>, never a bare
+# provider. The house resolver answers each one with the first address in
+# house_private_dns.ips, and sinkholes its parent zone. Thus no other
+# profile of that provider resolves here. Off, or empty: inert.
+#abcd1234xyz.dns.controld.com

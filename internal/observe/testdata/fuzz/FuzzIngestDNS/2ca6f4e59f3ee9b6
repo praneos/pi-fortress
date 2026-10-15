@@ -1,0 +1,2 @@
+go test fuzz v1
+string("query[0] \x00 from 10.77.0.0")

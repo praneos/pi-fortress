@@ -1,0 +1,35 @@
+#!/usr/sbin/nft -f
+# The desktop half of the VLAN split (docs/lab.md). The host is a seat
+# on VLAN 79 and a wire on VLAN 20. It must never route, answer or
+# originate anything on the agent VLAN or on the raw trunk. Thus a Wi-Fi
+# adapter that a user connects again later is an uplink for the host
+# only, and never a way around the Pi for a VM or a container.
+#
+# Priority -20 runs before the iptables-nft chains of Docker at 0, and
+# before the -10 that an earlier DNS guard on this desktop also used. Two
+# base chains at one priority in one hook run in registration order. A
+# security control should not depend on that. Replace the table, never
+# the ruleset: a flush would also remove the rules of Docker.
+table inet pf_desk_lock
+delete table inet pf_desk_lock
+
+table inet pf_desk_lock {
+  chain input {
+    type filter hook input priority -20; policy accept;
+    iifname { "@PARENT@", "@AGENT_IF@" } counter drop
+  }
+
+  # policy drop, no accepts: this host forwards nothing at all. This also
+  # stops a container on the default docker0 bridge: it cannot NAT out
+  # through the desk route without the fence. It has no network, and
+  # that is the failure mode that we want.
+  chain forward {
+    type filter hook forward priority -20; policy drop;
+    counter comment "pf_desk_lock: this host is a seat, not a router"
+  }
+
+  chain output {
+    type filter hook output priority -20; policy accept;
+    oifname { "@PARENT@", "@AGENT_IF@" } counter drop
+  }
+}
