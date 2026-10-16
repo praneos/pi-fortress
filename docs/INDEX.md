@@ -12,7 +12,7 @@ tests, network rules for tests), `LICENSE` (Apache-2.0).
 |---|---|
 | `risk_model.md` | the problem, the attack table (what is and is not mitigated), the hostile uplink, the non-goals |
 | `fence.md` | the credential fence: placeholders, substitution, stripping, sealed store, encodings, WebSocket, unknown destinations, enrolment |
-| `user_guide/` | the public manual, deployed as the website: getting started, Pi setup, home network, public Wi-Fi, architecture, use cases, comparison, FAQ. All links in it stay inside the directory |
+| `user_guide/` | the public manual, deployed as the website: getting started, verify a download, Pi setup, home network, public Wi-Fi, architecture, use cases, comparison, FAQ. All links in it stay inside the directory |
 | `challenge_rules.md` | capture-the-key: the `CANARY` objective, the seat (cloud lab or your own Pi), in and out of scope, window of 60 days from the first signed release, judging, submission |
 | `style.md` | the writing standard for all docs, code comments and help text: ASD-STE100 Simplified Technical English, what a rewrite must not change |
 | `glossary.md` | the one list of terms (gateway, origin server, placeholder, live credential, strip, refuse, drop, core host) that docs and code comments use |
@@ -27,7 +27,6 @@ tests, network rules for tests), `LICENSE` (Apache-2.0).
 | `cloud_lab.md` | the Pi, house, desk and agents as VMs on one KVM host; the e2e suite, also against a real Pi |
 | `lab.md` | operator manual: the VirtualBox lab, daily commands, a real Pi, the desktop host, secrets, enrolment, policy files, lab caveats |
 | `signed_ship.md` | shipping a dev build to a Pi without sudo: signed bundle to `pfship`, root verifies, refuses rollbacks, swaps and applies, restores on failure |
-| `verify.md` | verify a download by hand: the release key, `SHA256SUMS`, one bundle, a rebuild. Not on the website until the first release |
 | `release.md` | `make release`: reproducible `pf` build, `SHA256SUMS` signed in namespace `pi-fortress-dist`, `release-verify` rebuild-and-compare, verifying a download, key custody, the docs site |
 
 ## Design

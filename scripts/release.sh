@@ -195,6 +195,11 @@ signable() {
 	fi
 	[ -r "$KEY.pub" ] || die "no public key at $KEY.pub"
 	command -v ssh-keygen >/dev/null || die "ssh-keygen not found"
+	# install.sh refuses a release that another key signed, so refuse it here.
+	local pinned
+	pinned=$(sed -n 's/.*PF_SIGNER_PUBKEY:-\(ssh-[^ ]* [A-Za-z0-9+\/=]*\)}.*/\1/p' "$ROOT/install.sh")
+	[ -n "$pinned" ] && [ "$pinned" = "$(cut -d' ' -f1,2 "$KEY.pub")" ] ||
+		die "$KEY.pub is not the key that install.sh pins as PF_SIGNER_PUBKEY (set SIGN_KEY)"
 }
 
 sign() {

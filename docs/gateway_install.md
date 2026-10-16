@@ -52,7 +52,7 @@ All arguments go directly to `pf install`. `install.sh` does these steps:
 1. Refuses a run that is not as root, an unsupported arch, and an unsupported OS, as above. Each refusal has a clear message.
 2. Refuses a run with no terminal, if its arguments do not answer the interface questions. This refusal comes before any download. `pf install` asks on `/dev/tty`. Without a terminal, only `-wan` and `-agent` together, or `-yes`, can answer. A piped run works (`curl ... | sudo bash -s -- -wan eth0 -agent eth1`). The script is one function, and its last line calls that function. Thus, a download that stops early runs nothing.
 3. Verifies the release in this sequence:
-   1. It verifies `SHA256SUMS` with `ssh-keygen -Y verify` against the `pi-fortress-dist` key that `docs/verify.md` publishes. The script embeds this key as `PF_SIGNER_PUBKEY`. You can override it for key rotation, as in "publish the new line signed by the old key" in `release.md`.
+   1. It verifies `SHA256SUMS` with `ssh-keygen -Y verify` against the `pi-fortress-dist` key that `docs/user_guide/verify.md` publishes. The script embeds this key as `PF_SIGNER_PUBKEY`. You can override it for key rotation, as in "publish the new line signed by the old key" in `release.md`.
    2. It requires that the sha256 of the bundle is the one that `SHA256SUMS` lists under exactly `pf-bundle-<tag>-<arch>.tar`. The tag is the requested tag. The arch is the arch of this box.
    3. It verifies the `.sig` of the bundle.
 

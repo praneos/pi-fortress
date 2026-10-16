@@ -19,6 +19,7 @@ nav = [
   { "Use cases" = "use_cases.md" },
   { "Comparison" = "comparison.md" },
   { "FAQ" = "faq.md" },
+  { "Verify a download" = "verify.md" },
   { "Tutorials" = [
     { "Overview" = "tutorials/README.md" },
     { "1. IP, routing and NAT" = "tutorials/01-ip-routing-nat.md" },

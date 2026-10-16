@@ -131,16 +131,16 @@ main() {
   need tar
 
   # --- signer key ----------------------------------------------------------
-  # The real key that is published now (docs/verify.md,
+  # The real key that is published now (docs/user_guide/verify.md,
   # docs/release.md "Signing": namespace pi-fortress-dist, principal
   # release@pi-fortress). It is embedded here, not left as a to-do, because
   # the repo already has it in allowed_signers form. PF_SIGNER_PUBKEY
   # overrides it for key rotation, with no edit to this file (the old key
   # signs the published new line, as release.md gives).
-  PF_SIGNER_PUBKEY="${PF_SIGNER_PUBKEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAILXZ9GBbHfvx0coGwHjwIw0lV5ieuiA20tAD043b4nKy}"
+  PF_SIGNER_PUBKEY="${PF_SIGNER_PUBKEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP84hURABuMrcMaPPXZpQPXN7hxaZaYI9nHNRhOQIOa9}"
   case "${PF_SIGNER_PUBKEY}" in
     "" | *PLACEHOLDER* | *TODO*)
-      fail "PF_SIGNER_PUBKEY is unset or a placeholder; refusing to trust an unverifiable bundle. See docs/verify.md for the real key."
+      fail "PF_SIGNER_PUBKEY is unset or a placeholder; refusing to trust an unverifiable bundle. See https://pi-fortress.praneos.ai/verify/ for the real key."
       ;;
   esac
 

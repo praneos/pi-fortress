@@ -109,7 +109,7 @@ Key custody: use an `ed25519-sk` key on a hardware token that requires a touch
 Keep a second, offline token enrolled as a backup signer. Publish the
 `allowed_signers` line in two locations:
 
-- In `docs/verify.md` (and `install.sh`).
+- In `docs/user_guide/verify.md` (and `install.sh`).
 - In a second channel under separate control (the release page or a pinned post).
 
 Thus, a swap of one copy does not swap the two copies.
@@ -118,13 +118,13 @@ When you rotate the key, publish the new line in the two channels. Sign it with 
 ## Verifying a download
 
 ```
-echo 'release@pi-fortress namespaces="pi-fortress-dist" <key from docs/verify.md>' > allowed_signers
+echo 'release@pi-fortress namespaces="pi-fortress-dist" <key from docs/user_guide/verify.md>' > allowed_signers
 ssh-keygen -Y verify -f allowed_signers -I release@pi-fortress -n pi-fortress-dist \
   -s SHA256SUMS.sig < SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS
 ```
 
-The two commands must pass. Take the key from `docs/verify.md` or the second channel. Never take it
+The two commands must pass. Take the key from `docs/user_guide/verify.md` or the second channel. Never take it
 from the download directory.
 
 ## Docs site

@@ -15,7 +15,7 @@ A useful report has:
 
 - the version (`pf version`, plus the release tag or commit) and the
   `SHA256SUMS` lines of the bundle or binaries that you ran
-  ([`docs/verify.md`](docs/verify.md));
+  ([`docs/user_guide/verify.md`](docs/user_guide/verify.md));
 - steps from a new shell in the agent VM, as commands or a script;
 - evidence: a pcap, or the `strip.jsonl` rows that the fence wrote;
 - the handle that you want in the credit, or "anonymous".
@@ -75,7 +75,7 @@ We build a release only after these checks pass:
 - A secret scan of the source tree and of each release binary finds no
   private key or API token.
 - Two independent builds of the tagged commit produce identical bytes.
-  The key in [`docs/verify.md`](docs/verify.md)
+  The key in [`docs/user_guide/verify.md`](docs/user_guide/verify.md)
   signs `SHA256SUMS`. Anyone can do the rebuild again from the public source.
 
 ## Credit

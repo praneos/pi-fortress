@@ -1,7 +1,8 @@
+<!-- How to verify a release by hand: the release key, SHA256SUMS, one bundle, a rebuild. -->
 # Verify a download
 
-The signed release bundles are published with the public release. This
-page goes on the website with the first release.
+Each release is signed. This page gives the release key and the commands
+to check a download by hand.
 
 `install.sh` and `pf upgrade` do these checks before they install
 anything. They:
@@ -16,7 +17,11 @@ trust `install.sh` itself.
 
 ## The release key
 
-The release key is published on this page with the first release. Save its line as `allowed_signers`.
+Save this line as `allowed_signers`:
+
+```
+release@pi-fortress namespaces="pi-fortress-dist" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP84hURABuMrcMaPPXZpQPXN7hxaZaYI9nHNRhOQIOa9
+```
 
 Get the key from this page. Never get it from the download folder. A
 key that comes with the files proves nothing.
