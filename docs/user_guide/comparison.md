@@ -13,15 +13,13 @@ Facts about other products come from their own public documentation. We checked 
 | Substitutes placeholders for live values | Yes, by credential kind and TLS name | Yes: vault token in, real header out | Yes: the host substitutes | Yes | No. It redacts. It never substitutes. | Yes, through a key exchange at the gateway³ | No |
 | Strips foreign live tokens | Yes. It strips known token patterns to non-core hosts. It strips the kinds of other providers to core hosts. | No. A request to a host with no proxied service is "forwarded untouched". | Not documented | No. AgentSecrets redacts its own values in responses only. OneCLI: not documented. | Yes: encoding-aware redaction of live-looking secrets | LiteLLM: an Enterprise add-on redacts keys in prompts. Portkey: not documented. | No |
 | Default posture | Allow, with a malware/phishing blocklist and a review log of unknown origin servers. [Paranoid mode](faq.md#paranoid-mode): allowlist only. | Allow. An unmatched host goes through. A block mode is an option. | Allowlist of hosts for HTTP and TLS. All other protocols except SSH are blocked. | AgentSecrets: deny, it blocks a domain that is not on the allowlist. OneCLI: not documented. | Allow in balanced mode, the default. Strict mode: allowlist only. | Only the model providers that you configure | Varies by tool |
-| Licence, availability | Apache-2.0⁴ at the public release | MIT, except `ee/`. Agent Proxy launched in July 2026. | Apache-2.0 | AgentSecrets: MIT. OneCLI: Apache-2.0, except `ee/`. | Apache-2.0 plus ELv2 | Varies | Bundled with the tool |
+| Licence, availability | Apache-2.0 | MIT, except `ee/`. Agent Proxy launched in July 2026. | Apache-2.0 | AgentSecrets: MIT. OneCLI: Apache-2.0, except `ee/`. | Apache-2.0 plus ELv2 | Varies | Bundled with the tool |
 
 ¹ The agent gets to the proxy through `HTTPS_PROXY`. The proxy does not stop a process that ignores the variable.
 
 ² LiteLLM/Portkey is usually a remote service. But the agent holds a key that works from all locations that can reach the service.
 
 ³ The virtual key itself is a live credential toward the gateway.
-
-⁴ Early access. The code is in review before its public release.
 
 For a Claude subscription login, Pi Fortress also captures the OAuth refresh at the gateway. It stores the new token pair and gives the agent placeholders. We did not find this feature in the documentation of the other tools.
 

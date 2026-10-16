@@ -1,7 +1,7 @@
 # Security policy
 
-Pi Fortress is open source (Apache-2.0). It is in early access. Do not put
-production credentials behind it yet. See
+Pi Fortress is open source (Apache-2.0). It is open for evaluation. Use test
+keys, or keys with a spend limit, while you evaluate. See
 [`EVALUATION_NOTICE.txt`](EVALUATION_NOTICE.txt).
 
 ## Reporting

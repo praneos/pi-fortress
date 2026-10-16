@@ -7,8 +7,8 @@
 
 </div>
 
-!!! info "Early access"
-    Pi Fortress works and is tested on a Raspberry Pi 5 and in a VM lab. The source is open under Apache-2.0. Do not put production credentials behind it yet.
+!!! info "Open evaluation"
+    Pi Fortress is open for evaluation. One command starts the full system in a cloud lab: the gateway, an agent with a placeholder key, and the end-to-end test suite. The same suite runs on a real Raspberry Pi 5. Use test keys, or keys with a spend limit, while you evaluate. The source is open under Apache-2.0.
 
 **A small box between your AI agent and the internet. With it, the agent never holds your real API keys.**
 
@@ -19,15 +19,6 @@ It runs on a Raspberry Pi 5, or on a [small VM](getting_started.md#gateway-on-a-
 How is it different from a proxy, a vault or a sandbox? Refer to the [comparison](comparison.md).
 
 ## Try it now
-
-### On a Raspberry Pi 5
-
-You need a Raspberry Pi 5 with Raspberry Pi OS Lite 64-bit, and a machine for the agent ([full list](pi_setup.md)). In Raspberry Pi Imager, turn on SSH and set the Wi-Fi. Connect to the Pi with SSH over Wi-Fi, and run this command:
-```
-curl -fsSL https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install.sh | sudo bash
-```
-
-The command installs the newest signed release and verifies each download. It asks which port is the uplink and which port is for the agent. It refuses to give the agent the port of your SSH session. Continue with [Getting started](getting_started.md), step 2.
 
 ### In a cloud lab, with no Pi
 
@@ -50,6 +41,15 @@ curl -fsSLO https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install-l
 less install-lab.sh
 sudo bash install-lab.sh
 ```
+
+### On a Raspberry Pi 5
+
+You need a Raspberry Pi 5 with Raspberry Pi OS Lite 64-bit, and a machine for the agent ([full list](pi_setup.md)). In Raspberry Pi Imager, turn on SSH and set the Wi-Fi. Connect to the Pi with SSH over Wi-Fi, and run this command:
+```
+curl -fsSL https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install.sh | sudo bash
+```
+
+The command installs the newest signed release and verifies each download. It asks which port is the uplink and which port is for the agent. It refuses to give the agent the port of your SSH session. Continue with [Getting started](getting_started.md), step 2.
 
 ## Why it exists
 

@@ -6,8 +6,9 @@ Pi Fortress is a Raspberry Pi 5 between your AI coding agent and the internet.
 It controls where the agent can connect. It keeps your API keys off the
 machine of the agent.
 
-> **Early access.** It works and it is tested. But it does not have wide
-> outside use yet. Do not put production credentials behind it yet.
+> **Open evaluation.** One command starts the full system in a VM lab,
+> with the same end-to-end tests that run on a real Pi 5. Use test keys,
+> or keys with a spend limit, while you evaluate.
 
 ## Why
 
@@ -34,7 +35,26 @@ allowlist ([FAQ](docs/user_guide/faq.md)). How it compares with proxies,
 vaults and sandboxes: [comparison](docs/user_guide/comparison.md). Each
 attack that we tested, and its result: [risk model](docs/risk_model.md).
 
-## Install
+## Try it in a VM lab
+
+The full setup runs as VMs on one Linux host with `/dev/kvm`: the Pi, a
+home device, a desktop seat and agents. It has the same end-to-end tests
+as a real Pi. You need 8 GB RAM and about 100 GB of disk. The bootstrap
+installs KVM, libvirt and Vagrant, and makes its own networks on the
+host. Thus, use a machine that you can give to the lab. A cloud VM is
+best: Ubuntu 24.04, amd64, nested virtualization on. Run:
+
+```
+curl -fsSL https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install-lab.sh | sudo bash
+```
+
+The script clones this repo and runs `vm/cloudlab/bootstrap.sh --up`.
+From a clone that you already have, run that command with `sudo`.
+
+Then follow [Getting started](docs/user_guide/getting_started.md) from
+step 2. Details: [docs/cloud_lab.md](docs/cloud_lab.md).
+
+## Install on a Pi 5
 
 You need these items ([full list](docs/user_guide/pi_setup.md)):
 
@@ -55,25 +75,6 @@ Then follow [Getting started](docs/user_guide/getting_started.md).
 
 Debian 12/13 or Ubuntu 24.04 on amd64 also works. Pinned versions,
 offline installs and upgrades: [docs/gateway_install.md](docs/gateway_install.md).
-
-## Try it without a Pi
-
-The full setup runs as VMs on one Linux host with `/dev/kvm`: the Pi, a
-home device, a desktop seat and agents. It has the same end-to-end tests
-as a real Pi. You need 8 GB RAM and about 100 GB of disk. The bootstrap
-installs KVM, libvirt and Vagrant, and makes its own networks on the
-host. Thus, use a machine that you can give to the lab. A cloud VM is
-best: Ubuntu 24.04, amd64, nested virtualization on. Run:
-
-```
-curl -fsSL https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install-lab.sh | sudo bash
-```
-
-The script clones this repo and runs `vm/cloudlab/bootstrap.sh --up`.
-From a clone that you already have, run that command with `sudo`.
-
-Then follow [Getting started](docs/user_guide/getting_started.md) from
-step 2. Details: [docs/cloud_lab.md](docs/cloud_lab.md).
 
 ## Documentation
 

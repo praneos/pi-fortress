@@ -10,16 +10,14 @@ You can run Pi Fortress on a Pi, on a Debian or Ubuntu VM, or in a lab. All ways
 | Cloud lab, for testers and contributors | The Pi, a home device, a desktop seat and agents, all as VMs on one Linux host with KVM, in the cloud or local. It runs the same end-to-end tests as a real Pi | One command from a clone of the source, with the cloud lab guide (`docs/cloud_lab.md`) | A hypervisor break |
 | Vagrant lab, for testers and contributors | Two VirtualBox VMs on a laptop: a gateway VM and an agent VM. An internal network connects them | From a clone of the source, with the lab manual (`docs/lab.md`) | A hypervisor break. The VirtualBox NAT adapter is the virtual router that gives a VM internet access. The hypervisor disconnects this adapter when `vagrant ssh` works without it. The path for `vagrant ssh` is through the Pi, with `AGENT_BRIDGE` set, or through a host-only management network interface (`vboxnet0`, `192.168.56.0/24` by default) |
 
-!!! note "Early access"
-    This is early access. Do not put production credentials behind it yet.
+!!! note "Open evaluation"
+    The fastest way to evaluate Pi Fortress is the cloud lab: one command, no hardware. Use test keys, or keys with a spend limit, while you evaluate.
 
 Each release is signed. `install.sh` does these steps:
 
 1. It examines the machine.
 2. It verifies the signed bundle.
 3. It starts `pf install`.
-
-A ready-made Pi image is planned.
 
 ## Prerequisites
 

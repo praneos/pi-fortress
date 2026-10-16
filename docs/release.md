@@ -41,7 +41,7 @@ dist/<version>/
   pf-linux-amd64  pf-linux-arm64   static, mtime = commit time
   pf-bundle-<version>-<arch>.tar   what install.sh and pf upgrade fetch
   pf-bundle-<version>-<arch>.tar.sig  that bundle's own signature, namespace pi-fortress-dist
-  EVALUATION_NOTICE.txt            the early-access notice
+  EVALUATION_NOTICE.txt            the evaluation notice
   SHA256SUMS                       sha256sum format, sorted by name
   SHA256SUMS.sig                   ssh-keygen -Y sign, namespace pi-fortress-dist
   allowed_signers                  convenience copy; never trust it for verification
