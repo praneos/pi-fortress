@@ -61,9 +61,9 @@ The "protects" part never adds new rules. It applies the rules in [architecture.
 
 - The gateway exists for this case: a skill with its own, independent network access.
 - The skill can open its own connections (sockets). But all of these connections go through the gateway:
-  - There is no live key to steal.
-  - The gateway refuses direct IPs and DoH (DNS over HTTPS).
-  - The gateway sinkholes blocklisted hosts.
+    - There is no live key to steal.
+    - The gateway refuses direct IPs and DoH (DNS over HTTPS).
+    - The gateway sinkholes blocklisted hosts.
 - The gateway logs new origin servers. Thus you can see when the skill connects to a new location.
 
 **Does not:**
@@ -71,9 +71,9 @@ The "protects" part never adds new rules. It applies the rules in [architecture.
 - Stop a malicious skill when it calls the approved APIs with your placeholder. The gateway replaces the placeholder with the live credential. Thus a bad skill can still spend your quota and send data to the vendor.
 - Read what a skill receives inside `br`- or `zstd`-compressed responses from an origin server.
 - Stop a large upload before it starts. The broker streams a body larger than 1 MiB, or a chunked body. It does not buffer it.
-  - The broker still strips live-looking tokens while the body goes through.
-  - A placeholder in the body stops the upload.
-  - But the request headers are already at the origin server at that time.
+    - The broker still strips live-looking tokens while the body goes through.
+    - A placeholder in the body stops the upload.
+    - But the request headers are already at the origin server at that time.
 
 ## 4. A family network behind the same box
 
@@ -103,8 +103,8 @@ The "protects" part never adds new rules. It applies the rules in [architecture.
 
 - Make a lab yourself: use the cloud lab guide (one command on a Linux host with KVM) or the VirtualBox lab manual. Both are published with the source.
 - The gateway VM has a lab marker. This marker enables two echo services. The gateway itself answers the two services:
-  - The core echo (`pf-core-echo.test`).
-  - The open echo (`pf-open-echo.test`).
+    - The core echo (`pf-core-echo.test`).
+    - The open echo (`pf-open-echo.test`).
 - Canaries: `192.0.2.1` (direct IP), `pi-fortress-block.test` (sinkhole), and `example.com` (unknown, allowed).
 
 **What you get:**
@@ -113,9 +113,9 @@ The "protects" part never adds new rules. It applies the rules in [architecture.
 - Three logs to monitor: `strip.jsonl`, `unknown.jsonl` and `use.jsonl`. They show each refusal, strip and use.
 - Each substitution failure returns identical bytes. Thus your tests examine the fence and its parser, not differences in the error message.
 - The attack surfaces of interest:
-  - The HTTP/1.1 wire parser in the credential path.
-  - Encoding tricks.
-  - All methods that get a placeholder to an origin server without the placeholder ever becoming live.
+    - The HTTP/1.1 wire parser in the credential path.
+    - Encoding tricks.
+    - All methods that get a placeholder to an origin server without the placeholder ever becoming live.
 
 **Limits:**
 

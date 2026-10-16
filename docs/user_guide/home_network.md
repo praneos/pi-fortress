@@ -22,17 +22,17 @@ For a comparison with the agent network, refer to [use cases](use_cases.md) and 
 ## What you need
 
 - One more USB Ethernet adapter than your uplink and agent network use. The house network
-  needs its own port. With the recommended cables (built-in port to the router, a USB adapter
-  to the agent), this is a second USB adapter.
+    needs its own port. With the recommended cables (built-in port to the router, a USB adapter
+    to the agent), this is a second USB adapter.
 - A Wi-Fi router that can operate in access point (AP) mode:
     1. Set its Operation Mode to Access Point (also "AP mode" or "bridge mode").
-       This disables the address sharing (NAT) of the router. It also disables the DHCP server
-       of the router. A DHCP server gives addresses to devices.
+        This disables the address sharing (NAT) of the router. It also disables the DHCP server
+        of the router. A DHCP server gives addresses to devices.
     2. Connect a cable from the Pi USB adapter to a LAN port on the router.
     3. Do not connect a cable to the WAN/internet port of the router.
     4. Set a normal WPA2 or WPA3 Wi-Fi password. Do not leave the network open.
 - Do not run two DHCP servers on the same network. After you set up the house network, the Pi
-  is the only DHCP server on it.
+    is the only DHCP server on it.
 
 ## Set up house.env and apply
 
@@ -79,7 +79,7 @@ of these two methods to reserve the address:
     Add a line `mac,ip,name`, for example `aa:bb:cc:dd:ee:ff,10.78.0.20,laptop`. Then run
     `sudo pf apply`.
 - **In `sudo pf tui`**, go to **Home network → Devices**. Press `r` on the row of the device.
-  Type a name, then an address. To accept the next free address, press Enter.
+    Type a name, then an address. To accept the next free address, press Enter.
 
 Then set `HOUSE_ADMIN_IP` in `house.env` to the same address. Apply again.
 

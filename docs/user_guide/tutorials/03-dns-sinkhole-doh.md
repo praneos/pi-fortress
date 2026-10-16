@@ -10,13 +10,13 @@ DNS works the same way:
 
 - The **stub resolver** is the simple lookup client on the machine of the agent. It asks one server for an answer and waits.
 - The **recursive resolver** does the real work. Here, that is `pf dns`, which runs on the Pi.
-  - It examines its cache first. On a hit, it answers immediately.
-  - On a miss, it asks an upstream resolver (Quad9, `9.9.9.9`). That resolver then asks the authoritative servers that own the answer.
+    - It examines its cache first. On a hit, it answers immediately.
+    - On a miss, it asks an upstream resolver (Quad9, `9.9.9.9`). That resolver then asks the authoritative servers that own the answer.
 - Each cached answer has a **TTL** (time to live). The TTL is the time that a resolver can use the answer again. After that time, the resolver must look up the name again.
 - Three record types are important here:
-  - `A` (an IPv4 address).
-  - `AAAA` (an IPv6 address).
-  - `HTTPS` (a newer record type that can advertise a DoH endpoint). Pi Fortress also filters this type. Refer to §3.
+    - `A` (an IPv4 address).
+    - `AAAA` (an IPv6 address).
+    - `HTTPS` (a newer record type that can advertise a DoH endpoint). Pi Fortress also filters this type. Refer to §3.
 
 ```mermaid
 sequenceDiagram
@@ -64,8 +64,8 @@ There are two enforcement points on purpose:
 
 - The sinkhole catches a client that asks the resolver for a name.
 - A separate check, at the engine and broker (tutorial 04), catches a client that does not use DNS. Such a client connects directly to a hard-coded IP address.
-  - If that connection has an HTTPS SNI, the fence still applies to it. The SNI (Server Name Indication) is the host name that the client sends before encryption starts (tutorial 04).
-  - If the connection has nothing that the gateway can recognize, the gateway blocks it outright.
+    - If that connection has an HTTPS SNI, the fence still applies to it. The SNI (Server Name Indication) is the host name that the client sends before encryption starts (tutorial 04).
+    - If the connection has nothing that the gateway can recognize, the gateway blocks it outright.
 
 **Testing note:** never connect to a real bad host to confirm a block.
 

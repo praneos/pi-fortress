@@ -49,8 +49,8 @@ A ready-made Pi image is planned.
 `install.sh` also installs on Debian 12 or 13, or Ubuntu 24.04, on amd64. Thus the gateway can be a VM next to the agent VM, instead of a Pi.
 
 - Give the gateway VM two network cards:
-  - One card with internet access (NAT or bridged). This card becomes the uplink.
-  - One card on a virtual network. Only the gateway VM and the agent VM are on this network. The network has no host address, no DHCP and no NAT. VirtualBox calls this an internal network. In libvirt, it is an isolated network with no IP.
+    - One card with internet access (NAT or bridged). This card becomes the uplink.
+    - One card on a virtual network. Only the gateway VM and the agent VM are on this network. The network has no host address, no DHCP and no NAT. VirtualBox calls this an internal network. In libvirt, it is an isolated network with no IP.
 - Give the agent VM one network card, on the same virtual network. First install `curl` and `ca-certificates` in the agent VM, while it still has a path out. Then remove all other cards.
 - On the gateway VM, install as on the Pi ([pi_setup.md](pi_setup.md), step 6). You can give the names of the two cards: `-wan <uplink> -agent <isolated>`.
 

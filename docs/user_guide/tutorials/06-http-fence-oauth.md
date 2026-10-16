@@ -15,23 +15,24 @@ The fence must guarantee that **the origin server sees exactly what the fence sa
 
 - The fence rejects a repeated `Host`, `Authorization`, or `Cookie` header. The fence changes the first occurrence of these headers. Thus a second occurrence is exactly the smuggling seam above.
 - **The fence checks framing strictly.** It refuses:
-  - A message with `Content-Length` and `Transfer-Encoding` together. This is smuggling.
-  - A `Transfer-Encoding` other than a single `chunked`.
-  - A repeated `Content-Length` in a request, also when the values agree.
-  - Repeated `Content-Length` values that disagree in a response.
+    - A message with `Content-Length` and `Transfer-Encoding` together. This is smuggling.
+    - A `Transfer-Encoding` other than a single `chunked`.
+    - A repeated `Content-Length` in a request, also when the values agree.
+    - Repeated `Content-Length` values that disagree in a response.
 
-  The fence also limits the header line count and length before it allocates memory for them.
+    The fence also limits the header line count and length before it allocates memory for them.
+
 - The fence skips each **1xx interim response**, up to a fixed maximum count. A 1xx response is a "please hold" reply that comes before the final reply.
-  - The fence treats a `101` response as an error, unless the request was a WebSocket upgrade. The broker handles a WebSocket upgrade itself and scrubs each message.
-  - Thus the fence does not read a `103 Early Hints` reply as the final response. That error would desynchronize the connection for the next messages.
+    - The fence treats a `101` response as an error, unless the request was a WebSocket upgrade. The broker handles a WebSocket upgrade itself and scrubs each message.
+    - Thus the fence does not read a `103 Early Hints` reply as the final response. That error would desynchronize the connection for the next messages.
 - If bytes stay on the connection to the origin server after a correctly framed response ends, the fence gives a `502` error. Then it closes the connection to the origin server and the connection to the agent.
 - **Request-line validation** requires:
-  - A token-shaped method.
-  - One of the four request-target forms that RFC 9112 defines. The broker then refuses all forms other than origin-form and `OPTIONS *`.
-  - An exact HTTP version.
-  - Token-shaped header names.
+    - A token-shaped method.
+    - One of the four request-target forms that RFC 9112 defines. The broker then refuses all forms other than origin-form and `OPTIONS *`.
+    - An exact HTTP version.
+    - Token-shaped header names.
 
-  The fence refuses control bytes in all parts of the request head.
+    The fence refuses control bytes in all parts of the request head.
 
 These checks can look like paranoia. But each check is exactly what a request-smuggling vulnerability looks like from the position of the proxy.
 
@@ -118,13 +119,13 @@ sequenceDiagram
 The hard rules:
 
 - **Where it applies**: only on `/oauth/token` or `/v1/oauth/token`. Also, the SNI and the `Host` must agree on a core host that has the `CLAUDE_ORT` credential kind.
-  - The broker normalizes the request target first. Before this step, the broker refuses all targets that are not origin-form.
-  - The broker decodes percent-encoding to a fixed point. It collapses runs of `/` and resolves dot-segments.
-  - If a target does not settle, it is not a refresh path. Thus the broker refuses a refresh token that goes to that target. It never substitutes it.
+    - The broker normalizes the request target first. Before this step, the broker refuses all targets that are not origin-form.
+    - The broker decodes percent-encoding to a fixed point. It collapses runs of `/` and resolves dot-segments.
+    - If a target does not settle, it is not a refresh path. Thus the broker refuses a refresh token that goes to that target. It never substitutes it.
 - **Bound to exactly one slot.** The broker gets the slot from the single top-level `refresh_token` value in the body, or from a live refresh token in the bearer header.
-  - The broker refuses a refresh-token placeholder in all headers.
-  - A body that only *mentions* a different slot cannot send the harvest to that slot.
-  - The broker reads the `refresh_token` field strictly. A second `refresh_token` key, or one with a different case, binds nothing. The broker then refuses the refresh.
+    - The broker refuses a refresh-token placeholder in all headers.
+    - A body that only *mentions* a different slot cannot send the harvest to that slot.
+    - The broker reads the `refresh_token` field strictly. A second `refresh_token` key, or one with a different case, binds nothing. The broker then refuses the refresh.
 - **Locked per slot.** The lock starts before the write to the origin server. It stays until the broker stores the changed response. A second refresh attempt on the same slot at the same time gets `429 refresh_busy`. It does not race the first attempt.
 - **JSON or nothing.** A `200` response that is not JSON, or that the broker cannot parse, becomes a `502` to the agent. The broker never forwards it unread only because it looks successful.
 - The broker adds the values that it harvested directly to the scrub set for this response. It does not read them back from storage a second time. A second read would be a second possible failure, on the one path that must not fail. If a credential kind has no stored value yet, the broker scrubs it to its own placeholder. It does not skip it.
@@ -143,9 +144,9 @@ For streamed bodies, the broker does a different thing. A streamed body is large
 
 - A placeholder that the origin server cannot receive → the same standard `503` (`Retry-After: 60`), with no cause.
 - A placeholder that the origin server *can* receive, but in one of these locations → refused in the same way, with an alert:
-  - In the URL.
-  - In a body other than the refresh-token body.
-  - In a header that is not a credential header for that host and kind.
+    - In the URL.
+    - In a body other than the refresh-token body.
+    - In a header that is not a credential header for that host and kind.
 - A live-looking value to the wrong kind of host, or to an unknown host → stripped.
 - A placeholder in a streamed body → connection stopped, one refusal.
 - A non-JSON `200` on a refresh path → `502`.

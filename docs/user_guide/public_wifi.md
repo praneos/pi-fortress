@@ -10,7 +10,7 @@ On such a network, all other users of the Wi-Fi are neighbors of the Pi. A neigh
 - Scan the Pi.
 - Connect to its open ports.
 - Answer its ARP requests. Devices use ARP to find the hardware address of other devices on
-  the local network.
+    the local network.
 - Answer its DNS requests.
 - Read plain-text traffic.
 
@@ -89,9 +89,9 @@ house or desk SSH line stays.
 You can also set the same key in `sudo pf tui`, **System → Settings**. To enable it there:
 
 - The TUI asks first. The prompt says that SSH on the uplink stops at the next apply. It also
-  names an admin segment as the way back in.
+    names an admin segment as the way back in.
 - Only `y` continues. All other keys cancel and write nothing. This includes Esc and a second
-  Enter.
+    Enter.
 
 To disable it there, press Enter one time. The TUI does not ask, because this gives back only a way
 in that you had before.

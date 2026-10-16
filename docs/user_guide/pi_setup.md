@@ -318,8 +318,8 @@ A rollback does not change the block lists and the other lists that you edit. An
 1. Make a Linux VM in a hypervisor of your choice.
 2. Install `curl` and `ca-certificates` in the VM while it still has its own path out.
 3. Give the VM only one network card. Bridge it onto the desktop interface that connects to the agent port of the Pi:
-   - On a direct cable, this is the card.
-   - On a trunk, this is the VLAN 20 child without an address (`<nic>.20`).
+    - On a direct cable, this is the card.
+    - On a trunk, this is the VLAN 20 child without an address (`<nic>.20`).
 4. Remove all NAT cards and second cards from the VM. Such a card is a path around the Pi.
 5. In the VM, set the static address from step 5.
 

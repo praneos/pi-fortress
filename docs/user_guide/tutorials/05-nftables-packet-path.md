@@ -22,20 +22,22 @@ flowchart TD
 ```
 
 - **prerouting** — the first checkpoint after the wire, before the routing decision. Most of the policy for the agent is here, in three chains with different priorities:
-  1. The blacklist and the port drops, at `raw` priority (first of all).
-  2. The resolver gate, at `-150`.
-  3. The tcp/443 redirect, at `dstnat` (§3).
+    1. The blacklist and the port drops, at `raw` priority (first of all).
+    2. The resolver gate, at `-150`.
+    3. The tcp/443 redirect, at `dstnat` (§3).
 
-  Thus the gateway drops a canary address like `192.0.2.1` *before* the redirect. The connection times out. It does not get to the engine.
+    Thus the gateway drops a canary address like `192.0.2.1` *before* the redirect. The connection times out. It does not get to the engine.
+
 - **forward** — packets that the Pi routes *through* itself. This hook holds segment isolation, the port policy of each segment, and a final policy-drop. The HTTPS traffic of the agent never gets here, because the redirect already made it traffic *to* the Pi. This hook drops all other traffic that the agent sends out. The only exception is SSH to an `ssh_allow.ips` destination.
 - **input** — packets addressed *to* the Pi itself. The policy is policy-drop, with explicit exceptions:
-  - The network interface of the agent can use ports 53, 80, 8080, and ping.
-  - The uplink interface gets rate-limited SSH and ping, and DHCP replies. With `UNTRUSTED_UPLINK=1`, it gets only DHCP replies.
+    - The network interface of the agent can use ports 53, 80, 8080, and ping.
+    - The uplink interface gets rate-limited SSH and ping, and DHCP replies. With `UNTRUSTED_UPLINK=1`, it gets only DHCP replies.
 - **output** — traffic from the programs on the Pi itself.
-  - The engine cannot start a connection of its own.
-  - The broker can connect out only on tcp/443, and only outside the `reserved_v4` range. In fake-IP mode, it can also send DNS queries to its resolver.
+    - The engine cannot start a connection of its own.
+    - The broker can connect out only on tcp/443, and only outside the `reserved_v4` range. In fake-IP mode, it can also send DNS queries to its resolver.
 
-  The same packet filter that controls the agent also controls the programs of the gateway.
+    The same packet filter that controls the agent also controls the programs of the gateway.
+
 - **priority** — chains with a lower priority number run first. To make a table run before all others, give it a lower priority number. For example, use `-20` against a default of `0`.
 
 ## 2. Sets — matching many values cheaply
@@ -51,9 +53,9 @@ A **named set** is that lookup app, in the kernel. A set is a table:
 Pi Fortress has several sets:
 
 - `blacklist_v4` — compiled threat-feed IP addresses.
-  - The raw-priority prerouting chain drops matched traffic, before all other rules see it.
-  - In fake-IP mode, the gateway also drops matches on the connections that the broker opens out of the Pi. In this mode, the agent connects to stand-in addresses.
-  - It is a silent **drop**, not a **reject**. A reject sends back an error immediately. A drop makes the sender wait for a timeout, and the sender learns nothing.
+    - The raw-priority prerouting chain drops matched traffic, before all other rules see it.
+    - In fake-IP mode, the gateway also drops matches on the connections that the broker opens out of the Pi. In this mode, the agent connects to stand-in addresses.
+    - It is a silent **drop**, not a **reject**. A reject sends back an error immediately. A drop makes the sender wait for a timeout, and the sender learns nothing.
 - `resolved_v4` — the live record of the resolver gate. It holds each address that the Pi itself resolved. Each element has an expiry timer (tutorial 03).
 - `direct_ip_v4` — exemptions to that gate that the operator defines in `direct_ip.allow`.
 - DNS rate meters for each source (`<seg>_dnsflood_{udp,tcp}`, with a limit above 200 requests/second). Thus one client cannot flood the resolver.
@@ -120,20 +122,20 @@ Before any of this ships, a check compares the generated ruleset with a stored r
 ## 6. A worked packet walk (agent → https://example.com)
 
 1. The agent resolves `example.com`.
-   - By default (fake-IP), the resolver on the Pi answers with a stand-in, such as `198.18.0.7`. It asks no other server.
-   - With `AGENT_DNS=forward`, it answers with the real `93.184.216.34`. It adds that address to `resolved_v4` for two hours.
+    - By default (fake-IP), the resolver on the Pi answers with a stand-in, such as `198.18.0.7`. It asks no other server.
+    - With `AGENT_DNS=forward`, it answers with the real `93.184.216.34`. It adds that address to `resolved_v4` for two hours.
 2. The agent opens tcp/443 to that address. The packet goes into the **prerouting** hook of the Pi. The raw-priority chain finds that the address is not in `blacklist_v4`. Thus the chain does not drop it.
 3. In **prerouting**, the resolver gate finds that the Pi gave this address (a stand-in, or an address in `resolved_v4`). The nat chain **redirects it to :8080**. The packet is now addressed to the Pi, so it goes to **input**, not to forward.
 4. `pf engine` accepts the connection on :8080. Then the engine:
-   - Gets the address that the agent connected to, through `SO_ORIGINAL_DST`.
-   - Peeks at the ClientHello (`example.com`, ALPN `http/1.1`).
-   - Mints a leaf certificate.
-   - Sends the connection and the details of the hello to the broker over a local socket (tutorials 04 and 06).
+    - Gets the address that the agent connected to, through `SO_ORIGINAL_DST`.
+    - Peeks at the ClientHello (`example.com`, ALPN `http/1.1`).
+    - Mints a leaf certificate.
+    - Sends the connection and the details of the hello to the broker over a local socket (tutorials 04 and 06).
 5. The broker applies the policy.
-   - `example.com` is not a core host, so the broker adds no credential.
-   - The broker strips all values that only look like a live credential.
-   - In fake-IP mode, the broker now resolves `example.com` itself. The address that it gets must pass the blocklist on the way out.
-   - The broker then connects to the origin server from the Pi itself. The output rules of the Pi allow this. The connection leaves from the address of the Pi on `WAN_IF`, so it needs no NAT (tutorial 01).
+    - `example.com` is not a core host, so the broker adds no credential.
+    - The broker strips all values that only look like a live credential.
+    - In fake-IP mode, the broker now resolves `example.com` itself. The address that it gets must pass the blocklist on the way out.
+    - The broker then connects to the origin server from the Pi itself. The output rules of the Pi allow this. The connection leaves from the address of the Pi on `WAN_IF`, so it needs no NAT (tutorial 01).
 6. The broker scrubs the response. The response goes back to the agent through the same pipe.
 
 ```mermaid

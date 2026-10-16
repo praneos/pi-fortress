@@ -23,6 +23,6 @@ If you try these steps on your own gateway, obey these rules:
 
 - Test only against well-known safe hosts: `example.com`, Google, Cloudflare.
 - For all traffic that the gateway must block, do not use a real target. Use these two canaries:
-  - `192.0.2.1` (RFC 5737 TEST-NET).
-  - `pi-fortress-block.test` (RFC 2606).
+    - `192.0.2.1` (RFC 5737 TEST-NET).
+    - `pi-fortress-block.test` (RFC 2606).
 - Never curl, ping, or otherwise connect to a host from a blocklist feed. Treat it as untrusted. Do not try to confirm that it is live.

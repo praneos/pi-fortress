@@ -31,47 +31,55 @@ This page:
 These steps show what occurs when an agent sends one HTTPS request.
 
 1. **DNS.** The agent resolves a host name, for example `api.anthropic.com`. The DNS query goes to the gateway, because the gateway is the only resolver for the agent. The gateway drops DNS traffic (port 53) to all other servers.
-   - In the default mode (`AGENT_DNS=fakeip`), the gateway does not send the query to a different server. It gives a stand-in address from a private range (`198.18.0.0/16`). Each name gets one stand-in address. The gateway resolves the real name only at step 6, after the TLS handshake gives the host name.
-   - In forward mode (`AGENT_DNS=forward`), the gateway gives the real address to the agent.
+    - In the default mode (`AGENT_DNS=fakeip`), the gateway does not send the query to a different server. It gives a stand-in address from a private range (`198.18.0.0/16`). Each name gets one stand-in address. The gateway resolves the real name only at step 6, after the TLS handshake gives the host name.
+    - In forward mode (`AGENT_DNS=forward`), the gateway gives the real address to the agent.
 
-   The agent then opens a connection on TCP port 443 (HTTPS) to that address.
+    The agent then opens a connection on TCP port 443 (HTTPS) to that address.
+
 2. **Packet filter.** The gateway packet filter examines each packet when it arrives, before routing.
-   - First, it drops packets to blocklisted addresses.
-   - Then it examines each new TCP 443 connection. The address must come from the gateway resolver. In fake-IP mode, this is a stand-in address. In forward mode, this is a real address that the resolver gave in the last two hours.
-   - It drops all other connections.
+    - First, it drops packets to blocklisted addresses.
+    - Then it examines each new TCP 443 connection. The address must come from the gateway resolver. In fake-IP mode, this is a stand-in address. In forward mode, this is a real address that the resolver gave in the last two hours.
+    - It drops all other connections.
+
 3. **Engine.** nftables (the Linux firewall) sends the connection to the **engine** on port 8080. The engine reads the SNI from the ClientHello. Then the engine:
-   - Refuses a blocklisted SNI.
-   - Makes a short-term certificate for that name. The gateway CA signs this certificate.
-   - Terminates TLS. This means that the engine decrypts the connection from the agent. The broker opens a new encrypted connection at step 6.
-   - Uses HTTP/1.1 only.
+    - Refuses a blocklisted SNI.
+    - Makes a short-term certificate for that name. The gateway CA signs this certificate.
+    - Terminates TLS. This means that the engine decrypts the connection from the agent. The broker opens a new encrypted connection at step 6.
+    - Uses HTTP/1.1 only.
+
 4. **Broker checks.** The engine sends the decrypted HTTP/1.1 stream to the **broker** through a unix socket. A unix socket is a local channel between two processes on the same machine. The broker then:
-   - Compares the HTTP `Host` header with the SNI. They must be the same.
-   - Examines the blocklist again, by name.
-   - Searches `core.hosts` for the host. This file lists the providers for which the gateway manages credentials.
+    - Compares the HTTP `Host` header with the SNI. They must be the same.
+    - Examines the blocklist again, by name.
+    - Searches `core.hosts` for the host. This file lists the providers for which the gateway manages credentials.
+
 5. **Credential fence.** The broker applies the rules for the type of host.
 
-   For a core host:
-   - The broker replaces a placeholder with its live credential only if the host accepts that kind of placeholder.
-   - The broker does the replacement only in the credential headers for that kind. These are `Authorization`, `X-Api-Key`, and each header that you declare for that host and kind ([Pi setup](pi_setup.md#headers-a-credential-may-go-in)).
-   - Exception: the Claude refresh token goes in the body of the refresh request. It goes only in the `refresh_token` value.
-   - The broker refuses the same placeholder in all other locations: other headers (`Host` and `Connection` also), the URL, and all other parts of the body. Reason: a server can echo the body back, publish it, or make a model print it in a changed form.
-   - The broker refuses the full request if the placeholder is of the wrong kind for the host, is unknown, or is quarantined. The agent gets one `503` response. The response does not give the cause.
-   - The broker strips a live-looking token for a different provider.
+    **For a core host:**
 
-   For a non-core host:
-   - The broker never replaces a placeholder.
-   - The broker strips all live-looking tokens.
+    - The broker replaces a placeholder with its live credential only if the host accepts that kind of placeholder.
+    - The broker does the replacement only in the credential headers for that kind. These are `Authorization`, `X-Api-Key`, and each header that you declare for that host and kind ([Pi setup](pi_setup.md#headers-a-credential-may-go-in)).
+    - Exception: the Claude refresh token goes in the body of the refresh request. It goes only in the `refresh_token` value.
+    - The broker refuses the same placeholder in all other locations: other headers (`Host` and `Connection` also), the URL, and all other parts of the body. Reason: a server can echo the body back, publish it, or make a model print it in a changed form.
+    - The broker refuses the full request if the placeholder is of the wrong kind for the host, is unknown, or is quarantined. The agent gets one `503` response. The response does not give the cause.
+    - The broker strips a live-looking token for a different provider.
+
+    **For a non-core host:**
+
+    - The broker never replaces a placeholder.
+    - The broker strips all live-looking tokens.
+
 6. **Origin connection.** The broker opens its own TLS connection to the origin server.
-   - In fake-IP mode, the broker first resolves the name itself, through the gateway. It compares the address with the blocklist and with the private ranges.
-   - The broker compares the certificate of the origin server with the SNI.
-   - The broker sends the request over HTTP/1.1. It asks only for gzip compression. The response is then in gzip format or not compressed.
-   - The broker decompresses the response and scans it for all live credential values. If it finds a value, it replaces the value with its placeholder and logs an incident.
-   - The broker sends the response to the agent.
-   - The broker does not scan a response with a different compression. If the request had a substituted credential, the broker refuses that response with `502`. If not, the broker sends the response to the agent without a change. Refer to **Limits of the design**, below.
+    - In fake-IP mode, the broker first resolves the name itself, through the gateway. It compares the address with the blocklist and with the private ranges.
+    - The broker compares the certificate of the origin server with the SNI.
+    - The broker sends the request over HTTP/1.1. It asks only for gzip compression. The response is then in gzip format or not compressed.
+    - The broker decompresses the response and scans it for all live credential values. If it finds a value, it replaces the value with its placeholder and logs an incident.
+    - The broker sends the response to the agent.
+    - The broker does not scan a response with a different compression. If the request had a substituted credential, the broker refuses that response with `502`. If not, the broker sends the response to the agent without a change. Refer to **Limits of the design**, below.
+
 7. **Logs and alerts.**
-   - Each stripped token writes one line to `strip.jsonl`.
-   - Each request to an unknown origin server writes one line to `unknown.jsonl`.
-   - A separate sidecar process (`pf alert`) reads the strip events. It sends a webhook call, if you configure a webhook. `pf alert watch` also shows each event in a terminal. The request does not wait for this alert.
+    - Each stripped token writes one line to `strip.jsonl`.
+    - Each request to an unknown origin server writes one line to `unknown.jsonl`.
+    - A separate sidecar process (`pf alert`) reads the strip events. It sends a webhook call, if you configure a webhook. `pf alert watch` also shows each event in a terminal. The request does not wait for this alert.
 
 ```mermaid
 flowchart LR
@@ -221,8 +229,8 @@ The broker refuses a placeholder in a location where its kind is not approved. T
 - **IPv4 only.** IPv6 is off on the agent. The gateway denies IPv6.
 - **No certificate pinning.** A client that pins its own certificate fails. To prevent this, set the client to trust the gateway CA.
 - **The broker streams large or chunked request bodies. It does not buffer them.** This applies to a body larger than 1 MiB, and to a body with chunked transfer encoding. The broker sends the request headers before it reads all of the body. Thus:
-  - The broker never replaces placeholders in a streamed body.
-  - If a streamed body has a placeholder, the gateway stops the connection to the origin server before the request completes. The log entry is `placeholder_in_streamed_body`.
+    - The broker never replaces placeholders in a streamed body.
+    - If a streamed body has a placeholder, the gateway stops the connection to the origin server before the request completes. The log entry is `placeholder_in_streamed_body`.
 - **Foreign live tokens in a streamed body.** The detection rules are the same as for a buffered body. In the two cases, the broker finds a match only in a 4096-byte window.
 - **Responses with `br` (Brotli) or `zstd` compression.** The scrub cannot read these responses. If the request had no substituted credential, the broker sends the response without a change and logs it. If the request had a substituted credential, the gateway refuses the response with `502`. Reason: the response can contain a live value.
 - **WebSocket frames.** The broker scrubs frames for live tokens. It never replaces placeholders in frames.

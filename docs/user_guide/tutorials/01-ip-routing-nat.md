@@ -45,9 +45,9 @@ This has two results. Pi Fortress uses both:
 
 - **The gateway sees all packets.** The default route of the agent *is* the Pi. Thus the Pi controls all of the traffic of the agent. The Pi is not a sandbox that the agent can argue with. It is a router that the agent must send its traffic through.
 - **The default route can move.** A Wi-Fi adapter on the desktop, a second cable, or a USB tether each tries to install a new default route. That route is a path around the Pi. Thus the desktop must never forward traffic between its networks. If it does, it becomes a second gateway that routes around the Pi.
-  - The lock step of the desk setup script (`setup.sh lock`) disables forwarding and keeps it disabled. Thus an adapter that you connect again cannot make the desktop a router.
-  - The default route of the desktop itself must point only at the Pi. The lock step of the desk setup script refuses a desktop with Wi-Fi on, a second default route, or a second routed cable.
-  - On the Pi itself, **the uplink is a role, not a port**. Pi Fortress detects `WAN_IF` as "the interface that has the default route". It never writes a literal `eth0`/`wlan0` into the rules. If you change a cable uplink to Wi-Fi, only a name changes. You do not need a second copy of the rules.
+    - The lock step of the desk setup script (`setup.sh lock`) disables forwarding and keeps it disabled. Thus an adapter that you connect again cannot make the desktop a router.
+    - The default route of the desktop itself must point only at the Pi. The lock step of the desk setup script refuses a desktop with Wi-Fi on, a second default route, or a second routed cable.
+    - On the Pi itself, **the uplink is a role, not a port**. Pi Fortress detects `WAN_IF` as "the interface that has the default route". It never writes a literal `eth0`/`wlan0` into the rules. If you change a cable uplink to Wi-Fi, only a name changes. You do not need a second copy of the rules.
 
 **Check it yourself (lab):**
 

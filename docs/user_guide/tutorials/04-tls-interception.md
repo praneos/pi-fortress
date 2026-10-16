@@ -46,15 +46,15 @@ Then `pf engine` makes its decisions:
 
 - It **refuses** an empty or blocklisted SNI. The engine examines the name lists a second time here, after the DNS-level check (tutorial 03).
 - It **mints a leaf certificate for exactly that SNI**.
-  - The root certificate authority (CA) is ECDSA P-256. The gateway makes it one time, at the first `pf apply`. Its private key never leaves the gateway.
-  - The engine caches the per-site ("leaf") certificates. It issues them again before they expire.
-  - The agent trusts this Pi CA. The agent gets the CA from the certificate server on port 80 during setup. Thus the TLS stack of the agent sees a normal, valid certificate chain.
-  - The broker still examines the real certificate of the origin server. But it does this only on the separate connection that the broker makes to the origin server (§4).
+    - The root certificate authority (CA) is ECDSA P-256. The gateway makes it one time, at the first `pf apply`. Its private key never leaves the gateway.
+    - The engine caches the per-site ("leaf") certificates. It issues them again before they expire.
+    - The agent trusts this Pi CA. The agent gets the CA from the certificate server on port 80 during setup. Thus the TLS stack of the agent sees a normal, valid certificate chain.
+    - The broker still examines the real certificate of the origin server. But it does this only on the separate connection that the broker makes to the origin server (§4).
 - It offers **only `http/1.1`** through ALPN.
-  - A client that can use `h2` and `http/1.1` agrees on `http/1.1`.
-  - A client that accepts only `h2` fails the handshake. The error is `no_application_protocol`. The log line is `alpn_h2_only refused`.
-  - HTTP/3 uses QUIC. It never gets to this step, because the gateway drops all udp/443 traffic (tutorial 05).
-  - Pi Fortress does not try to serve pinned-certificate clients or h2-only clients. A client that pins the real certificate of the origin server cannot go through the fence. A client that accepts only HTTP/2 also cannot go through.
+    - A client that can use `h2` and `http/1.1` agrees on `http/1.1`.
+    - A client that accepts only `h2` fails the handshake. The error is `no_application_protocol`. The log line is `alpn_h2_only refused`.
+    - HTTP/3 uses QUIC. It never gets to this step, because the gateway drops all udp/443 traffic (tutorial 05).
+    - Pi Fortress does not try to serve pinned-certificate clients or h2-only clients. A client that pins the real certificate of the origin server cannot go through the fence. A client that accepts only HTTP/2 also cannot go through.
 
 ```mermaid
 sequenceDiagram
