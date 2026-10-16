@@ -1,6 +1,6 @@
 # Gateway install: a Pi, or a plain Debian/Ubuntu box
 
-The releases are at <https://github.com/nrnjn42/pi-fortress/releases>. Each release has:
+The releases are at <https://github.com/praneos/pi-fortress/releases>. Each release has:
 
 - one bundle for each arch, `pf-bundle-<version>-<arch>.tar`, each with a `.sig`
 - the signed `SHA256SUMS` (`release.md`)
@@ -20,13 +20,13 @@ The releases are at <https://github.com/nrnjn42/pi-fortress/releases>. Each rele
 
 ```
 # the newest release from GitHub:
-curl -fsSL https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install.sh | sudo bash
 # one release tag, from the script of that tag:
 V=v1.2.3
-curl -fsSLO https://raw.githubusercontent.com/nrnjn42/pi-fortress/$V/install.sh
+curl -fsSLO https://raw.githubusercontent.com/praneos/pi-fortress/$V/install.sh
 sudo PF_VERSION=$V bash install.sh
 # with the interfaces already known (no questions, no terminal needed):
-curl -fsSL https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install.sh | sudo bash -s -- -wan eth0 -agent eth1
+curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install.sh | sudo bash -s -- -wan eth0 -agent eth1
 # offline, from a bundle, its .sig, SHA256SUMS and SHA256SUMS.sig already on the box:
 sudo PF_BUNDLE=./pf-bundle-v1.2.3-arm64.tar bash install.sh
 ```
@@ -194,7 +194,7 @@ Remaining:
 
 ## Open items
 
-1. **Release URL on the box.** `pf install` keeps the `PF_RELEASE_URL` that install.sh downloaded from. It keeps it in `/etc/pi-fortress/release.url`, which `pf upgrade` reads. After an offline `PF_BUNDLE` install, put `https://github.com/nrnjn42/pi-fortress/releases/download` in that file, or export `PF_RELEASE_URL`. Always pass `-version <tag>`.
+1. **Release URL on the box.** `pf install` keeps the `PF_RELEASE_URL` that install.sh downloaded from. It keeps it in `/etc/pi-fortress/release.url`, which `pf upgrade` reads. After an offline `PF_BUNDLE` install, put `https://github.com/praneos/pi-fortress/releases/download` in that file, or export `PF_RELEASE_URL`. Always pass `-version <tag>`.
 2. **Bundle signatures.** `install.sh` and `pf upgrade` verify `SHA256SUMS.sig`, the entry of the bundle in it, and the `.sig` of the bundle. On an installed box, the version floor also refuses an older bundle. A manual `pf install -bundle` checks only the `.sig`, because its caller selected the file. `make release` signs each bundle and checks the signature. Upload each `pf-bundle-*.tar.sig` with its bundle, and `SHA256SUMS` with `SHA256SUMS.sig`. If not, nobody can install the bundle from a URL. `pf upgrade` accepts only an `https://` release URL. It follows no redirect to anything else.
 3. The bundle layout is the full tree, with `pf` at `vm/pi/pf`. `make release` builds it from a `git archive` of HEAD, so no ignored file goes in. It omits `bin/`. It refuses a bundle without `vm/pi/pf`. `install.sh` runs that binary, or `bin/pf` from an older `make pi-bundle` tar. If the layout changes, two items must change with it: the extraction in `install.sh`, and the `vm/pi/provision.sh` call in `pf install`.
 4. Test coverage: unit tests (`internal/install/*_test.go`), `bash -n`, `shellcheck`, the refusal cases for `install.sh` in `scripts/shell_test.sh`, and the `lifecycle` e2e group of the cloud lab (`cloud_lab.md`). A real Pi run of the same group is the last gate.

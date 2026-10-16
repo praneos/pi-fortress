@@ -2,7 +2,7 @@
 # Try Pi Fortress in the cloud lab, with one command on a new cloud VM
 # (Ubuntu 24.04, amd64, nested virtualization on):
 #
-#   curl -fsSL https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install-lab.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install-lab.sh | sudo bash
 #
 # It checks the host, clones the repository as a normal user, then runs
 # vm/cloudlab/bootstrap.sh --up: host packages, the lab networks, the
@@ -14,7 +14,7 @@
 #   PF_LAB_USER  user that runs the lab. Default: the user that ran sudo,
 #                or a new user `pflab` when you are logged in as root.
 #   PF_LAB_DIR   checkout directory. Default: ~PF_LAB_USER/pi-fortress.
-#   PF_REPO      default https://github.com/nrnjn42/pi-fortress
+#   PF_REPO      default https://github.com/praneos/pi-fortress
 #   PF_REF       branch or tag to clone. Default: main.
 #
 # The whole script is in main(), and main runs on the last line. Thus a
@@ -22,7 +22,7 @@
 # the script itself, so each step reads /dev/null instead.
 set -euo pipefail
 
-PF_REPO="${PF_REPO:-https://github.com/nrnjn42/pi-fortress}"
+PF_REPO="${PF_REPO:-https://github.com/praneos/pi-fortress}"
 PF_REF="${PF_REF:-main}"
 
 die() {
@@ -114,7 +114,7 @@ install-lab: the lab is up. Next, as ${user} ${login}:
   vm/cloudlab/lab.sh ssh pi         # the gateway VM: sudo pf status
 
 Then follow "Getting started" from step 2:
-  https://github.com/nrnjn42/pi-fortress/blob/main/docs/user_guide/getting_started.md
+  https://github.com/praneos/pi-fortress/blob/main/docs/user_guide/getting_started.md
 
 Remove the lab:
   vm/cloudlab/lab.sh destroy && sudo vm/cloudlab/lab.sh host-clean

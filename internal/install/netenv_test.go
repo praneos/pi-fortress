@@ -70,7 +70,7 @@ func TestSaveReleaseSigners(t *testing.T) {
 
 func TestSaveReleaseURLFeedsUpgrade(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "etc", "pi-fortress", "release.url")
-	base := "https://github.com/nrnjn42/pi-fortress/releases/download"
+	base := "https://github.com/praneos/pi-fortress/releases/download"
 	if err := SaveReleaseURL(base+"\n", dst); err != nil {
 		t.Fatal(err)
 	}

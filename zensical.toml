@@ -2,7 +2,7 @@
 site_name = "Pi Fortress"
 site_url = "https://pi-fortress.praneos.ai"
 site_description = "A small box between your AI agent and the internet. The agent never holds your real API keys."
-copyright = "Pi Fortress will be released under Apache-2.0"
+copyright = "Copyright 2026 Praneos Labs. Apache-2.0."
 docs_dir = "docs/user_guide"
 site_dir = "build/docs"
 extra_css = ["assets/stylesheets/extra.css"]

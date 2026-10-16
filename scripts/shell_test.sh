@@ -114,7 +114,7 @@ install_case "with an unsupported OS" "unsupported target" \
 
 # No settings: the tag comes from GitHub /releases/latest.
 # PF_TEST_LATEST_URL stands in for that answer, so no case goes online.
-gh=https://github.com/nrnjn42/pi-fortress
+gh=https://github.com/praneos/pi-fortress
 bare=(env -u PF_RELEASE_URL -u PF_BUNDLE -u PF_VERSION PF_TEST_SKIP_ROOT=1 PF_TEST_UNAME_M=x86_64 PF_TEST_OS_RELEASE="${supported_os}")
 
 install_case "with no release on GitHub yet" "no published release found" \

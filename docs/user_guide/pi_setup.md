@@ -250,7 +250,7 @@ On the desktop side, this split needs three changes:
 2. Move the default route of the desktop onto the desk VLAN.
 3. Stop the desktop from forwarding traffic between the VLANs.
 
-The last change is important. A desktop that forwards traffic can carry the traffic of an agent around the Pi. The desk setup script does all three changes. The script is in the desk folder of the source, which is published with the public release. On the desktop, clone the release tag that you installed (`git clone --depth 1 --branch <tag> https://github.com/nrnjn42/pi-fortress`). Run the script from that folder. `<nic>` is the card of the desktop with the cable to the Pi. Test between the steps:
+The last change is important. A desktop that forwards traffic can carry the traffic of an agent around the Pi. The desk setup script does all three changes. The script is in the desk folder of the source, which is published with the public release. On the desktop, clone the release tag that you installed (`git clone --depth 1 --branch <tag> https://github.com/praneos/pi-fortress`). Run the script from that folder. `<nic>` is the card of the desktop with the cable to the Pi. Test between the steps:
 
 **Desktop:**
 ```
@@ -279,9 +279,9 @@ The desk lock does the same check again two minutes after each boot. At that tim
 
 A key that never touches the Pi signs each release. Connect to the Pi with SSH over its uplink (for example Wi-Fi, set in Raspberry Pi Imager). Then, on the Pi:
 ```
-curl -fsSL https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install.sh | sudo bash
 ```
-From your desktop, the same command in one line: `ssh -t <user>@<pi> 'curl -fsSL https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install.sh | sudo bash'`.
+From your desktop, the same command in one line: `ssh -t <user>@<pi> 'curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install.sh | sudo bash'`.
 
 The command installs the newest release. To install one release, run `sudo PF_VERSION=v1.2.3 bash install.sh` with the script of that tag. A minimal image may not have `curl`: `sudo apt-get install -y curl`.
 

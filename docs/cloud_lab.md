@@ -156,7 +156,7 @@ Install Go. Then clone the repo and `cd` into it. Run all commands below from th
 
 On a new cloud VM, with no clone yet, `install-lab.sh` does the clone and then this command:
 ```sh
-curl -fsSL https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install-lab.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install-lab.sh | sudo bash
 ```
 It checks for `/dev/kvm`, 8 GB RAM and the free disk. When you are logged in as root, it makes the user `pflab` to run the lab, because vagrant refuses root. Settings: `PF_LAB_USER`, `PF_LAB_DIR`, `PF_REPO`, `PF_REF` (the head of `install-lab.sh` lists them).
 

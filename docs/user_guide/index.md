@@ -30,14 +30,14 @@ Run the full setup as VMs on one cloud machine: the gateway, an agent with a pla
 
 Log in to the machine and run this command:
 ```
-curl -fsSL https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install-lab.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install-lab.sh | sudo bash
 ```
 
 The command clones the source and installs the lab. It enrols one agent and runs a smoke test. Then it shows the next steps. Continue with [Getting started](getting_started.md), step 2.
 
 To read the script before it runs:
 ```
-curl -fsSLO https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install-lab.sh
+curl -fsSLO https://raw.githubusercontent.com/praneos/pi-fortress/main/install-lab.sh
 less install-lab.sh
 sudo bash install-lab.sh
 ```
@@ -46,7 +46,7 @@ sudo bash install-lab.sh
 
 You need a Raspberry Pi 5 with Raspberry Pi OS Lite 64-bit, and a machine for the agent ([full list](pi_setup.md)). In Raspberry Pi Imager, turn on SSH and set the Wi-Fi. Connect to the Pi with SSH over Wi-Fi, and run this command:
 ```
-curl -fsSL https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install.sh | sudo bash
 ```
 
 The command installs the newest signed release and verifies each download. It asks which port is the uplink and which port is for the agent. It refuses to give the agent the port of your SSH session. Continue with [Getting started](getting_started.md), step 2.

@@ -1,7 +1,7 @@
 #!/bin/bash
 # pi-fortress gateway bootstrap (docs/gateway_install.md). On the Pi:
 #
-#   curl -fsSL https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install.sh | sudo bash
 #
 # With no settings, it installs the newest release from GitHub. To pin
 # a release: sudo PF_VERSION=v1.2.3 bash install.sh. To skip the
@@ -56,7 +56,7 @@ sums_entry() {
   awk -v n="$2" 'NF == 2 && ($2 == n || $2 == "*" n) && length($1) == 64 && $1 !~ /[^0-9a-f]/ { print $1 }' "$1"
 }
 
-PF_REPO_URL=https://github.com/nrnjn42/pi-fortress
+PF_REPO_URL=https://github.com/praneos/pi-fortress
 
 # latest_tag: the tag of the newest GitHub release. GitHub answers
 # /releases/latest with a redirect to /releases/tag/<tag>. The caller

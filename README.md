@@ -45,7 +45,7 @@ host. Thus, use a machine that you can give to the lab. A cloud VM is
 best: Ubuntu 24.04, amd64, nested virtualization on. Run:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install-lab.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install-lab.sh | sudo bash
 ```
 
 The script clones this repo and runs `vm/cloudlab/bootstrap.sh --up`.
@@ -65,7 +65,7 @@ You need these items ([full list](docs/user_guide/pi_setup.md)):
 Connect to the Pi with SSH over its uplink (for example Wi-Fi). Then run:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/nrnjn42/pi-fortress/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install.sh | sudo bash
 ```
 
 The installer gets the newest signed release and checks the signature
@@ -101,5 +101,6 @@ Contact: security@praneos.ai
 
 ## License
 
-[Apache-2.0](LICENSE). We provide it as is, without warranty. See also
+[Apache-2.0](LICENSE). Maintained by [Praneos Labs](https://github.com/praneos).
+We provide it as is, without warranty. See also
 [EVALUATION_NOTICE.txt](EVALUATION_NOTICE.txt).

@@ -5,5 +5,5 @@ Pi Fortress: OPEN EVALUATION
 - Provided as is, without warranty of any kind. Use at your own risk.
 - This release is for evaluation. Use test keys, or keys with a spend
   limit, while you evaluate.
-- Source and releases: https://github.com/nrnjn42/pi-fortress
+- Source and releases: https://github.com/praneos/pi-fortress
 - Reporting security issues: SECURITY.md
