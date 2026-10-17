@@ -157,7 +157,7 @@ appliance-test: pf
 # that npm serves that day.
 .PHONY: docs docs-push
 ZENSICAL_VERSION ?= 0.0.63
-WRANGLER_VERSION ?= 4.147.0
+WRANGLER_VERSION ?= 4.151.1
 DOCS_PROJECT ?=
 docs:
 	uvx --from zensical==$(ZENSICAL_VERSION) zensical build -f zensical.toml -s
