@@ -31,7 +31,7 @@ Only the final check in this guide needs real Pi hardware. Everything else runs 
                                                        uplink -- internet
 ```
 
-Each VM starts with a management link, so that Vagrant can configure it. When the setup is complete, `lab.sh` cuts that link on all VMs except `gw`. Then a client can reach the internet or another VM only through the gateway, as on a real Pi.
+Each VM starts with a management link, so that Vagrant can configure it. When the setup is complete, `lab.sh` cuts that link on all VMs except `gw`. Then a client can reach the internet, or a VM on a different segment, only through the gateway. This is also true on a real Pi. `agent` and `agent2` share the agent segment, so they can reach each other directly. The gateway does not see that traffic. Agents on one segment are one trust tier.
 
 This matches the real Pi closely:
 - `gw` runs the real gateway install scripts.

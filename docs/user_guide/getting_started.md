@@ -111,7 +111,7 @@ curl --max-time 5 https://1.1.1.1     # times out: DoH resolver pinned out
 1. It installs the gateway CA. The CA is the credential that lets the gateway examine encrypted HTTPS traffic.
 2. It pins DNS to the gateway.
 3. It disables IPv6 and Wi-Fi, if they are present.
-4. It locks the machine. Only DNS, the CA server, and ping to the gateway can go out. TCP ports 443 and 22 can go out only through the gateway.
+4. It locks the machine. Only DNS, the CA server, and ping to the gateway can go out. TCP ports 443 and 22 can go out only on the agent network. Traffic to the internet goes through the gateway. Traffic to a different agent on the same segment goes directly to that agent.
 5. It examines `https://pf-open-echo.test/` to prove that inspection works. The gateway itself answers this echo endpoint.
 
 The last check above fails because the gateway also pins out DoH. DoH (DNS over HTTPS) sends DNS queries inside HTTPS.

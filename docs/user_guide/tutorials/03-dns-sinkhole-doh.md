@@ -95,7 +95,7 @@ DoH is the difficult case. A query like `https://dns.google/dns-query?dns=...` u
 
 **Everyday example:** a building where the elevator goes only to the floors that the front desk registered you for. You can know a room number. But the elevator button does nothing until the front desk puts your name on the list for that floor.
 
-The resolver gate is that structural defence. The agent cannot reach a destination that the Pi did not look up. This stops a direct connection to an IP address. It also stops all that DoH can otherwise make possible. The two fail closed automatically.
+The resolver gate is that structural defence. The agent cannot reach a destination that the Pi did not look up. The exception is a different agent on the same segment: that traffic goes directly between the two agents, never through the Pi. This stops a direct connection to an IP address. It also stops all that DoH can otherwise make possible. The two fail closed automatically.
 
 **Mechanism, with `AGENT_DNS=forward`:**
 
