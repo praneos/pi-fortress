@@ -13,7 +13,7 @@ tests, network rules for tests), `LICENSE` (Apache-2.0).
 | `risk_model.md` | the problem, the attack table (what is and is not mitigated), the hostile uplink, the non-goals |
 | `fence.md` | the credential fence: placeholders, substitution, stripping, sealed store, encodings, WebSocket, unknown destinations, enrolment |
 | `user_guide/` | the public manual, deployed as the website: getting started, verify a download, Pi setup, home network, public Wi-Fi, architecture, use cases, comparison, FAQ. All links in it stay inside the directory |
-| `challenge_rules.md` | capture-the-key: the `CANARY` objective, the seat (cloud lab or your own Pi), in and out of scope, window of 60 days from the first signed release, judging, submission |
+| `challenge_rules.md` | capture-the-key: the `CANARY` objective, the seat (cloud lab or your own Pi), in and out of scope, no end date, judging, submission |
 | `style.md` | the writing standard for all docs, code comments and help text: ASD-STE100 Simplified Technical English, what a rewrite must not change |
 | `glossary.md` | the one list of terms (gateway, origin server, placeholder, live credential, strip, refuse, drop, core host) that docs and code comments use |
 | `hall_of_fame.md` | confirmed fence bypasses: date, handle, class, fix commit; inclusion rule |

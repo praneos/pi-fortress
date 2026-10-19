@@ -1,9 +1,7 @@
 # Hall of fame
 
 Confirmed bypasses of the fence, from the capture-the-key challenge
-([`challenge_rules.md`](challenge_rules.md), opens with the first
-signed release)
-and from reports under [`SECURITY.md`](../SECURITY.md). We credit other confirmed
+([`challenge_rules.md`](challenge_rules.md)) and from reports under [`SECURITY.md`](../SECURITY.md). We credit other confirmed
 security bugs in `SECURITY.md`.
 
 We list a report when all of these conditions are true:

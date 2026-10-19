@@ -19,7 +19,7 @@ these:
 In the shipped policy, no host binds `CANARY`. A `*` line does not
 cover it. Thus, if the value is at any location off the gateway, this is a bypass.
 
-For this window, the canary is a canarytokens.org AWS key, enrolled as
+The canary is a canarytokens.org AWS key, enrolled as
 the `CANARY` credential. Its first use from outside the gateway sends
 an alert. Substitution of an AWS key into a SigV4-signed request does not work.
 The client signs with the placeholder, so AWS rejects the signature.
@@ -94,14 +94,13 @@ entry is a method that we can reproduce with all of these conditions:
 - Against an unmodified gateway on a published version.
 - With a canary of our own.
 
-## Window
+## Time
 
-The window opens with the first signed release and stays open for 60
-days. We put the dates here on that day. An entry counts from the time it
-reaches `security@praneos.ai`. We judge an entry against the version that it
-names: a release tag, which the signed `SHA256SUMS` pins.
-Reports after the window are still welcome under `SECURITY.md`. We
-credit them the same way.
+The challenge has no end date. It applies to every published release.
+An entry counts from the time it reaches `security@praneos.ai`. We judge
+an entry against the version that it names: a release tag, which the
+signed `SHA256SUMS` pins. If these rules change, we change this file
+first.
 
 ## Recognition
 

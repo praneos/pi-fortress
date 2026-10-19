@@ -29,7 +29,7 @@ Challenge entries use the same address and format:
 
 | Step | Target |
 |---|---|
-| Acknowledgement | 72 hours (a named person reads the inbox each day during the challenge window) |
+| Acknowledgement | 72 hours |
 | Verdict (reproduced, duplicate, out of scope) | 14 days |
 | Confirmed bypass | becomes a fuzz corpus entry and a regression test, then the fix lands |
 

@@ -19,7 +19,7 @@ ARCHES="amd64 arm64"
 die() { echo "release: $*" >&2; exit 1; }
 
 # What the owner fills on launch day (docs/release.md "Owner placeholders"):
-# a finder reads the disclosure address, contact and challenge window to
+# a finder reads the disclosure address, contact and challenge rules to
 # make a report, and DOCS_URL is the address of the site. Both the release
 # and the docs deploy refuse while one is left, because the site links
 # directly to SECURITY.md and the challenge rules.

@@ -23,7 +23,6 @@ also run alone):
 |---|---|---|
 | `<DISCLOSURE_EMAIL>` | `SECURITY.md`, `docs/challenge_rules.md` | the security mailbox |
 | `<CONTACT>` | `README.md` | a contact, or delete the line |
-| challenge window | `README.md`, `SECURITY.md`, `docs/challenge_rules.md`, `docs/hall_of_fame.md`, `docs/INDEX.md`: each says the window "opens with the first signed release" | at the first release, write the dates there: release day, and release day plus 60 days, as `YYYY-MM-DD` |
 | `<DOCS_URL>` | `zensical.toml` `site_url` | the address of the docs site, for example `https://<project>.pages.dev` or its own domain, no trailing slash |
 
 The check covers those files and all of `docs/user_guide/`. If a path in

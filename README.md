@@ -89,8 +89,8 @@ offline installs and upgrades: [docs/gateway_install.md](docs/gateway_install.md
 
 Run your own gateway with a canary credential that you mint. Then find a
 method that we can reproduce to get the canary off the Pi. A confirmed
-bypass gets a row in the hall of fame. The challenge opens with the
-first signed release and stays open for 60 days. [Rules](docs/challenge_rules.md).
+bypass gets a row in the hall of fame. The challenge has no end date.
+[Rules](docs/challenge_rules.md).
 
 ## Contributing and security
 
