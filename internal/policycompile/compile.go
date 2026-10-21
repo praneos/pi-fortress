@@ -261,6 +261,33 @@ func IsNeverDomain(name string, never map[string]struct{}) bool {
 	return corepolicy.HostIn(name, never)
 }
 
+// BlocksCoreHost says if a block entry would block a host that core.hosts
+// binds credentials to: the entry is that host or a parent of it, or it is
+// under a "*." entry. never_block is a coarse shield on purpose
+// (docs/fence.md): a shield below a listed parent leaves the parent entry
+// in place. A core host is not a curation choice. A feed line for
+// anthropic.com blocked api.anthropic.com, and the agent lost the service
+// that holds its credentials. So for these hosts the parent entry goes.
+// An entry under an exact host stays: it does not block the host itself.
+func BlocksCoreHost(entry string, core *corepolicy.Policy) bool {
+	if core == nil {
+		return false
+	}
+	if corepolicy.HostIn(entry, core.Suffix) {
+		return true
+	}
+	if _, ok := core.Hosts[entry]; ok {
+		return true
+	}
+	under := "." + entry
+	for h := range core.Hosts {
+		if strings.HasSuffix(h, under) {
+			return true
+		}
+	}
+	return false
+}
+
 // set is the membership set of items.
 func set(items []string) map[string]struct{} {
 	m := make(map[string]struct{}, len(items))
@@ -704,11 +731,22 @@ func Compile(policyDir string, out Out) (Summary, error) {
 		}
 	}
 	neverDomains := set(neverDomainsList)
+	// core.hosts and core.hosts.local, which apply installs as one file, also
+	// compile to nothing. Their load here makes a header that can never carry
+	// a credential stop the apply, with the file and line, before anything
+	// installs. It does not stop the broker at its start. Its hosts also
+	// shield the domain list (BlocksCoreHost).
+	core, err := corepolicy.LoadFiles(filepath.Join(policyDir, "core.hosts"), filepath.Join(policyDir, "core.hosts.local"))
+	if err != nil {
+		return Summary{}, err
+	}
 
 	ipKept := keepNew(nil, ips, map[string]struct{}{}, func(ip string) bool { return IsNeverIP(ip, neverNets) })
 	ipFinal := CoalesceIPv4(ipKept)
 
-	domainFinal := keepNew(nil, domains, map[string]struct{}{}, func(d string) bool { return IsNeverDomain(d, neverDomains) })
+	domainFinal := keepNew(nil, domains, map[string]struct{}{}, func(d string) bool {
+		return IsNeverDomain(d, neverDomains) || BlocksCoreHost(d, core)
+	})
 
 	if err := writeFile(out.NFT, nftElements(ipFinal)); err != nil {
 		return Summary{}, err
@@ -754,12 +792,6 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	// makes a malformed line stop an apply before anything installs.
 	gitPush, err := corepolicy.LoadGitPush(filepath.Join(policyDir, "git_push.allow"))
 	if err != nil {
-		return Summary{}, err
-	}
-	// The same applies to core.hosts and core.hosts.local, which apply installs
-	// as one file. A header that can never carry a credential stops the apply
-	// here, with the file and line. It does not stop the broker at its start.
-	if _, err := corepolicy.LoadFiles(filepath.Join(policyDir, "core.hosts"), filepath.Join(policyDir, "core.hosts.local")); err != nil {
 		return Summary{}, err
 	}
 

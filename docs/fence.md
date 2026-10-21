@@ -334,6 +334,13 @@ shield below a listed parent leaves the entry of the parent in place. A
 shield on the parent also drops any entry that the feeds carried for a bad
 tenant under it.
 
+**core.hosts is a shield of its own, and it is not coarse.** An entry that
+would block a host that `core.hosts` or `core.hosts.local` binds
+credentials to does not compile: the host itself, a parent of it, or a name
+under a `*.` entry. A feed line for `anthropic.com` must not cut the agent
+off from the service that holds its credentials. An entry under an exact
+core host stays, because it does not block the host.
+
 Public Suffix List handling is not planned. It adds complexity for a corner
 case that curation and `never_block` already cover. Examine this again if a
 shipped feed lists a shared parent, or if a legitimate tenant needs a
