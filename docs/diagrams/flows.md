@@ -28,7 +28,7 @@ sequenceDiagram
     participant O as Origin<br/>(api.anthropic.com)
 
     A->>R: A? api.anthropic.com (DNS pinned to Pi)
-    R-->>A: 203.0.113.7 + adds to nft set resolved_v4 (element lives 2h;<br/>the answer, cached or handed out, never outlives it)
+    R-->>A: 203.0.113.7 + adds to nft set resolved_v4 (element lives 2h,<br/>the answer, cached or handed out, never outlives it)
     A->>N: TCP 443 → 203.0.113.7, TLS ClientHello<br/>(SNI=api.anthropic.com, ALPN)
     N->>N: raw: not in blacklist_v4 ✓<br/>resolver gate: new conn, IP ∈ resolved_v4 ✓
     N->>E: REDIRECT to :8080 (orig dst via SO_ORIGINAL_DST)
@@ -129,7 +129,7 @@ sequenceDiagram
             B->>B: withMinted overlays the new values onto the scrub set
             B->>B: rewrite.go: scrub live literals → placeholders
             B-->>A: response shows placeholders only
-            Note over A,S: agent keeps using pf_…; the live pair<br/>now lives on the Pi, sealed at rest
+            Note over A,S: agent keeps using pf_…, and the live pair<br/>now lives on the Pi, sealed at rest
         end
     end
 ```
@@ -148,7 +148,7 @@ sequenceDiagram
     N->>B: resolver gate ok → allowed (default is allow) → redirect
     B->>B: not a core host → NO injection<br/>internal/fence strips any live-looking credential
     B->>U: sample row, rate-limited per client and host<br/>(names and sizes, no hashes)
-    Note over U: adoption over lockdown — the operator reviews<br/>the log, not every request; it never leaves the box
+    Note over U: adoption over lockdown — the operator reviews<br/>the log, not every request, and it never leaves the box
 ```
 
 ## Flow F — the agent tries to leave (negative space)

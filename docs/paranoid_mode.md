@@ -59,7 +59,7 @@ not `api.github.com`. A `*.name` line in this file matches nothing. The
 
 ```mermaid
 flowchart TD
-  agent[Agent TCP 443] --> dns{pf dns segment<br/>forwardAllowed(name)?}
+  agent[Agent TCP 443] --> dns{"pf dns segment<br/>forwardAllowed(name)?"}
   dns -->|no: sinkhole| dead[0.0.0.0]
   dns -->|yes: answer tagged into resolved_v4| gate{resolver_gate<br/>dest in resolved_v4?<br/>no direct_ip carve-out}
   gate -->|no| dropIP[drop]

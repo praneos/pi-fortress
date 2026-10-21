@@ -1,4 +1,4 @@
-.PHONY: up apply fetch test smoke test-mid go-test apply-test shell-test leak-check leak-check-test hooks lab-test e2e distro-test observe status halt destroy pf split-bin fuzz audit dupes inline pi-check pi-sync pi-ship pi-provision pi-ssh agent-up agent-reload agent-provision agent-shell agent-destroy agent-audit
+.PHONY: up apply fetch test smoke test-mid go-test apply-test shell-test leak-check leak-check-test mermaid-check hooks lab-test e2e distro-test observe status halt destroy pf split-bin fuzz audit dupes inline pi-check pi-sync pi-ship pi-provision pi-ssh agent-up agent-reload agent-provision agent-shell agent-destroy agent-audit
 
 CGO_ENABLED ?= 0
 # Supply chain: each build resolves modules from vendor/. It never
@@ -59,6 +59,11 @@ leak-check:
 leak-check-test:
 	@./scripts/leak_check_test.sh
 
+# Mermaid is drawn in the browser, so no build step parses it. A ; in a
+# sequenceDiagram ends the statement and breaks the diagram on GitHub.
+mermaid-check:
+	@./scripts/mermaid_check.sh
+
 # Point git at scripts/git-hooks: pre-commit and pre-push run leak_check.sh.
 # This is for each clone. Run it one time after you clone.
 hooks:
@@ -71,7 +76,7 @@ hooks:
 #   that cover the policy and all segments, not the slow lifecycle and
 #   reboot groups.
 # - e2e and lab-test are the full suite.
-smoke: shell-test leak-check leak-check-test go-test apply-test appliance-test
+smoke: shell-test leak-check leak-check-test mermaid-check go-test apply-test appliance-test
 	@if command -v uvx >/dev/null 2>&1; then $(MAKE) -s docs; else echo "smoke: uvx not on PATH, skipping docs"; fi
 
 test-mid:

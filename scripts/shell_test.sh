@@ -493,3 +493,18 @@ if command -v make >/dev/null 2>&1; then
   [[ "${order}" == ok ]] || fail "make docs-push does not run the placeholder and leak checks before wrangler: ${dp}"
 fi
 echo "shell_test: owner placeholder guard and docs-push gate clean"
+
+# mermaid_check.sh refuses a ';' in sequence-diagram text and a '(' in an
+# unquoted flowchart label, and names the line. An entity code, a quoted
+# label and a cylinder shape pass.
+mm="${tmp}/mermaid"
+mkdir -p "${mm}"
+printf '%s\n' '```mermaid' 'sequenceDiagram' '  A->>B: one #59; two' '```' \
+  '```mermaid' 'flowchart LR' '  X["a; b"] --> Y{"f(x)?"} --> D[(db)]' '```' >"${mm}/good.md"
+./scripts/mermaid_check.sh "${mm}" >/dev/null 2>&1 || fail "mermaid_check refuses a clean file"
+printf '%s\n' '' '```mermaid' 'sequenceDiagram' '  Note over A: one; two' '```' \
+  '```mermaid' 'flowchart TD' '  A --> B{f(x)?}' '```' >"${mm}/bad.md"
+out="$(./scripts/mermaid_check.sh "${mm}" 2>&1)" && fail "mermaid_check passes a bad file"
+[[ "${out}" == *"bad.md:4:"* ]] || fail "mermaid_check does not name the ; at bad.md:4: ${out}"
+[[ "${out}" == *"bad.md:8:"* ]] || fail "mermaid_check does not name the ( at bad.md:8: ${out}"
+echo "shell_test: mermaid guard clean"
