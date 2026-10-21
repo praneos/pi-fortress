@@ -16,8 +16,10 @@ and get the same bytes. Code: `scripts/release.sh`.
 ## Owner placeholders
 
 These stay in the tree until launch day. While one is left, `make release`
-and `make docs-push` both refuse (`release.sh placeholders`, which can
-also run alone):
+refuses (`release.sh placeholders`, which can also run alone). `make
+docs-push` runs `release.sh site-placeholders`: the same check on the site
+files only (`docs/user_guide/`, `zensical.toml`). While the repo is not
+public, it also refuses a link from the site into the repo:
 
 | Placeholder | Where | Fill with |
 |---|---|---|
@@ -25,9 +27,14 @@ also run alone):
 | `<CONTACT>` | `README.md` | a contact, or delete the line |
 | `<DOCS_URL>` | `zensical.toml` `site_url` | the address of the docs site, for example `https://<project>.pages.dev` or its own domain, no trailing slash |
 
-The check covers those files and all of `docs/user_guide/`. If a path in
-its list no longer exists, the check also fails. Thus, when you move a file,
-update the list (`OWNER_FILES` in `scripts/release.sh`).
+The check covers the files in `OWNER_FILES` in `scripts/release.sh`:
+`SECURITY.md`, `README.md`, `docs/challenge_rules.md`,
+`docs/hall_of_fame.md`, `docs/INDEX.md`, all of `docs/user_guide/` and
+`zensical.toml`. It also refuses the retired placeholders
+`<WINDOW_START>`, `<WINDOW_END>`, `<APPLIANCE_URL>` and
+`<CANARY_SOURCE>`, so that they cannot come back. If a path in its list no
+longer exists, the check also fails. Thus, when you move a file, update
+`OWNER_FILES`.
 
 Version: an exact `v*` tag. If there is no tag, `git describe --tags --always --abbrev=12`
 plus `-dev`. Untagged builds are permitted, and the version marks them. `pf version` prints the version
@@ -140,7 +147,7 @@ wrangler login                         # once per machine, opens a browser
 DOCS_PROJECT=<project> make docs-push  # wrangler pages deploy, direct upload
 ```
 
-`docs-push` first runs the owner placeholder check above and
+`docs-push` first runs `release.sh site-placeholders` (above) and
 `scripts/leak_check.sh`. If one of them fails, it stops. An agent never runs it. A maintainer logs in to Cloudflare and
 pushes it. There is no GitHub integration. Each push is a manual
 `wrangler pages deploy` from a built tree.

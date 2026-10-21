@@ -43,7 +43,7 @@ With no `PF_VERSION`, `install.sh` asks GitHub for the newest release tag (`/rel
 
 This is exactly the GitHub `releases/download/<tag>/<asset>` layout.
 
-`PF_VERSION` is necessary. It must be a tag (letters, digits, `. _ + -`). The name of an asset contains its tag, so there is no fixed "latest" path.
+With `PF_RELEASE_URL`, `PF_VERSION` is necessary. It must be a tag (letters, digits, `. _ + -`). The name of an asset contains its tag, so there is no fixed "latest" path.
 
 `PF_RELEASE_URL` must be `https://`. `install.sh` refuses all other values before a download. curl runs with `--proto '=https' --proto-redir '=https' --tlsv1.2 --fail`, so a redirect to plain http also fails. There is no http override. The tests serve the release through a fake `curl`.
 
