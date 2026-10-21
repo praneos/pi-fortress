@@ -135,9 +135,13 @@ To do it manually instead:
 **Host**
 ```sh
 sudo apt-get update
-sudo apt-get install -y qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-daemon-driver-interface libvirt-clients libvirt-dev \
+sudo apt-get install -y qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-clients libvirt-dev \
   dnsmasq-base ebtables ruby-dev build-essential pkg-config libxml2-dev libxslt1-dev zlib1g-dev \
   rsync git make curl gpg lsb-release
+# Ubuntu 26.04 only: the interface driver is a separate package there.
+# On 24.04 it is part of libvirt-daemon, and this package does not exist.
+apt-cache show libvirt-daemon-driver-interface >/dev/null 2>&1 &&
+  sudo apt-get install -y libvirt-daemon-driver-interface
 sudo usermod -aG libvirt,kvm "$USER"
 # log out and back in so the new groups take effect
 curl -fsSL -o hashicorp.asc https://apt.releases.hashicorp.com/gpg

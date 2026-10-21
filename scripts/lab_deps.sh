@@ -16,8 +16,11 @@ COMMON_PKGS=(make git rsync curl ca-certificates gpg lsb-release openssh-client
   shellcheck nftables iptables iproute2 bind9-dnsutils openssl tar)
 # libvirt-daemon-driver-interface is only a Recommends of libvirt-daemon-system
 # on Ubuntu 26.04. The network validation of vagrant-libvirt calls
-# virConnectListAllInterfaces, and dies without it.
-LIBVIRT_PKGS=(qemu-system-x86 qemu-utils libvirt-daemon-system libvirt-daemon-driver-interface
+# virConnectListAllInterfaces, and dies without it. On Ubuntu 24.04 the driver
+# is part of libvirt-daemon and the package does not exist, so
+# install_libvirt adds it only when apt has it.
+IFACE_PKG=libvirt-daemon-driver-interface
+LIBVIRT_PKGS=(qemu-system-x86 qemu-utils libvirt-daemon-system
   libvirt-clients libvirt-dev
   dnsmasq-base ebtables ruby-dev build-essential pkg-config libxml2-dev libxslt1-dev zlib1g-dev)
 VIRTUALBOX_PKGS=(virtualbox)
@@ -168,9 +171,12 @@ install_vagrant() {
 }
 
 install_libvirt() {
-  local had_iface=0
-  dpkg -s libvirt-daemon-driver-interface >/dev/null 2>&1 && had_iface=1
-  apt-get install -y --no-install-recommends "${LIBVIRT_PKGS[@]}"
+  local had_iface=1 pkgs=("${LIBVIRT_PKGS[@]}")
+  if apt-cache show "${IFACE_PKG}" >/dev/null 2>&1; then
+    pkgs+=("${IFACE_PKG}")
+    dpkg -s "${IFACE_PKG}" >/dev/null 2>&1 || had_iface=0
+  fi
+  apt-get install -y --no-install-recommends "${pkgs[@]}"
   usermod -aG libvirt,kvm "${USER_NAME}"
   systemctl enable --now libvirtd >/dev/null 2>&1 || true
   # A running libvirtd loads drivers only at start. Restart only when a driver
