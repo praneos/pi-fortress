@@ -264,7 +264,7 @@ Check `pf observe once` and `unknown.jsonl` on the gateway.
 `pf observe once` shows DNS queries and the flows to each origin server. `unknown.jsonl` logs a sample of each origin server that is not on the allow list or the core list. The gateway does not block unknown origin servers. It logs them for review.
 
 **How do I report a bypass?**
-Privately: by email to security@praneos.ai, or with GitHub private vulnerability reporting (the **Security** tab of the repo, then **Report a vulnerability**). Do not open a public issue.
+Privately: by email to security@praneos.ai, or with GitHub private vulnerability reporting (the **Security** tab of the repo, then [**Report a vulnerability**](https://github.com/praneos/pi-fortress/security/advisories/new)). Do not open a public issue. [SECURITY.md](https://github.com/praneos/pi-fortress/blob/main/SECURITY.md) gives the full policy.
 
 After the public release, a confirmed fence bypass also counts for the capture-the-key challenge.
 

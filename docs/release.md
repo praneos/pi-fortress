@@ -17,9 +17,10 @@ and get the same bytes. Code: `scripts/release.sh`.
 
 These stay in the tree until launch day. While one is left, `make release`
 refuses (`release.sh placeholders`, which can also run alone). `make
-docs-push` runs `release.sh site-placeholders`: the same check on the site
-files only (`docs/user_guide/`, `zensical.toml`). While the repo is not
-public, it also refuses a link from the site into the repo:
+docs-push` runs the same check. `release.sh site-placeholders` checks
+only the site files (`docs/user_guide/`, `zensical.toml`) and also
+refuses a link from the site into the repo, for a deploy while the repo
+is not public:
 
 | Placeholder | Where | Fill with |
 |---|---|---|
@@ -147,7 +148,7 @@ wrangler login                         # once per machine, opens a browser
 DOCS_PROJECT=<project> make docs-push  # wrangler pages deploy, direct upload
 ```
 
-`docs-push` first runs `release.sh site-placeholders` (above) and
+`docs-push` first runs `release.sh placeholders` (above) and
 `scripts/leak_check.sh`. If one of them fails, it stops. An agent never runs it. A maintainer logs in to Cloudflare and
 pushes it. There is no GitHub integration. Each push is a manual
 `wrangler pages deploy` from a built tree.

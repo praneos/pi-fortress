@@ -7,8 +7,8 @@ keys, or keys with a spend limit, while you evaluate. See
 ## Reporting
 
 Email `security@praneos.ai`, or use GitHub private vulnerability
-reporting: open the **Security** tab of the repo, then click **Report a
-vulnerability**. Do not open a public GitHub issue or pull
+reporting: open the **Security** tab of the repo, then click [**Report a
+vulnerability**](https://github.com/praneos/pi-fortress/security/advisories/new). Do not open a public GitHub issue or pull
 request for a vulnerability. Do not post details at any location before
 the fix ships. If you need an encrypted channel, say so in a first
 message without details.

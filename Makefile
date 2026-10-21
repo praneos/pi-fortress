@@ -164,12 +164,10 @@ docs:
 
 # docs-push refuses before it builds if an owner placeholder on the site
 # is not filled or the leak check fails. A deploy is public immediately.
-# While the repo is not public, the site links nothing in the repo, and
-# site-placeholders refuses a link into it. When the repo is public and
-# the site links SECURITY.md again, use the full 'placeholders' check.
+# The site links SECURITY.md in the repo, so it runs the full check.
 docs-push:
 	@test -n "$(DOCS_PROJECT)" || { echo "docs-push: set DOCS_PROJECT, e.g. DOCS_PROJECT=pi-fortress-docs make docs-push"; exit 1; }
-	@./scripts/release.sh site-placeholders
+	@./scripts/release.sh placeholders
 	@./scripts/leak_check.sh
 	@$(MAKE) --no-print-directory docs
 	npx wrangler@$(WRANGLER_VERSION) pages deploy build/docs --project-name=$(DOCS_PROJECT) --branch=main
