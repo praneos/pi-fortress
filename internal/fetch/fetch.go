@@ -513,6 +513,8 @@ func (f *Fetcher) feedItems(outDir, ua string, timeout time.Duration, feed Feed,
 		// name that it carries, so it is a failure like all others.
 		if len(items) == 0 {
 			why = "answered with nothing to parse"
+		} else {
+			why = f.shrunk(outDir, feed, items, report)
 		}
 	}
 	if why == "" {
@@ -531,6 +533,42 @@ func (f *Fetcher) feedItems(outDir, ua string, timeout time.Duration, feed Feed,
 		return nil, "", false
 	}
 	return cached, " (last good " + Ago(f.now().Sub(when)) + ": " + why + ")", true
+}
+
+// shrinkFloor and shrinkHold bound the check in shrunk. A feed whose last
+// good copy has fewer than shrinkFloor entries can shrink freely: a small
+// feed of live addresses can lose half of them on a normal day.
+const (
+	shrinkFloor = 100
+	shrinkHold  = 72 * time.Hour
+)
+
+// shrunk says why a fresh answer must not replace the last good copy, or
+// "". An answer that parses to a few entries is the same failure as one
+// that parses to none: an error page with one name in it, a body cut
+// short, or a feed server that is not what it was. Each one silently stops
+// the blocking of all the other entries, and it overwrites the copy that is
+// the fallback. So an answer with less than half the distinct entries of
+// the copy fails, and the copy serves.
+//
+// A feed can also really shrink. Once the copy is shrinkHold old, the
+// smaller answer replaces it, with a WARN line. So the operator sees three
+// days of STALE first, and the feed does not stay stale until somebody
+// deletes its copy.
+func (f *Fetcher) shrunk(outDir string, feed Feed, items []string, report *[]string) string {
+	cached, when, ok := readCache(outDir, feed)
+	if !ok {
+		return ""
+	}
+	had, n := len(uniq(cached)), len(uniq(items))
+	if had < shrinkFloor || n*2 >= had {
+		return ""
+	}
+	if f.now().Sub(when) >= shrinkHold {
+		*report = append(*report, fmt.Sprintf("WARN %s: answer of %d entries replaces a last good copy of %d", feed.ID, n, had))
+		return ""
+	}
+	return fmt.Sprintf("answered with %d entries; the last good copy has %d", n, had)
 }
 
 func dropNever(items []string, kind string, neverNets []netip.Prefix, neverDoms map[string]struct{}) []string {
@@ -572,7 +610,9 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 	neverNets := neverIPSet(readListFile(filepath.Join(policy, agent.File("never_block.ips")), "ips"))
 	neverDoms := toSet(readListFile(filepath.Join(policy, agent.File("never_block.domains")), "domains"))
 	houseNever := toSet(readListFile(filepath.Join(policy, house.File("never_block.domains")), "domains"))
-	var ips, domains, houseDomains, houseVPN []string
+	// Each list holds the kept items of each feed apart, so capShare can
+	// give each feed its share of the cap.
+	var ips, domains, houseDomains, houseVPN [][]string
 	sample := ""
 	seen := map[string]bool{}
 	// feedOf remembers which feed carried each item, and the first feed wins.
@@ -610,23 +650,23 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 		report = append(report, fmt.Sprintf("%s %s: %d %s%s", verb, feed.ID, len(kept), label, stale))
 		switch {
 		case toHouse && feed.Role == "vpn":
-			houseVPN = append(houseVPN, kept...)
+			houseVPN = append(houseVPN, kept)
 		case toHouse:
-			houseDomains = append(houseDomains, kept...)
+			houseDomains = append(houseDomains, kept)
 		case feed.Kind == "ips":
-			ips = append(ips, kept...)
+			ips = append(ips, kept)
 		default:
-			domains = append(domains, kept...)
+			domains = append(domains, kept)
 			if sample == "" && len(kept) > 0 {
 				sample = kept[0]
 			}
 		}
 	}
 	pruneCache(outDir, seen)
-	ipOut := truncate(uniq(ips), maxIPs, "ips", &report)
-	domOut := truncate(uniq(domains), maxDoms, "domains", &report)
-	houseOut := truncate(uniq(houseDomains), maxDoms, house.Name+" domains", &report)
-	vpnOut := truncate(uniq(houseVPN), maxDoms, house.Name+" vpn domains", &report)
+	ipOut := capShare(ips, maxIPs, "ips", &report)
+	domOut := capShare(domains, maxDoms, "domains", &report)
+	houseOut := capShare(houseDomains, maxDoms, house.Name+" domains", &report)
+	vpnOut := capShare(houseVPN, maxDoms, house.Name+" vpn domains", &report)
 	repText := lines(report)
 	// houseOut also counts. A run in which only the house feeds answered
 	// used to be called a total failure, and the house list that it did
@@ -661,12 +701,46 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 	return report, len(ipOut), len(domOut), nil
 }
 
-func truncate(items []string, max int, label string, report *[]string) []string {
-	if len(items) <= max {
-		return items
+// capShare joins the lists of the feeds, without duplicates, and keeps at
+// most max items. Under the cap, that is all items in feed order. Over it,
+// the cap once kept the first max items, so the first feed in sources.json
+// could fill the full cap and put every item of the feeds after it out of
+// the list. Now the feeds give one new item each in turn until the cap is
+// full: each feed gets an equal share, and a share that a feed does not use
+// goes to the others. The kept items stay in feed order.
+func capShare(lists [][]string, max int, label string, report *[]string) []string {
+	var all []string
+	for _, l := range lists {
+		all = append(all, l...)
 	}
-	*report = append(*report, fmt.Sprintf("TRUNCATED %s to %d (had %d)", label, max, len(items)))
-	return items[:max]
+	all = uniq(all)
+	if len(all) <= max {
+		return all
+	}
+	*report = append(*report, fmt.Sprintf("TRUNCATED %s to %d (had %d)", label, max, len(all)))
+	keep := make(map[string]struct{}, max)
+	next := make([]int, len(lists))
+	for more := true; more && len(keep) < max; {
+		more = false
+		for i, l := range lists {
+			for next[i] < len(l) && len(keep) < max {
+				it := l[next[i]]
+				next[i]++
+				if _, dup := keep[it]; !dup {
+					keep[it] = struct{}{}
+					more = true
+					break
+				}
+			}
+		}
+	}
+	out := make([]string, 0, max)
+	for _, it := range all {
+		if _, ok := keep[it]; ok {
+			out = append(out, it)
+		}
+	}
+	return out
 }
 
 // FeedsMap is the generated file that names the feed behind each item that
@@ -720,11 +794,12 @@ func commit(outDir string, files []struct{ name, text string }) error {
 
 // CountWarnings reads the report lines of a run, and says how many feeds
 // did not come back fresh. FAIL is a feed with nothing to fall back on.
-// STALE is a feed served from its last copy. Run returns a nil error for
-// each run in which something answered. So callers that need one number
-// for the log (the audit entry, the seat) count from here. They do not
-// parse the report again with their own idea of the verbs.
-func CountWarnings(report []string) (fails, stale int) {
+// STALE is a feed served from its last copy. TRUNCATED is a list that its
+// cap cut, so items that the feeds carry are not in it. Run returns a nil
+// error for each run in which something answered. So callers that need one
+// number for the log (the audit entry, the seat) count from here. They do
+// not parse the report again with their own idea of the verbs.
+func CountWarnings(report []string) (fails, stale, truncated int) {
 	for _, line := range report {
 		verb, _, _ := strings.Cut(line, " ")
 		switch verb {
@@ -732,7 +807,9 @@ func CountWarnings(report []string) (fails, stale int) {
 			fails++
 		case "STALE":
 			stale++
+		case "TRUNCATED":
+			truncated++
 		}
 	}
-	return fails, stale
+	return fails, stale, truncated
 }

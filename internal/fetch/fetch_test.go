@@ -522,12 +522,12 @@ func TestCountWarningsReadsTheReport(t *testing.T) {
 		"sample ip",
 		"",
 	}
-	fails, stale := CountWarnings(report)
-	if fails != 1 || stale != 1 {
-		t.Fatalf("fails %d, stale %d", fails, stale)
+	fails, stale, truncated := CountWarnings(report)
+	if fails != 1 || stale != 1 || truncated != 1 {
+		t.Fatalf("fails %d, stale %d, truncated %d", fails, stale, truncated)
 	}
-	if fails, stale := CountWarnings([]string{"OK d: 9 domains"}); fails != 0 || stale != 0 {
-		t.Fatalf("clean report counted: %d, %d", fails, stale)
+	if fails, stale, truncated := CountWarnings([]string{"OK d: 9 domains"}); fails != 0 || stale != 0 || truncated != 0 {
+		t.Fatalf("clean report counted: %d, %d, %d", fails, stale, truncated)
 	}
 }
 
