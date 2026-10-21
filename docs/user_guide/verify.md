@@ -23,19 +23,23 @@ Save this line as `allowed_signers`:
 release@pi-fortress namespaces="pi-fortress-dist" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP84hURABuMrcMaPPXZpQPXN7hxaZaYI9nHNRhOQIOa9
 ```
 
+The fingerprint of this key is
+`SHA256:EMMiX0Nzd5uLccivQQgurW7goqyzzZlEnrZ+9Q49Bi4`. A good
+`ssh-keygen -Y verify` prints it.
+
 Get the key from this page. Never get it from the download folder. A
 key that comes with the files proves nothing.
 
 The release notes on the
-release page show
+[release page](https://github.com/praneos/pi-fortress/releases) show
 the same line a second time. Compare the two lines before you trust
 either of them. `install.sh` also contains the same key, as
 `PF_SIGNER_PUBKEY`.
 
 ## Check a release
 
-Each release on the release
-page has `SHA256SUMS` and `SHA256SUMS.sig`. In the download folder, run:
+Each release on the
+[release page](https://github.com/praneos/pi-fortress/releases) has `SHA256SUMS` and `SHA256SUMS.sig`. In the download folder, run:
 
 ```
 ssh-keygen -Y verify -f allowed_signers -I release@pi-fortress -n pi-fortress-dist -s SHA256SUMS.sig < SHA256SUMS
