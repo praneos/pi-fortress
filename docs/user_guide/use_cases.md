@@ -120,4 +120,4 @@ The "protects" part never adds new rules. It applies the rules in [architecture.
 **Limits:**
 
 - The lab is a set of VMs on one host. Thus hypervisor escape is out of scope for the lab itself.
-- Report findings privately, by email to security@praneos.ai. Do not open a public issue. After the public release, a bypass also counts for the capture-the-key challenge.
+- Report findings privately: by email to security@praneos.ai, or with GitHub private vulnerability reporting (the **Security** tab of the repo). Do not open a public issue. After the public release, a bypass also counts for the capture-the-key challenge.
