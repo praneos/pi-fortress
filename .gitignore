@@ -3,6 +3,8 @@
 *.box
 
 vm/policy/generated/
+# Edit lock; pf creates it on demand.
+vm/policy/.pf-edit.lock
 
 # Live tokens and the ntfy/webhook mailbox. Commit the .example files.
 vm/policy/secrets.env
