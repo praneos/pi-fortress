@@ -43,9 +43,20 @@ split_certs() {
 # Thus a new root gets trust only through a signature of a root that the
 # box trusts already. A device that answers for the Pi can copy the real
 # set and add its own root, but it cannot sign the link for that root.
-# A set with fewer certificates is also accepted: it takes trust away.
+# FETCHED must also keep one of two roots of TRUSTED:
+#   - the newest root: the root with the latest notBefore. When two roots
+#     have the same notBefore, the root that comes first in TRUSTED is the
+#     newest;
+#   - the first root of TRUSTED. The Pi puts the current root first.
+# Thus retire after promote (it removes the old root) is accepted. Retire
+# before promote (it stops a rotation and removes the next root) is also
+# accepted. A set that removes the root that the engine signs with, after
+# promote, is refused. Such a set would make the box trust a root that
+# the engine does not use, and the box could not take the next set of the
+# Pi. A TRUSTED with no root accepts no set.
 ca_extends() {
-  local trusted="$1" fetched="$2" d f fp keys="" known="" late=() n=0 rc=1
+  local trusted="$1" fetched="$2" d f fp h start keys="" known="" got="" late=() n=0 rc=1
+  local newest="" newest_start=0 first=""
   command -v openssl >/dev/null 2>&1 || return 1
   d="$(mktemp -d)"
   mkdir -p "${d}/t" "${d}/f"
@@ -53,7 +64,18 @@ ca_extends() {
   split_certs "${fetched}" "${d}/f"
   for f in "${d}"/t/*.pem; do
     [[ -f "${f}" ]] || continue
-    known+="$(openssl x509 -noout -fingerprint -sha256 -in "${f}" 2>/dev/null)"$'\n'
+    fp="$(openssl x509 -noout -fingerprint -sha256 -in "${f}" 2>/dev/null)" || fp=""
+    known+="${fp}"$'\n'
+    # A root: the subject is the issuer.
+    h="$(openssl x509 -noout -subject_hash -issuer_hash -in "${f}" 2>/dev/null)" || continue
+    [[ -n "${fp}" && "${h%%$'\n'*}" == "${h##*$'\n'}" ]] || continue
+    [[ -n "${first}" ]] || first="${fp}"
+    start="$(openssl x509 -noout -startdate -in "${f}" 2>/dev/null)" || continue
+    [[ "${start}" == notBefore=?* ]] || continue
+    start="$(date -u -d "${start#notBefore=}" +%s 2>/dev/null)" || continue
+    if [[ -z "${newest}" ]] || ((start > newest_start)); then
+      newest="${fp}" newest_start="${start}"
+    fi
   done
   for f in "${d}"/f/*.pem; do
     [[ -f "${f}" ]] || continue
@@ -62,6 +84,7 @@ ca_extends() {
       n=0
       break
     fi
+    got+="${fp}"$'\n'
     if grep -qxF "${fp}" <<<"${known}"; then
       continue
     fi
@@ -80,6 +103,11 @@ ca_extends() {
         break
       fi
     done
+  fi
+  if ((rc == 0)) && ! { [[ -n "${newest}" ]] && grep -qxF "${newest}" <<<"${got}"; } \
+     && ! { [[ -n "${first}" ]] && grep -qxF "${first}" <<<"${got}"; }; then
+    echo "agent: the fetched CA set keeps neither the newest nor the first pinned root; keeping the pin" >&2
+    rc=1
   fi
   rm -rf "${d}"
   return "${rc}"

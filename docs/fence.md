@@ -942,7 +942,9 @@ less than 90 days.
    removes the old root from its store at its next `routes.sh` run.
 
 `retire` before `promote` stops a rotation: it removes the next root and the
-link, and the engine continues with the current root.
+link, and the engine continues with the current root. An agent that took the
+set of `rotate` accepts the set after this `retire`, because that set keeps the
+first root of the pinned set (see "The agent check" below).
 
 **The agent check.** A VM pins the sha256 of the set that it trusts
 (`CA_SHA256` in `agent.env`, lab.md). When the fetched set has a different
@@ -953,11 +955,30 @@ one of these:
 - A link: a CA certificate that a certificate in the pinned set signed.
 - A root with the key of such a link.
 
+Also, the fetched set must keep one of these roots of the pinned set:
+
+- The newest root: the root with the latest `notBefore`. When two roots have
+  the same `notBefore`, the root that comes first in the pinned set is the
+  newest.
+- The first root of the pinned set. The Pi puts the current root first.
+
 Thus a device that answers for the Pi on the agent cable can copy the real set
 and add a root of its own, but the box refuses that set: no trusted root signed
-a link to that key. A set with fewer certificates is accepted, because it only
-removes trust. A VM that did not fetch between `rotate` and `retire` keeps the
-old root and refuses the new set. Set its pin again (lab.md).
+a link to that key.
+
+The second rule has these results:
+
+- `retire` after `promote` removes the old root. The set keeps the newest
+  root. A box accepts it, also when it did not fetch after `promote`.
+- `retire` before `promote` removes the next root. The set keeps the first
+  root of the set of `rotate`. A box that fetched before `promote` accepts it.
+- A box that fetched after `promote` has the new root first. It refuses a set
+  that holds only the old root, and keeps its pin. If the box took that set,
+  it would not trust the root that the engine signs with, and it could not
+  take the next set of the Pi.
+
+A VM that did not fetch between `rotate` and `retire` keeps the old root and
+refuses the new set. Set its pin again (lab.md).
 
 A root that has expired cannot sign a link that agents accept. Rotate before
 the end date. `pf doctor` warns 90 days before it.
