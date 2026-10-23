@@ -241,8 +241,9 @@ var (
 )
 
 // ValidIfaceName reports whether render takes name as an interface name
-// (INT_IF, WAN_IF, HOUSE_IF, segments.d IF). pf install uses it. Thus it
-// refuses the same names before it writes them.
+// (INT_IF, WAN_IF, HOUSE_IF, segments.d IF). pf install and the TUI edit
+// checks (internal/admin) use it. Thus they refuse the same names before
+// they write them.
 func ValidIfaceName(name string) bool { return reIface.MatchString(name) }
 
 // DefaultHouseIP is the address of the house segment when house.env

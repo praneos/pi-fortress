@@ -5,6 +5,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"pi-fortress/internal/render"
 )
 
 // unreadableHouseEnv gives the box a house on 192.168.50.0/24. Then it
@@ -106,5 +108,39 @@ func TestSetHouseEnvStillWorksWithoutAHouseEnv(t *testing.T) {
 	raw, err := os.ReadFile(c.HouseEnv)
 	if err != nil || !strings.Contains(string(raw), "HOUSE_IP=10.78.0.1") {
 		t.Fatalf("%q, %v", raw, err)
+	}
+}
+
+// The house.env edit takes the interface names that render takes, and
+// refuses the names that render refuses. If not, the TUI could write a
+// name that the next apply stops on.
+func TestHouseEnvIfaceCheckIsRenderCheck(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ok   bool
+	}{
+		{"eth0", true},
+		{"wg0", true},
+		{"br-lan.10", true},
+		{"enx00e04c680001", true},
+		{"enx00e04c6800012", false},
+		{"0eth", false},
+		{"eth 0", false},
+		{"eth0;", false},
+		{"eth0\n", false},
+		{"", false},
+	} {
+		if got := checkIface(tc.name) == nil; got != tc.ok {
+			t.Errorf("checkIface(%q) ok=%v, want %v", tc.name, got, tc.ok)
+		}
+		if got := render.ValidIfaceName(tc.name); got != tc.ok {
+			t.Errorf("render.ValidIfaceName(%q)=%v, want %v", tc.name, got, tc.ok)
+		}
+	}
+	if err := checkIfaceOrEmpty(""); err != nil {
+		t.Errorf("checkIfaceOrEmpty(\"\") = %v, want nil", err)
+	}
+	if err := checkIfaceOrEmpty("0eth"); err == nil {
+		t.Error("checkIfaceOrEmpty took 0eth")
 	}
 }
