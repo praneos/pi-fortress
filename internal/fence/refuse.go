@@ -131,12 +131,15 @@ func (e *RefusedError) Error() string { return "fence: substitution refused" }
 // or records nothing when it can. note reads the kind from the placeholder,
 // not from the slot. Thus a placeholder that names a kind that this SNI
 // cannot carry gets a decision on that alone. It never needs a store lookup first.
+// A placeholder that is not exact (secrets.PlaceholderExact) has no slot:
+// the fence never substitutes it, and refuses it as slot_unknown.
 func (s *scanner) note(b []byte, span [2]int, where string) {
 	if s.quiet {
 		return
 	}
 	slot, kind := secrets.PlaceholderParts(b, span)
 	sl, ok := s.idx.ByDummy[secrets.Placeholder(slot, kind)]
+	ok = ok && secrets.PlaceholderExact(b, span)
 	switch {
 	case !s.inject || !corepolicy.KindAllowed(kind, s.kinds):
 		s.refuse(CauseKindNotAllowed, slot, kind, where)

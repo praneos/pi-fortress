@@ -216,9 +216,8 @@ func (b *Broker) sniKeyRefused(p *preamble.Preamble) bool {
 // keyRule names the rule for a key in an SNI, "placeholder" for a
 // placeholder of the gateway, or "" for neither. It is the check of pf dns
 // (keyshape.Match), with no prefilter. Thus the broker refuses each SNI
-// that pf dns refuses as a name. The name stays as sent, not lower-cased,
-// because the placeholder check is exact. A lowered pf_ spelling is not a
-// placeholder of the gateway.
+// that pf dns refuses as a name. The placeholder check folds case, as
+// the key rules do. Thus a lowered SNI still shows a placeholder.
 func (b *Broker) keyRule(name string) string {
 	re := b.TokenRE
 	if re == nil && b.Rules != nil {
@@ -229,8 +228,7 @@ func (b *Broker) keyRule(name string) string {
 
 // logZone is what a key-shape row can say about the name, as logName of pf
 // dns: the last two labels, the zone that an attacker had to register. If
-// the key is also in those labels, it says nothing. The check runs on the
-// name as sent, because the placeholder check is exact. The row keeps the
+// the key is also in those labels, it says nothing. The row keeps the
 // zone in lower case, as it keeps the SNI.
 func (b *Broker) logZone(name string) string {
 	zone := keyshape.Tail(name)

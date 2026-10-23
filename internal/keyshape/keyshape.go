@@ -49,7 +49,7 @@ func Match(all *regexp.Regexp, heads []string, name string) string {
 	first := 0
 	if heads != nil {
 		// Lowered for the prefilter only. The rules fold case themselves.
-		// The placeholder check is exact on the name as sent.
+		// The placeholder check folds case itself.
 		nodots := strings.ReplaceAll(name, ".", "")
 		flat := strings.ToLower(nodots)
 		hit := false
@@ -346,10 +346,10 @@ func tldShaped(l string) bool {
 }
 
 // Rule names the rule of all that matches s, "placeholder" for a
-// placeholder of the gateway, or "" for neither. It reports "key" for a
+// placeholder of the gateway in any letter case, or "" for neither. It reports "key" for a
 // match in a group with no name. A nil all checks for placeholders only.
 func Rule(all *regexp.Regexp, s string) string {
-	if strings.Contains(s, "pf_") && len(secrets.FindPlaceholderSpans([]byte(s))) > 0 {
+	if strings.IndexByte(s, '_') >= 0 && len(secrets.FindPlaceholderSpans([]byte(s))) > 0 {
 		return "placeholder"
 	}
 	if all == nil {

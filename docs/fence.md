@@ -29,7 +29,16 @@ in git). Each secret has a slot. `sudo pf enroll mint --kind CLAUDE ...`
 allots a new 16-hex slot. The oat and the ort share this slot. The fence does
 not substitute an unslotted `pf_CLAUDE_OAT`.
 
-Placeholders have the format `pf_<16hex>_<KIND>`.
+Placeholders have the format `pf_<16hex>_<KIND>`. The fence substitutes
+only this exact spelling (the hex can be in either case). The slot ID is the
+secret part, and an origin can change the letter case back or remove a
+letter. Thus the fence also finds a placeholder with the prefix or the kind in
+a different letter case (`PF_…`, `pf_<16hex>_claude_oat`), or with more
+letters, digits or `_` after the kind (`pf_<16hex>_CLAUDE_OATx`). It never
+substitutes such a variant. It refuses it in each location where it refuses a
+placeholder: a header value or name, the method, the URL, a buffered body
+(`slot_unknown` in a credential header) and a streamed body. `pf dns` and
+the SNI check refuse it in a name.
 
 `pf engine` terminates agent TLS on TCP 443 (nft redirect `:8080`). `pf
 broker` applies approved credentials and enforces redaction. The two must not

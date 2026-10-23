@@ -85,8 +85,7 @@ func TestHeadlessRuleIsLogged(t *testing.T) {
 }
 
 // DNS is case-insensitive, so the receiver folds a flipped key back. A
-// key in any case is refused. The gateway still recognises its own
-// placeholder only in the spelling of the gateway.
+// key in any case is refused, and so is a placeholder in any case.
 func TestKeyShapeMatchAnyCase(t *testing.T) {
 	k := mustKeyShapes(t)
 	a := strings.Repeat("a", 40)
@@ -102,7 +101,7 @@ func TestKeyShapeMatchAnyCase(t *testing.T) {
 			t.Errorf("%.40s...: %q, want %q", name, got, want)
 		}
 	}
-	if got := k.match("PF_0123456789ABCDEF_CLAUDE_OAT.evil.example"); got != "" {
+	if got := k.match("PF_0123456789ABCDEF_CLAUDE_OAT.evil.example"); got != "placeholder" {
 		t.Errorf("an upper-cased placeholder spelling matched %q", got)
 	}
 }

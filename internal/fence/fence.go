@@ -464,8 +464,11 @@ func (s *scanner) noInject() *scanner {
 }
 
 // injectable returns the live value for the placeholder at span, or nil
-// when it is unknown, empty, or not a kind this SNI may carry.
+// when it is not exact, unknown, empty, or not a kind this SNI may carry.
 func (s *scanner) injectable(b []byte, span [2]int) []byte {
+	if !secrets.PlaceholderExact(b, span) {
+		return nil
+	}
 	sl, ok := s.idx.ByDummy[secrets.PlaceholderKey(b, span)]
 	if !ok || sl.Live == "" || !s.allowed(sl.Kind) || !s.placeAllows(b, span, sl.Kind) {
 		return nil

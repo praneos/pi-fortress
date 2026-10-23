@@ -41,7 +41,9 @@ func TestTrailingPlaceholdersMatchesRescan(t *testing.T) {
 		{"xx", 2},
 		{"xx pf_b0b1b2b3b4b5b6b7_A", 3},
 		{"xx pf_b0b1b2b3b4b5b6b7_Apf_b0b1b2b3b4b5b6b7_B", 3},
-		{"xx pf_b0b1b2b3b4b5b6b7_Ax", 25},
+		{"xx pf_b0b1b2b3b4b5b6b7_Ax", 3},
+		{"xx pf_b0b1b2b3b4b5b6b7_A-", 25},
+		{"xx PF_b0b1b2b3b4b5b6b7_a", 3},
 		{"pf_b0b1b2b3b4b5b6b7_", 20},
 	} {
 		if got := TrailingPlaceholders([]byte(tc.in)); got != tc.want {
