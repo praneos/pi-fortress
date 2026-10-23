@@ -60,7 +60,13 @@ fi
 # back over what the operator blocked, allowed or disabled.
 # This step does not merge sources.json as a ship merges it
 # (fetch.MergeSeed): a box with no tree gets no ship.
-for _f in blacklist.ips blacklist.domains never_block.ips never_block.domains direct_ip.allow sources.json; do
+# Each list here is in PI_OWNED (Makefile): the operator owns it, and a
+# ship keeps it. doh.*, core.hosts and key_prefixes.rules are not: they
+# ship, and each ship and each provision replace them.
+# The operator lines of core.hosts are in core.hosts.local, which apply
+# appends and this step never writes.
+for _f in blacklist.ips blacklist.domains never_block.ips never_block.domains direct_ip.allow sources.json \
+  allow.domains dns_types.allow git_push.allow; do
   if [[ ! -e "/etc/pi-fortress/${_f}" ]]; then
     install -m 0644 "${SRC}/vm/policy/${_f}" "/etc/pi-fortress/${_f}"
   fi
@@ -124,10 +130,7 @@ EOF
   fi
 fi
 cp "${SRC}"/vm/policy/core.hosts /etc/pi-fortress/core.hosts
-cp "${SRC}"/vm/policy/allow.domains /etc/pi-fortress/allow.domains
-cp "${SRC}"/vm/policy/dns_types.allow /etc/pi-fortress/dns_types.allow
 cp "${SRC}"/vm/policy/key_prefixes.rules /etc/pi-fortress/key_prefixes.rules
-cp "${SRC}"/vm/policy/git_push.allow /etc/pi-fortress/git_push.allow
 install -m 0644 "${SRC}"/vm/pi/observe.service /etc/systemd/system/pi-fortress-observe.service
 install -m 0644 "${SRC}"/vm/pi/alert.service /etc/systemd/system/pi-fortress-alert.service
 install -m 0644 "${SRC}"/vm/pi/www.service /etc/systemd/system/pi-fortress-www.service

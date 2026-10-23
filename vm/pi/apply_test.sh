@@ -1089,6 +1089,21 @@ grep -q 'apt-get\|install' "${tmp}/prov.out" && fail "provision.sh acted before 
 grep -qE '(^|[^A-Za-z_])/vagrant/' "${prov}" && fail "provision.sh still hardcodes a /vagrant path"
 grep -q 'SRC="\${SRC:-/vagrant}"' "${prov}" || fail "provision.sh lost the /vagrant default the lab mounts"
 
+# A second provision keeps the lists of the operator. On a box with no
+# tree, /etc/pi-fortress is the policy. provision.sh seeds each list of
+# PI_OWNED (Makefile) only when it is absent, and never copies one over.
+_owned="$(sed -n 's/^PI_OWNED = //p' "${here}/../../Makefile")"
+[[ -n "${_owned}" ]] || fail "no PI_OWNED in the Makefile"
+_seed="$(awk '/^for _f in blacklist\.ips /,/; do$/' "${prov}" | tr '\\\n;' '   ')"
+for _l in allow.domains dns_types.allow git_push.allow blacklist.ips never_block.domains sources.json; do
+  [[ " ${_seed} " == *" ${_l} "* ]] || fail "provision.sh does not seed ${_l} only when absent"
+done
+for _l in ${_owned}; do
+  if grep -E "^[[:space:]]*(cp|install)[[:space:]].*/etc/pi-fortress/${_l//./\\.}([[:space:]]|$)" "${prov}"; then
+    fail "provision.sh copies over ${_l}, a list of the operator"
+  fi
+done
+
 # The two scripts refuse a host that is not a Pi, a lab VM or the appliance.
 # They name the host and the override, before they change anything. A fake
 # device-tree model acts as a desktop. apt-get and systemctl are stubs that
