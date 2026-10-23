@@ -93,6 +93,7 @@ type sniDecided struct {
 type sniCheck struct {
 	q       sniQueue
 	resolve func(ctx context.Context, src netip.Addr, name string) ([]netip.Addr, bool, error)
+	seen    func(name string, addr netip.Addr) bool // nil: no memory of past answers
 	ech     []netip.Prefix
 	opaque  []netip.Prefix // where a non-TLS flow may go (SNIOpaqueFile)
 	now     func() time.Time
@@ -146,6 +147,9 @@ func (s *Server) sniLoop(ctx context.Context, seg *Segment) {
 		}
 		c := newSNICheck(q, s.sniResolver(seg), ech)
 		c.opaque = opaque
+		c.seen = func(name string, addr netip.Addr) bool {
+			return s.seen.has(seg.Name, name, addr, s.cfg.Now())
+		}
 		stop := context.AfterFunc(ctx, func() { q.Close() })
 		err = c.run(ctx)
 		stop()
@@ -289,9 +293,11 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 
 // judge is the policy. The name must resolve through the house, and must
 // not be sinkholed. The address of the flow must be one that the name
-// resolved to, or be in the same /24 as one. A CDN gives a set that
-// rotates, and the device asked a short time ago through the same profile
-// and exit, not now. ECH hides the real name behind the public name of
+// resolves to now or resolved to in the last sniSeenFor, or be in the same
+// /24 as one that it resolves to now. A CDN gives a set that rotates, and
+// the device asked a short time ago through the same profile and exit, not
+// now. A device can also use an expired answer after a long idle, when the
+// CDN has moved the name to a different range. ECH hides the real name behind the public name of
 // the provider. Thus an ECH flow goes through only to the published
 // ranges of that provider: the resolver of the device already filtered
 // its inner name.
@@ -313,6 +319,9 @@ func (c *sniCheck) judge(ctx context.Context, key sniFlowKey, h tlssni.Hello) (u
 		if a == dst {
 			return sniOK, ""
 		}
+	}
+	if c.seen != nil && c.seen(h.ServerName, dst) {
+		return sniOK, ""
 	}
 	if h.ECH {
 		if inPrefixes(c.ech, dst) {

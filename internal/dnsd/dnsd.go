@@ -242,6 +242,9 @@ type Server struct {
 	// gate is how long each element this process wrote into a gate set
 	// has left (gate.go).
 	gate gateLife
+	// seen is what each name resolved to on a segment with the SNI check
+	// (sniseen.go).
+	seen seenAnswers
 
 	udpSlots, tcpSlots int
 	// tcpPerSource is tcpConnsPerSource as a field, so that a test can make it
@@ -923,6 +926,9 @@ func (s *Server) answer(ctx context.Context, seg *Segment, src netip.Addr, req [
 	left, err := s.admitGate(seg, addrs, now)
 	if err != nil {
 		return s.reply(seg, hdr, q, e, empty(hdr, q, dnsmessage.RCodeServerFailure, e), src, verdict{act: dnslog.ActServfail}, quiet, maxUDP)
+	}
+	if seg.SNIQueue != 0 {
+		s.seen.add(seg.Name, q.Name.String(), addrs, now)
 	}
 	if left < setTimeout {
 		raw = capTTLs(raw, uint32(left/time.Second))
