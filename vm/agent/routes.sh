@@ -24,6 +24,88 @@ record_pin() {
   echo "agent: pinned the egress CA, sha256 ${sum}, in ${AGENT_ENV}"
 }
 
+# split_certs FILE DIR writes each certificate of FILE to DIR/1.pem,
+# DIR/2.pem, ... in the order of the file.
+split_certs() {
+  awk -v d="$2" '
+    /-----BEGIN CERTIFICATE-----/ { n++; f = d "/" n ".pem" }
+    f { print > f }
+    /-----END CERTIFICATE-----/ { if (f) close(f); f = "" }
+  ' "$1"
+}
+
+# ca_extends TRUSTED FETCHED succeeds when the box can take FETCHED in
+# place of the CA set TRUSTED that it already trusts. pf engine ca rotate
+# on the Pi serves such a set. Each certificate in FETCHED must be one of:
+#   - a certificate in TRUSTED;
+#   - a link: a CA certificate that a certificate in TRUSTED signed;
+#   - a root with the key of such a link.
+# Thus a new root gets trust only through a signature of a root that the
+# box trusts already. A device that answers for the Pi can copy the real
+# set and add its own root, but it cannot sign the link for that root.
+# A set with fewer certificates is also accepted: it takes trust away.
+ca_extends() {
+  local trusted="$1" fetched="$2" d f fp keys="" known="" late=() n=0 rc=1
+  command -v openssl >/dev/null 2>&1 || return 1
+  d="$(mktemp -d)"
+  mkdir -p "${d}/t" "${d}/f"
+  split_certs "${trusted}" "${d}/t"
+  split_certs "${fetched}" "${d}/f"
+  for f in "${d}"/t/*.pem; do
+    [[ -f "${f}" ]] || continue
+    known+="$(openssl x509 -noout -fingerprint -sha256 -in "${f}" 2>/dev/null)"$'\n'
+  done
+  for f in "${d}"/f/*.pem; do
+    [[ -f "${f}" ]] || continue
+    n=$((n + 1))
+    if ! fp="$(openssl x509 -noout -fingerprint -sha256 -in "${f}" 2>/dev/null)"; then
+      n=0
+      break
+    fi
+    if grep -qxF "${fp}" <<<"${known}"; then
+      continue
+    fi
+    if openssl x509 -noout -ext basicConstraints -in "${f}" 2>/dev/null | grep -q 'CA:TRUE' \
+       && openssl verify -CAfile "${trusted}" "${f}" >/dev/null 2>&1; then
+      keys+="$(openssl x509 -noout -pubkey -in "${f}" | sha256sum | awk '{print $1}')"$'\n'
+      continue
+    fi
+    late+=("${f}")
+  done
+  if ((n > 0)); then
+    rc=0
+    for f in ${late[@]+"${late[@]}"}; do
+      if ! grep -qxF "$(openssl x509 -noout -pubkey -in "${f}" 2>/dev/null | sha256sum | awk '{print $1}')" <<<"${keys}"; then
+        rc=1
+        break
+      fi
+    done
+  fi
+  rm -rf "${d}"
+  return "${rc}"
+}
+
+# trust_ca FILE puts each certificate of FILE in the system store as its
+# own file. openssl rehash skips a file with more than one certificate.
+# It removes the files of a certificate that is no longer in the set.
+trust_ca() {
+  local store="${PF_CA_STORE:-/usr/local/share/ca-certificates}" d f i=0
+  d="$(mktemp -d)"
+  split_certs "$1" "${d}"
+  install -d -m 0755 "${store}"
+  rm -f "${store}"/pi-fortress-egress-*.crt
+  for f in "${d}"/*.pem; do
+    [[ -f "${f}" ]] || continue
+    i=$((i + 1))
+    if ((i == 1)); then
+      install -m 0644 "${f}" "${store}/pi-fortress-egress.crt"
+    else
+      install -m 0644 "${f}" "${store}/pi-fortress-egress-${i}.crt"
+    fi
+  done
+  rm -rf "${d}"
+}
+
 # pick_ca sets ca to the CA to trust, or "". First it tries the copy on
 # the gateway: the engine signs with that CA. /vagrant is the desk
 # checkout, and the Pi shares it only in the lab. A real Pi keeps
@@ -53,6 +135,14 @@ pick_ca() {
     fi
     if [[ -z "${pin}" || "${sum}" == "${pin}" ]]; then
       install -D -m 0644 "${fetched}" "${CA_DIR}/egress-ca.pem"
+      ca="${CA_DIR}/egress-ca.pem"
+    elif [[ "$(sha256_of "${CA_DIR}/egress-ca.pem")" == "${pin}" ]] \
+         && ca_extends "${CA_DIR}/egress-ca.pem" "${fetched}"; then
+      # A rotation on the Pi (pf engine ca): the pinned set signed the
+      # new one. Trust the new set and pin it.
+      echo "agent: http://${PI_IP}/ca.pem is a CA set that the pinned CA signed; taking it"
+      install -D -m 0644 "${fetched}" "${CA_DIR}/egress-ca.pem"
+      record_pin "${sum}"
       ca="${CA_DIR}/egress-ca.pem"
     else
       echo "agent: http://${PI_IP}/ca.pem has sha256 ${sum}, not the pinned ${pin}; keeping the CA already trusted. If the Pi's CA really changed, set CA_SHA256 in ${AGENT_ENV} to its sha256 or re-provision." >&2
@@ -213,7 +303,7 @@ nft -f "${lock}"
 
 pick_ca
 if [[ -n "${ca}" ]]; then
-  install -m 0644 "${ca}" /usr/local/share/ca-certificates/pi-fortress-egress.crt
+  trust_ca "${ca}"
   rm -f /usr/local/share/ca-certificates/pi-fortress-mitm.crt
   update-ca-certificates >/dev/null 2>&1 || true
   echo "agent: trusted egress CA from ${ca}"

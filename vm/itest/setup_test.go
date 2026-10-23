@@ -63,7 +63,7 @@ func setupTests(t *testing.T) {
 				t.Errorf("re-enroll after CA delete: %v\n%s", err, out)
 			}
 		})
-		_, _ = ssh(t, 20*time.Second, "agent", "sudo rm -f /usr/local/share/ca-certificates/pi-fortress-egress.crt /usr/local/share/ca-certificates/pi-fortress-mitm.crt /etc/pi-fortress/egress-ca.pem /etc/pi-fortress/mitm-ca.pem; sudo update-ca-certificates >/dev/null")
+		_, _ = ssh(t, 20*time.Second, "agent", "sudo rm -f /usr/local/share/ca-certificates/pi-fortress-egress*.crt /usr/local/share/ca-certificates/pi-fortress-mitm.crt /etc/pi-fortress/egress-ca.pem /etc/pi-fortress/mitm-ca.pem; sudo update-ca-certificates >/dev/null")
 		_, err := ssh(t, 15*time.Second, "agent", "curl -fsS --max-time 10 -o /dev/null https://example.com/")
 		if err == nil {
 			t.Fatal("https succeeded without CA")

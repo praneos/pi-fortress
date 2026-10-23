@@ -165,7 +165,15 @@ case "${FAMILY}" in
       exit 1
     fi
     install -d -m 0755 /usr/local/share/ca-certificates
-    install -m 0644 "${tmp}" /usr/local/share/ca-certificates/pi-fortress-egress.crt
+    # During a CA rotation ca.pem holds more than one certificate.
+    # openssl rehash skips such a file, so each one gets its own file.
+    rm -f /usr/local/share/ca-certificates/pi-fortress-egress-*.crt
+    awk -v d=/usr/local/share/ca-certificates '
+      /-----BEGIN CERTIFICATE-----/ { n++; f = d "/pi-fortress-egress" (n > 1 ? "-" n : "") ".crt" }
+      f { print > f }
+      /-----END CERTIFICATE-----/ { if (f) close(f); f = "" }
+    ' "${tmp}"
+    chmod 0644 /usr/local/share/ca-certificates/pi-fortress-egress*.crt
     "${UPDATE_CA}" >/dev/null
     BUNDLE=/etc/ssl/certs/ca-certificates.crt
     ;;
