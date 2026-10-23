@@ -218,6 +218,7 @@ table inet fortress {
     iifname "eth2" ct state new add @seg_guest_conn_v4 { ip saddr ct count over 128 } jump seg_guest_connlimit
     iifname "eth2" ct state new ct count over 4096 jump seg_guest_connlimit
     iifname "eth2" ct state new meta l4proto tcp limit rate over 300/second burst 600 packets jump seg_guest_connlimit
+    ct state established jump isolate_ct
     ct state established,related accept
     ct state invalid drop
     iifname "eth0" ip daddr 198.18.0.0/16 tcp dport 22 counter reject with tcp reset
@@ -249,6 +250,17 @@ table inet fortress {
     iifname "eth2" jump seg_guest_egress
     iifname "eth2" oifname "wlan0" accept
     iifname "eth2" counter drop
+  }
+
+  chain isolate_ct {
+    iifname "eth0.79" oifname "eth0" ip daddr 10.77.0.10-10.77.0.12 tcp dport 22 ct direction original return
+    iifname "eth0" oifname "eth0.79" ip saddr 10.77.0.10-10.77.0.12 tcp sport 22 ct direction reply return
+    iifname "eth0" oifname "eth0.79" counter drop
+    iifname "eth0.79" oifname "eth0" counter drop
+    iifname "eth0.79" oifname "eth2" counter drop
+    iifname "eth0" oifname "eth2" counter drop
+    iifname "eth2" oifname "eth0" counter drop
+    iifname "eth2" oifname "eth0.79" counter drop
   }
 
   chain seg_desk_egress {

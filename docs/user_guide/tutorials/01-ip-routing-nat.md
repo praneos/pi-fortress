@@ -101,7 +101,7 @@ Think of a phone operator who connects a call. After the connection, the operato
 
 The ruleset uses this in two places:
 
-- `ct state established,related accept` is the first accept in `forward`. Flows that are already open skip the policy checks for each packet. Thus **the segment-isolation rules come after it**. They control only new flows.
+- `ct state established,related accept` is the first accept in `forward`. Flows that are already open skip the policy checks for each packet. Thus **the segment-isolation rules come after it**. They control only new flows. One exception: before this accept, each established packet goes through `isolate_ct`, the same isolation for flows that are already open. Thus a policy change that removes an SSH hole also stops the open flows through it.
 - The ruleset drops `INVALID` early. A packet that is not part of a known flow has no legitimate reason to exist. Examples are an off-by-one sequence number or half of a handshake.
 
 The observe subsystem reads the same table (`/proc/net/nf_conntrack`, with accounting on). It logs the bytes for each destination. This value is the high-water mark of one flow on that tuple. It is not a guaranteed total.

@@ -44,7 +44,8 @@ Isolation is a set of nft rules in the **forward** chain. The position of these 
 
 ```
 forward:
-  ct state established,related accept     ← established flows pass first
+  ct state established jump isolate_ct    ← established flows: isolation again
+  ct state established,related accept     ← then established flows pass
   ct state invalid drop
   # from here on: NEW flows only
   iifname "eth0.20" oifname "eth0.79" drop     ← agent → desk
@@ -58,14 +59,18 @@ forward:
 ```mermaid
 flowchart TD
     A["New packet in forward chain"] --> B{"Established or related flow?"}
-    B -->|"Yes"| Z["Accept"]
+    B -->|"Yes"| I{"Crosses a segment pair outside an SSH hole?"}
+    I -->|"Yes"| X["Drop"]
+    I -->|"No"| Z["Accept"]
     B -->|"No, and invalid"| Y["Drop"]
     B -->|"No, but new"| C{"Crosses a segment pair (e.g. agent to desk)?"}
     C -->|"Yes"| E["Drop"]
     C -->|"No"| F["Continue: port policy, then policy drop"]
 ```
 
-The position after the conntrack accept is important. The rules control only **new flows**. Isolation comes before the agent block. Each pair has one `drop` for each direction, never `reject`. Thus a prober gets only silence.
+The position after the conntrack accept is important. These rules control only **new flows**. Isolation comes before the agent block.
+
+An apply does not flush conntrack. Thus `isolate_ct` holds the same pair drops and SSH holes for **established flows**. It matches each hole in the two directions of the flow. If an apply removes a hole, the flows that use it stop at their next packet. Flows that cross no pair go on to the conntrack accept. Each pair has one `drop` for each direction, never `reject`. Thus a prober gets only silence.
 
 **Holes are named, not implicit.**
 

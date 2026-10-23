@@ -101,6 +101,41 @@ func TestPlainSegmentSSHFromIsOneWay(t *testing.T) {
 	}
 }
 
+// An apply does not flush conntrack. Thus the isolation also decides each
+// established packet: a flow whose SSH hole an apply removed stops, and a
+// flow whose hole stays continues in the two directions.
+func TestIsolationAppliesToEstablishedFlows(t *testing.T) {
+	nft := deskRuleset(t, deskBase+"SSH_FROM=10.78.0.20\nSSH_TO=10.77.0.10\n", labElements)
+	fwd := chain(t, nft, "forward")
+	jump, accept := strings.Index(fwd, "ct state established jump isolate_ct"), strings.Index(fwd, "ct state established,related accept")
+	if jump < 0 || accept < jump {
+		t.Fatalf("established packets must go to isolate_ct before the conntrack accept:\n%s", fwd)
+	}
+	ct := chain(t, nft, "isolate_ct")
+	holes := []string{
+		`iifname "eth2" oifname "eth3" ip saddr 10.78.0.20 tcp dport 22 ct direction original return`,
+		`iifname "eth3" oifname "eth2" ip daddr 10.78.0.20 tcp sport 22 ct direction reply return`,
+		`iifname "eth3" oifname "eth0" ip daddr 10.77.0.10 tcp dport 22 ct direction original return`,
+		`iifname "eth0" oifname "eth3" ip saddr 10.77.0.10 tcp sport 22 ct direction reply return`,
+		`iifname "eth2" oifname "eth0" ip saddr 10.78.0.20 ip daddr 10.77.0.10 tcp dport 22 ct direction original return`,
+		`iifname "eth0" oifname "eth2" ip saddr 10.77.0.10 ip daddr 10.78.0.20 tcp sport 22 ct direction reply return`,
+	}
+	first := strings.Index(ct, "counter drop")
+	for _, h := range holes {
+		if at := strings.Index(ct, h); at < 0 || at > first {
+			t.Errorf("isolate_ct must have %q before its first drop", h)
+		}
+	}
+	mustHave(t, "isolate_ct", ct,
+		`iifname "eth0" oifname "eth3" counter drop`, `iifname "eth3" oifname "eth0" counter drop`,
+		`iifname "eth2" oifname "eth3" counter drop`, `iifname "eth3" oifname "eth2" counter drop`,
+		`iifname "eth0" oifname "eth2" counter drop`, `iifname "eth2" oifname "eth0" counter drop`)
+	// Without the hole, the same flow meets the drop of its pair.
+	if strings.Contains(chain(t, deskRuleset(t, deskBase, labElements), "isolate_ct"), `"eth3" oifname "eth0" ip daddr`) {
+		t.Fatal("no SSH_TO, yet isolate_ct lets the desk reach the agent")
+	}
+}
+
 func TestPlainSegmentGateExemptsSSHToAndHonoursBlockDirectIPOff(t *testing.T) {
 	to := deskRuleset(t, deskBase+"SSH_TO=10.77.0.10-10.77.0.12\n", labElements)
 	mustHave(t, "resolver_gate", chain(t, to, "resolver_gate"),

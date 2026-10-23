@@ -84,8 +84,10 @@ want 'iifname "eth1" ip saddr 10.78.0.20 tcp dport 22 ct state new limit rate 30
 want 'ip saddr 10.78.0.0/24 oifname "wlan0" counter masquerade'
 want 'log prefix "pi-fortress house-drop: "'
 
-# Isolation comes before all agent forward rules.
-iso="$(grep -n 'iifname "eth0" oifname "eth1" counter drop' "${tmp}/house.nft" | cut -d: -f1)"
+# Isolation comes before all agent forward rules. The first match is in
+# forward; isolate_ct has the same drop for established flows.
+iso="$(grep -n 'iifname "eth0" oifname "eth1" counter drop' "${tmp}/house.nft" | head -1 | cut -d: -f1)"
+want 'ct state established jump isolate_ct'
 agent="$(grep -n 'iifname "eth0" meta nfproto ipv6 counter drop' "${tmp}/house.nft" | tail -1 | cut -d: -f1)"
 [[ "${iso}" -lt "${agent}" ]] || fail "isolation rule is not before the agent forward block"
 
@@ -331,7 +333,7 @@ grep -qF 'ENGINE_INSPECT="${ENGINE_INSPECT} -max-conns 512"' "${apply}" && grep 
 
 # Isolation is before the agent forward block. Thus the gateway first
 # compares a desk packet with the cross-segment rules.
-iso="$(grep -n 'iifname "eth0.79" oifname "eth0" counter drop' "${tmp}/desk.nft" | cut -d: -f1)"
+iso="$(grep -n 'iifname "eth0.79" oifname "eth0" counter drop' "${tmp}/desk.nft" | head -1 | cut -d: -f1)"
 agent="$(grep -n 'iifname "eth0" udp dport 443 counter drop' "${tmp}/desk.nft" | tail -1 | cut -d: -f1)"
 [[ -n "${iso}" && -n "${agent}" && "${iso}" -lt "${agent}" ]] || fail "desk: isolation is not before the agent forward block"
 
