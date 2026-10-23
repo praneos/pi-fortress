@@ -57,7 +57,7 @@ func (s *Store) writeSidecar(path string, m map[string]int64) error {
 
 func (s *Store) editSidecar(slot, path string, parse func(string) map[string]int64, fn func(map[string]int64) error) error {
 	slot = strings.ToLower(strings.TrimSpace(slot))
-	if err := validSlotID(slot); err != nil {
+	if err := ValidSlotID(slot); err != nil {
 		return err
 	}
 	return s.withLock(func() error {

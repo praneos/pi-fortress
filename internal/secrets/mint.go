@@ -244,7 +244,14 @@ func (s *Store) ListSlots() ([]SlotList, error) {
 	return out, nil
 }
 
-func validSlotID(slot string) error {
+// ValidKind reports whether kind is a stored kind: an upper-case letter,
+// then upper-case letters, digits and '_'.
+func ValidKind(kind string) bool { return kindRe.MatchString(kind) }
+
+// ValidSlotID accepts a slot ID in any case and with space around it, as a
+// user types it. A caller that needs the stored form also compares the ID
+// with its lower-case, trimmed form.
+func ValidSlotID(slot string) error {
 	slot = strings.ToLower(strings.TrimSpace(slot))
 	if len(slot) != SlotLen {
 		return errors.New("invalid slot")
@@ -298,7 +305,7 @@ func dropSlotLines(lines []string, slot string) (kept, removed []string) {
 
 func (s *Store) DeleteSlot(slot string) ([]string, error) {
 	slot = strings.ToLower(strings.TrimSpace(slot))
-	if err := validSlotID(slot); err != nil {
+	if err := ValidSlotID(slot); err != nil {
 		return nil, err
 	}
 	var removed []string

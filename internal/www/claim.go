@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	"pi-fortress/internal/enroll"
+	"pi-fortress/internal/secrets"
 )
 
 const (
@@ -117,6 +119,9 @@ func IssueClaim(dir, slot string, kinds []string, gitHosts ...string) (Claim, er
 	c := Claim{Code: code, Slot: strings.ToLower(slot), Kinds: kinds, Issued: now, Expires: now.Add(ClaimTTL), GitHosts: gitHosts,
 		// dir is ClaimsDir(wwwDir), so its parent is what www serves.
 		SetupSHA256: fileSHA256(setupPath(filepath.Dir(dir))), CASHA256: fileSHA256(caPath(filepath.Dir(dir)))}
+	if !scriptFields(c) {
+		return Claim{}, errors.New("claim: invalid slot or kind")
+	}
 	raw, err := json.Marshal(c)
 	if err != nil {
 		return Claim{}, err
@@ -161,7 +166,9 @@ func groupOfDir(dir string, f *os.File) error {
 
 // RedeemClaim consumes a code. The rename is the single-use guarantee: a
 // second caller finds no <CODE>.json. RedeemClaim also consumes expired
-// files, and refuses them.
+// files, and refuses them. It also refuses a file with a field that
+// scriptFields does not accept. That answer is the same as for an unknown
+// code.
 func RedeemClaim(dir, code string) (Claim, error) {
 	code = strings.ToUpper(strings.TrimSpace(code))
 	if !validCode(code) {
@@ -177,7 +184,7 @@ func RedeemClaim(dir, code string) (Claim, error) {
 		return Claim{}, ErrNoClaim
 	}
 	var c Claim
-	if json.Unmarshal(raw, &c) != nil || c.Code != code || time.Now().After(c.Expires) {
+	if json.Unmarshal(raw, &c) != nil || c.Code != code || time.Now().After(c.Expires) || !scriptFields(c) {
 		return Claim{}, ErrNoClaim
 	}
 	return c, nil
@@ -202,8 +209,14 @@ func Sweep(dir string) {
 }
 
 // ClaimScript is what the agent pipes into sh: setup.sh for the CA and
-// network, then the placeholder files for the slot.
+// network, then the placeholder files for the slot. ClaimScript writes the
+// fields of c and pi into shell. So it writes no value that does not match
+// its grammar (scriptFields, scriptHost). For such a value, the script only
+// stops.
 func ClaimScript(pi string, c Claim) string {
+	if !scriptHost(pi) || !scriptFields(c) {
+		return "#!/bin/sh\necho 'pi-fortress: this claim is not valid; issue another on the gateway' >&2\nexit 1\n"
+	}
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\nset -e\nPI='" + pi + "'\n")
 	// Without both hashes, nothing below can be checked. A claim issued before
@@ -317,6 +330,39 @@ echo 'pi-fortress: git not found, git credentials skipped'
 fi
 `
 }
+
+// scriptFields reports whether each field of c that ClaimScript writes
+// matches its grammar. The slot must be in its stored form: 16 lower-case
+// hex digits. Each kind must be a stored kind. Each hash must be empty or
+// 64 lower-case hex digits. GitHosts is not in this check. gitCredentials
+// drops each name that safeHost refuses, because core.hosts can give a
+// "*." name that has no place in ~/.git-credentials.
+func scriptFields(c Claim) bool {
+	if c.Slot != strings.ToLower(strings.TrimSpace(c.Slot)) || secrets.ValidSlotID(c.Slot) != nil {
+		return false
+	}
+	for _, k := range c.Kinds {
+		if !secrets.ValidKind(k) {
+			return false
+		}
+	}
+	return validSum(c.SetupSHA256) && validSum(c.CASHA256)
+}
+
+// validSum accepts "" or the hex sha256 that fileSHA256 gives.
+func validSum(s string) bool {
+	if s == "" {
+		return true
+	}
+	if len(s) != 2*sha256.Size || s != strings.ToLower(s) {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
+// scriptHost accepts an IP address or a name that safeHost accepts.
+func scriptHost(h string) bool { return net.ParseIP(h) != nil || safeHost(h) }
 
 func safeHost(h string) bool {
 	if h == "" {
