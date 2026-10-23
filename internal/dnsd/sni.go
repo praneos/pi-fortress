@@ -1,6 +1,7 @@
 package dnsd
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
@@ -264,10 +265,20 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 		c.verdict(p.ID, nfq.Drop, nil)
 		return
 	}
-	f.held = append(f.held, sniHeld{p.ID, p.Mark})
 	// A retransmit from the same sequence number can carry more: the client
-	// joins the segments that are not yet acknowledged. Keep the longer copy.
-	if old, dup := f.segs[seq]; !dup || len(payload) > len(old) {
+	// joins the segments that are not yet acknowledged. The server keeps the
+	// bytes that it got first and takes only the new tail. The check does the
+	// same. A retransmit that changes the bytes it repeats would show the
+	// check one name and the server another. It is refused.
+	old, dup := f.segs[seq]
+	if dup && len(payload) > len(old) && !bytes.Equal(payload[:len(old)], old) {
+		c.mu.Unlock()
+		c.decide(key, sniBad, "retransmit changes data already held")
+		c.verdict(p.ID, nfq.Drop, nil)
+		return
+	}
+	f.held = append(f.held, sniHeld{p.ID, p.Mark})
+	if !dup || len(payload) > len(old) {
 		f.segs[seq] = append([]byte(nil), payload...)
 		f.bytes += len(payload) - len(old)
 		if !f.syn && seqBefore(seq, f.first) {

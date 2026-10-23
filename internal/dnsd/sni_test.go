@@ -228,6 +228,23 @@ func TestSNIKeepsTheLongerRetransmit(t *testing.T) {
 			t.Fatalf("packet %d: %+v", id, v)
 		}
 	}
+	// A longer retransmit that changes the bytes it repeats is refused. The
+	// server keeps the first bytes, so the check would read a name that the
+	// server does not get.
+	c2, q2 := newTestCheck(t, r)
+	first := clientHello(t, "evil.example")[:cut]
+	c2.packet(ctx, nfq.Packet{ID: 20, Payload: tcp4("172.66.147.243", 7000, first)})
+	q2.none(t, 20)
+	c2.packet(ctx, nfq.Packet{ID: 21, Payload: tcp4("172.66.147.243", 7000, hello)})
+	if v := q2.wait(t, 21); v.v != nfq.Drop {
+		t.Fatalf("changed retransmit: %+v, want a drop", v)
+	}
+	if v := q2.wait(t, 20); v.mark != sniBad {
+		t.Fatalf("held first copy: %+v, want the bad mark", v)
+	}
+	if len(r.asked) != 1 {
+		t.Fatalf("asked %v, want only the first flow's lookup", r.asked)
+	}
 }
 
 // A connection that is open but has no data yet (a preconnect) is logged
