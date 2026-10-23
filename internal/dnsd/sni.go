@@ -251,9 +251,11 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 		return
 	}
 	f.held = append(f.held, sniHeld{p.ID, p.Mark})
-	if _, dup := f.segs[seq]; !dup {
+	// A retransmit from the same sequence number can carry more: the client
+	// joins the segments that are not yet acknowledged. Keep the longer copy.
+	if old, dup := f.segs[seq]; !dup || len(payload) > len(old) {
 		f.segs[seq] = append([]byte(nil), payload...)
-		f.bytes += len(payload)
+		f.bytes += len(payload) - len(old)
 		if !f.syn && seqBefore(seq, f.first) {
 			f.first = seq
 		}
