@@ -32,6 +32,7 @@ webflow.io
 framer.website
 notion.site
 carrd.co
+githubusercontent.com
 
 # Application and storage platforms
 herokuapp.com
@@ -66,12 +67,19 @@ storage.googleapis.com
 sites.google.com
 docs.google.com
 drive.google.com
+googleusercontent.com
 s3.amazonaws.com
 cloudfront.net
 elasticbeanstalk.com
 amplifyapp.com
 awsapprunner.com
 b-cdn.net
+akamaized.net
+akamaihd.net
+edgekey.net
+edgesuite.net
+fastly.net
+dropboxusercontent.com
 myshopify.com
 
 # Blogs and site builders
