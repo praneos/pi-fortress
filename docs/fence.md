@@ -457,6 +457,15 @@ the other. For the same reason, the house gate exempts
 agent. Under the default `HOUSE_EGRESS=strict`, it checks each new 443 flow
 by its TLS name (the house SNI check). Under a different egress mode, it
 checks only a 443 miss by its TLS name and does not drop it.
+
+The house SNI check passes a flow when its name resolves through the house,
+is not blocked, and the flow address is one that the name resolved to or is
+in the same /24 as one. The /24 lets a CDN that rotates its addresses
+through. A flow with Encrypted Client Hello (ECH) shows only the outer name
+of the provider: it passes to a resolved address of that name or into the
+ranges of `vm/policy/house_ech.ips`, whatever the inner name, and never by
+the /24. A ClientHello that does not parse, or that has an extension type
+two times, does not pass.
 `direct_ip.allow` ships empty: nothing that an agent runs has needed it.
 
 A plain segment (`segments.d/<name>.env`, the desk) has the gate from its own

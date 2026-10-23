@@ -25,7 +25,8 @@ var (
 	// version, or a handshake type other than ClientHello).
 	ErrNotTLS = errors.New("tlssni: not a TLS ClientHello")
 	// ErrMalformed means that the input has a TLS shape, but its lengths
-	// or structure are not correct.
+	// or structure are not correct. An extension type that occurs two times
+	// is also this error.
 	ErrMalformed = errors.New("tlssni: malformed ClientHello")
 )
 
@@ -167,7 +168,11 @@ func parseClientHello(body []byte) (Hello, int, error) {
 		return Hello{}, 0, ErrMalformed
 	}
 
+	// No extension type may repeat (RFC 8446 4.2), as crypto/tls and
+	// internal/hello require. A second server_name could give a name here
+	// that is not the name that the TLS stack of the origin reads.
 	var h Hello
+	seen := map[uint16]bool{}
 	end := off + extLen
 	for off < end {
 		if off+4 > end {
@@ -176,9 +181,10 @@ func parseClientHello(body []byte) (Hello, int, error) {
 		extType := binary.BigEndian.Uint16(body[off : off+2])
 		extDataLen := int(binary.BigEndian.Uint16(body[off+2 : off+4]))
 		off += 4
-		if off+extDataLen > end {
+		if off+extDataLen > end || seen[extType] {
 			return Hello{}, 0, ErrMalformed
 		}
+		seen[extType] = true
 		data := body[off : off+extDataLen]
 		off += extDataLen
 
@@ -188,9 +194,7 @@ func parseClientHello(body []byte) (Hello, int, error) {
 			if err != nil {
 				return Hello{}, 0, err
 			}
-			if h.ServerName == "" {
-				h.ServerName = name
-			}
+			h.ServerName = name
 		case 0xfe0d: // encrypted_client_hello
 			h.ECH = true
 		}

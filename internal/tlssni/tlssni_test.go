@@ -55,9 +55,16 @@ func fragment(t *testing.T, hello []byte, splitAt int) []byte {
 }
 
 // insertECH puts an encrypted_client_hello (0xfe0d) extension into a
-// captured single-record ClientHello. It corrects each length that
-// changes: the extensions block, the handshake body, and the record.
+// captured single-record ClientHello.
 func insertECH(t *testing.T, hello []byte) []byte {
+	t.Helper()
+	return insertExt(t, hello, []byte{0xfe, 0x0d, 0x00, 0x02, 0xaa, 0xbb}) // type, len=2, 2 bytes of filler
+}
+
+// insertExt appends one extension (type, length and data) to the extensions
+// of a captured single-record ClientHello. It corrects each length that
+// changes: the extensions block, the handshake body, and the record.
+func insertExt(t *testing.T, hello, newExt []byte) []byte {
 	t.Helper()
 	recLen := int(binary.BigEndian.Uint16(hello[3:5]))
 	body := hello[5 : 5+recLen]
@@ -78,8 +85,6 @@ func insertECH(t *testing.T, hello []byte) []byte {
 	if extEnd != len(chBody) {
 		t.Fatalf("captured hello has trailing bytes past extensions")
 	}
-
-	newExt := []byte{0xfe, 0x0d, 0x00, 0x02, 0xaa, 0xbb} // type, len=2, 2 bytes of filler
 
 	out := make([]byte, 0, len(hello)+len(newExt))
 	out = append(out, hello[:5+4]...) // record header + handshake header, fixed below
@@ -223,6 +228,36 @@ func TestCorruptedLengths(t *testing.T) {
 		_, _, err := Parse(c)
 		if err != ErrMalformed {
 			t.Fatalf("case %d: err=%v, want ErrMalformed", i, err)
+		}
+	}
+}
+
+// sniExt is a server_name extension with one host_name.
+func sniExt(name string) []byte {
+	n := len(name)
+	out := []byte{0x00, 0x00}
+	out = binary.BigEndian.AppendUint16(out, uint16(n+5))
+	out = binary.BigEndian.AppendUint16(out, uint16(n+3))
+	out = append(out, 0)
+	out = binary.BigEndian.AppendUint16(out, uint16(n))
+	return append(out, name...)
+}
+
+// An extension type may occur only one time in a ClientHello (RFC 8446
+// 4.2). Parse refuses a hello with a type two times. Thus the name that it
+// gives is the one name that the TLS stack of the origin can read.
+func TestDuplicateExtensionMalformed(t *testing.T) {
+	hello := captureClientHello(t, &tls.Config{ServerName: "example.com", InsecureSkipVerify: true})
+	if h := mustParse(t, insertExt(t, hello, []byte{0x0a, 0x0a, 0x00, 0x00})); h.ServerName != "example.com" {
+		t.Fatalf("ServerName=%q", h.ServerName)
+	}
+	for name, buf := range map[string][]byte{
+		"server_name": insertExt(t, hello, sniExt("other.example")),
+		"ech":         insertECH(t, insertECH(t, hello)),
+		"other type":  insertExt(t, insertExt(t, hello, []byte{0x0a, 0x0a, 0x00, 0x00}), []byte{0x0a, 0x0a, 0x00, 0x01, 0x00}),
+	} {
+		if _, _, err := Parse(buf); err != ErrMalformed {
+			t.Fatalf("%s: err=%v, want ErrMalformed", name, err)
 		}
 	}
 }
