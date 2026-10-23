@@ -4,6 +4,7 @@
 package policycompile
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -41,6 +42,38 @@ var (
 )
 
 const minBits = 8
+
+// FeedMinBits is the widest prefix that a fetched IP feed can add to the
+// blocklist, when sources.json does not set min_ip_prefix. One feed line
+// with a /8 drops 16M addresses. The widest entries of the shipped feeds
+// are /12, in Spamhaus DROP (2026-09-21: three /12, and /14 and /15
+// ranges). Thus /12 keeps each real entry, and one line drops at most 1M
+// addresses. blacklist.ips of the operator keeps the /8 floor (minBits).
+const FeedMinBits = 12
+
+// FeedMinBitsIn gives the min_ip_prefix of sources.json in policyDir, or
+// FeedMinBits. A value that is not in minBits..32, or a file that does not
+// parse, gives FeedMinBits: pf fetch reports a bad sources.json, and the
+// compile must not open the floor because of it.
+func FeedMinBitsIn(policyDir string) int {
+	raw, err := os.ReadFile(filepath.Join(policyDir, "sources.json"))
+	if err != nil {
+		return FeedMinBits
+	}
+	var spec struct {
+		MinIPPrefix int `json:"min_ip_prefix"`
+	}
+	if json.Unmarshal(raw, &spec) != nil || spec.MinIPPrefix < minBits || spec.MinIPPrefix > 32 {
+		return FeedMinBits
+	}
+	return spec.MinIPPrefix
+}
+
+// widerThan says if an IPv4 item is a prefix wider than /bits.
+func widerThan(item string, bits int) bool {
+	p, ok := parsePrefix4(item)
+	return ok && p.Bits() < bits
+}
 
 // An allow list cancels a drop. Thus a wide prefix there is a hole, not a
 // typo that fails closed. /24 is sufficient for the seeded ControlD anycast
@@ -123,6 +156,10 @@ type Summary struct {
 	// SharedParents are the feed entries that did not compile because each
 	// is at a shared parent (AtSharedParent), in order. Line prints them.
 	SharedParents []string
+	// WidePrefixes are the feed prefixes that did not compile because each
+	// is wider than FeedFloor, in order. Line prints them.
+	WidePrefixes []string
+	FeedFloor    int
 }
 
 // skipLine tells the operator which feed entries did not compile, and why.
@@ -161,6 +198,9 @@ func (s Summary) Line() string {
 	}
 	if len(s.SharedParents) > 0 {
 		line += skipLine(s.SharedParents, "at a shared parent ("+SharedParentsFile+")")
+	}
+	if len(s.WidePrefixes) > 0 {
+		line += skipLine(s.WidePrefixes, fmt.Sprintf("wider than /%d (min_ip_prefix)", s.FeedFloor))
 	}
 	return line
 }
@@ -865,6 +905,9 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	refuseFeed := func(items []string) []string {
 		return dropFeed(items, func(d string) bool { return AtSharedParent(d, shared) }, sharedDropped)
 	}
+	floor := FeedMinBitsIn(policyDir)
+	wideDropped := map[string]struct{}{}
+	feedIPs = dropFeed(feedIPs, func(ip string) bool { return widerThan(ip, floor) }, wideDropped)
 	// The feed half goes first, as before the split.
 	ips := append(feedIPs, localIPs...)
 	domains := append(refuseFeed(feedDomains), localDomains...)
@@ -986,5 +1029,7 @@ func Compile(policyDir string, out Out) (Summary, error) {
 		GitPushes:       gitPush.Len(),
 		Warnings:        warnings,
 		SharedParents:   sorted(sharedDropped),
+		WidePrefixes:    sorted(wideDropped),
+		FeedFloor:       floor,
 	}, nil
 }

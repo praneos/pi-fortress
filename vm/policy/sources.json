@@ -4,6 +4,7 @@
   "timeout_sec": 60,
   "max_ips": 20000,
   "max_domains": 300000,
+  "min_ip_prefix": 12,
   "feeds": [
     {
       "id": "urlhaus-domains-online",
