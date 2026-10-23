@@ -273,6 +273,26 @@ func TestSNIChecksANewConnectionOnTheSamePorts(t *testing.T) {
 	}
 }
 
+// A SYN that carries data (TCP Fast Open) also starts a new check, and its
+// data is the start of the stream.
+func TestSNIChecksASYNWithData(t *testing.T) {
+	ip := netip.MustParseAddr("172.66.147.243")
+	r := &fakeResolve{
+		ans:   map[string][]netip.Addr{"example.com": {ip}},
+		block: map[string]bool{"tracker.example": true},
+	}
+	ctx := context.Background()
+	c, q := newTestCheck(t, r)
+	c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4f(ip.String(), 4999, tcpSYN, clientHello(t, "example.com"))})
+	if v := q.wait(t, 1); v.mark != sniOK {
+		t.Fatalf("Fast Open SYN: %+v, want the ok mark", v)
+	}
+	c.packet(ctx, nfq.Packet{ID: 2, Payload: tcp4f(ip.String(), 90000, tcpSYN, clientHello(t, "tracker.example"))})
+	if v := q.wait(t, 2); v.mark != sniBad {
+		t.Fatalf("Fast Open SYN of a new connection with a blocked name: %+v, want the bad mark", v)
+	}
+}
+
 // Only the first SYN, before any data, sets the start of the stream. A
 // later SYN with a different sequence number is refused. A retransmit of
 // the first SYN is not.
