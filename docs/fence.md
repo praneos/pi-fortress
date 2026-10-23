@@ -46,7 +46,8 @@ The SNI is mandatory and must be a valid host name. The Host must match that
 SNI, or be a subdomain of it. Thus Host `api.anthropic.com` with SNI
 `evil.example` does not inject. For an off-core host and for a kind mismatch,
 the fence refuses the request with one response that does not give the cause
-(§5.2b). The fence strips live-looking values.
+(§5.2b). The fence strips live-looking values in the bytes that it scans
+(see "What the fence scans" below).
 
 Substitution is **header-only**. The fence substitutes only into the
 credential headers of the kind:
@@ -93,13 +94,30 @@ body. It never goes:
 - in a second or case-variant `refresh_token`, or
 - off the refresh path.
 
-A placeholder of an allowed kind in any other location refuses the request
-(`placeholder_outside_header`, an alert). Examples are the URL and any other
-buffered body. A placeholder in a streamed body stops the copy
-(`placeholder_in_streamed_body`, §5.2b). Data in a body or a URL can come back
-past the literal scrub. Examples are a model that is asked to print its prompt
-in reverse, a public gist, and an access log. Stripping does not change. It
-runs over the URL, every header, and the body.
+A placeholder of an allowed kind in any other location that the fence scans
+refuses the request (`placeholder_outside_header`, an alert). Examples are
+the URL and any other buffered body. A placeholder in a streamed body stops
+the copy (`placeholder_in_streamed_body`, §5.2b). Data in a body or a URL can
+come back past the literal scrub. Examples are a model that is asked to print
+its prompt in reverse, a public gist, and an access log. Stripping does not
+change. It runs over the URL, every header, and the body.
+
+What the fence scans:
+
+- The literal bytes of the method, the request target, each header name and
+  value, and the body.
+- A gzip or deflate body, after the decode (§5.3b).
+- The decoded user:password of `Authorization: Basic`.
+- The request target after the fence decodes all percent escapes.
+
+A placeholder in a decoded form refuses the request, as in the literal
+bytes. A live value or a token-prefix match that only a decoded form shows
+also refuses the request (`encoded_body_token`, `encoded_url_token`),
+because the fence cannot strip it in place. The fence does not decode other
+encodings: base64 outside `Authorization: Basic`, JSON `\u` escapes, a
+custom encoding, or a value split across fields. A placeholder or a live
+value in such an encoding passes. `docs/risk_model.md` §2.1 gives this
+residual.
 
 A live-looking value matches a `vm/policy/key_prefixes.rules` shape. The
 match is the prefix, then the charset of the key, to at least the length of
