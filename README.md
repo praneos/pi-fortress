@@ -115,6 +115,11 @@ ssh -t <user>@<pi> "sudo pf upgrade -bundle pf-bundle-$V-arm64.tar -sig pf-bundl
 Check the box, then run `sudo pf upgrade -confirm` on the Pi within 10
 minutes. If not, the Pi rolls back. Details: [docs/gateway_install.md](docs/gateway_install.md#install-from-source).
 
+`pf upgrade` does not update the OS packages. Run
+`sudo apt update && sudo apt full-upgrade`, or let the daily
+`unattended-upgrades` run install the security updates. Reboot when
+`pf doctor` tells you to (rung `reboot`).
+
 ## Documentation
 
 - [Getting started](docs/user_guide/getting_started.md): the first ten minutes

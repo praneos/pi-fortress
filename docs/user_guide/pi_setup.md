@@ -303,6 +303,8 @@ sudo pf upgrade -confirm
 ```
 If an upgrade fails its own health check, it rolls back immediately. If an upgrade passes, it reverts automatically after ten minutes, unless you confirm it. Thus an upgrade that disconnects you undoes itself.
 
+`pf upgrade` does not update the OS packages. Run `sudo apt update && sudo apt full-upgrade`, or let the daily `unattended-upgrades` run install the security updates. Reboot when `pf doctor` tells you to (rung `reboot`).
+
 `sudo pf rollback` goes back one version manually, to the release before this one. You cannot go back further. If rollback cannot run because a different apply is running, it tells you. It then exits non-zero and keeps the pending upgrade armed. Run it again.
 
 A rollback does not change the block lists and the other lists that you edit. An upgrade also does not change them. Thus a rollback does not undo an edit or a removal that you made after the upgrade. Always give a tag: `latest` does not match the release download paths.
