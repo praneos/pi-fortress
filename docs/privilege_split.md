@@ -125,6 +125,11 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   `NoNewPrivileges` and memory and task caps. The feed refresh cannot read
   `/etc/pi-fortress/broker`, `/var/lib/pi-fortress/engine` or
   `/var/lib/pi-fortress/www`.
+- `wg-alert.service` runs as root, for `wg show`. It can write only
+  `/var/lib/pi-fortress/wg.last`. Each DHCP dnsmasq (`dns-house.service`,
+  `dhcp@.service`) can write only its own lease file under
+  `/var/lib/pi-fortress` and `/var/log/pi-fortress`. apply makes each of
+  these files before it starts the unit.
 - The broker serves one source prefix. The unit reads `AGENT_NET` from
   `net.env` for `-agent-net`. With this flag, the broker refuses with 403 a
   preamble with a source outside that prefix. It does this before it parses

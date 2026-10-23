@@ -85,7 +85,12 @@ SystemCallFilter=~@privileged
 # bounding set, so that call can only set the owner that the file
 # already has.
 SystemCallFilter=@chown
-ReadWritePaths=/var/lib/pi-fortress /var/log/pi-fortress
+# The lease file, nothing else under /var/lib/pi-fortress. dnsmasq
+# rewrites it in place. apply.sh makes it before it starts the unit. The
+# log directory, not the log file: logrotate renames the log, and dnsmasq
+# opens the path again on SIGUSR2. A bind mount of the file would keep
+# the old inode. The account owns only its own files there.
+ReadWritePaths=/var/lib/pi-fortress/dhcp-%i.leases /var/log/pi-fortress
 InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www
 
 [Install]

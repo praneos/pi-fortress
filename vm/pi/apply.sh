@@ -1804,6 +1804,11 @@ EOF
     sed "s/wg0/${WG_IF}/g" "${PI_LIB}/wg-alert.service" >"${WORKDIR}/wg-alert.service"
     install -m 0644 "${WORKDIR}/wg-alert.service" /etc/systemd/system/pi-fortress-wg-alert.service
     install -m 0644 "${PI_LIB}/wg-alert.timer" /etc/systemd/system/pi-fortress-wg-alert.timer
+    # The one path that wg-alert.service can write. The unit does not
+    # start without it. The check runs as root, so root owns it.
+    touch /var/lib/pi-fortress/wg.last
+    chown root:root /var/lib/pi-fortress/wg.last
+    chmod 0644 /var/lib/pi-fortress/wg.last
     systemctl daemon-reload
     systemctl enable --now pi-fortress-wg-alert.timer >/dev/null 2>&1 || true
   fi

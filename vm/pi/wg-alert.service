@@ -21,5 +21,7 @@ RestrictRealtime=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
 RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK
-ReadWritePaths=/var/lib/pi-fortress
-InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine
+# The state file of the check, nothing else. pf alert wg rewrites it in
+# place. apply.sh makes it before it enables the timer.
+ReadWritePaths=/var/lib/pi-fortress/wg.last
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www
