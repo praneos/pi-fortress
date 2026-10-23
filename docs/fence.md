@@ -196,19 +196,19 @@ the core echo off the lab. The response is 501, or the 403 that the core echo
 already answers off the lab.
 
 Harvest runs on `/oauth/token` and `/v1/oauth/token`. It runs only when the
-SNI and the Host agree on a core host that has `CLAUDE_ORT`. The match uses
-the path that the origin server will route to, not the bytes that the agent
-wrote. To get this path:
+SNI and the Host agree on a core host that has `CLAUDE_ORT`. The broker
+forwards the target as the agent wrote it. Thus the match uses those bytes,
+and the path must be exactly one of the two paths:
 
 - The authority of an absolute-form target of any scheme is dropped. (The
   broker refuses such a target before the fence runs anyway.)
-- The query and the fragment are cut.
-- The rest is percent-decoded to a fixed point and lowercased.
-- Runs of `/` are collapsed, and its dot segments are resolved.
+- A query after `?` is permitted.
+- A fragment, a percent escape, a dot segment, a run of `/` or a case
+  variant in the path makes the target not a refresh path. An origin can
+  route such a target to a different handler.
 
-A target that does not settle under that decoding is not a refresh path. The
-refresh token is substituted only on a refresh path. Thus the same test
-decides both. The fence refuses a refresh token on an unsettled target. It
+The refresh token is substituted only on a refresh path. Thus the same test
+decides both. The fence refuses a refresh token on any other target. It
 never substitutes that token with the harvest disarmed. Thus no pair is
 minted that the response scrub has not heard of.
 

@@ -130,19 +130,19 @@ func (s *StreamStrips) Events() []StripEvent {
 
 // IsOAuthPath is the exact set of refresh endpoints that the fence
 // harvests from. A substring match would let any path that mentions oauth
-// rotate the slot. But the exact match is against a path that the origin
-// agrees with, not against the bytes that the agent wrote. This function
-// reads each of these as the endpoint that an origin routes it to: an
-// absolute-form target of any scheme, a percent-encoded letter, a dot
-// segment, and a run of slashes. The broker refuses all forms except
-// origin-form before the fence runs. This function strips the scheme
+// rotate the slot. The broker forwards the target as the agent wrote it.
+// Thus the path bytes must be exactly "/v1/oauth/token" or "/oauth/token".
+// A query after '?' is permitted. A fragment, a percent escape, a dot
+// segment, a run of slashes or a case variant in the path is not a refresh
+// path: an origin can route such a target to a different handler. The
+// broker refuses all forms except origin-form before the fence runs. This
+// function strips the scheme and authority of an absolute-form target
 // anyway, so the answer does not depend on that broker check.
 //
-// A target that does not reduce to one path is not a refresh path.
 // The fence substitutes the refresh token only on a refresh path
-// (scanner.at). Thus on such a target, the fence refuses a CLAUDE_ORT
-// placeholder and never arms the harvest: nothing ever asks for what the
-// origin could mint.
+// (scanner.at), and the harvest uses this same test. Thus on any other
+// target, the fence refuses a CLAUDE_ORT placeholder and never arms the
+// harvest: nothing ever asks for what the origin could mint.
 func IsOAuthPath(target string) bool {
 	p := target
 	if scheme, rest, ok := strings.Cut(p, "://"); ok && isScheme(scheme) {
@@ -153,22 +153,11 @@ func IsOAuthPath(target string) bool {
 			p = "/"
 		}
 	}
-	if i := strings.IndexAny(p, "?#"); i >= 0 {
-		p = p[:i]
-	}
-	dp, stable := unescapeAll(p)
-	if !stable {
+	if strings.Contains(p, "#") {
 		return false
 	}
-	dp = strings.ToLower(dp)
-	for strings.Contains(dp, "//") {
-		dp = strings.ReplaceAll(dp, "//", "/")
-	}
-	switch removeDotSegments(dp) {
-	case "/v1/oauth/token", "/oauth/token":
-		return true
-	}
-	return false
+	p, _, _ = strings.Cut(p, "?")
+	return p == "/v1/oauth/token" || p == "/oauth/token"
 }
 
 // isScheme is the RFC 3986 scheme grammar: a letter, then letters,
@@ -285,32 +274,6 @@ func fieldSpans(body []byte, keys []string) (map[string][2]int, bool) {
 		return nil, false
 	}
 	return spans, true
-}
-
-// removeDotSegments resolves "." and ".." in the same way that RFC 3986
-// §5.2.4 tells an origin to resolve them before it routes. Thus this code
-// reads "/v1/x/../oauth/token" as the endpoint that the origin routes it
-// to. A trailing dot segment leaves the trailing slash, as the RFC says.
-func removeDotSegments(p string) string {
-	if !strings.Contains(p, ".") {
-		return p
-	}
-	segs := strings.Split(p, "/")
-	out := make([]string, 0, len(segs))
-	for i, s := range segs {
-		switch s {
-		case ".", "..":
-			if s == ".." && len(out) > 1 {
-				out = out[:len(out)-1]
-			}
-			if i == len(segs)-1 {
-				out = append(out, "")
-			}
-		default:
-			out = append(out, s)
-		}
-	}
-	return strings.Join(out, "/")
 }
 
 // framingHeader names the fields that the parser owns. Their values are

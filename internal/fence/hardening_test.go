@@ -78,7 +78,8 @@ func TestIsOAuthPathExact(t *testing.T) {
 	for p, want := range map[string]bool{
 		"/v1/oauth/token":          true,
 		"/oauth/token":             true,
-		"/V1/OAuth/Token?x=1":      true,
+		"/v1/oauth/token?x=1":      true,
+		"/V1/OAuth/Token":          false,
 		"/oauth/token-status":      false,
 		"/v1/foo/oauth/token":      false,
 		"/v1/oauth/token/":         false,

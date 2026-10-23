@@ -118,10 +118,11 @@ func TestRefreshTokenPlacedOnlyAsTheRefreshField(t *testing.T) {
 		{"long-s key", post("/v1/oauth/token", "", `{"refreſh_token":"`+ortC+`","refresh_token":"`+ort+`"}`), "body"},
 		{"trailing bytes", post("/v1/oauth/token", "", `{"refresh_token":"`+ort+`"} {}`), "body"},
 		{"an array", post("/v1/oauth/token", "", `[{"refresh_token":"`+ort+`"}]`), "body"},
-		// A target that does not reduce to one path is not a refresh path.
-		// Thus the refresh token has no place to go, and the harvest is
-		// never armed.
-		{"unsettled target", post("/v1/oauth/%2525252574oken", "", `{"refresh_token":"`+ort+`"}`), "body"},
+		// A target that is not exactly the refresh path is not a refresh
+		// path. Thus the refresh token has no place to go, and the harvest
+		// is never armed.
+		{"encoded target", post("/v1/oauth/%2525252574oken", "", `{"refresh_token":"`+ort+`"}`), "body"},
+		{"slash runs", post("//v1//oauth/token", "", `{"refresh_token":"`+ort+`","client_id":"x"}`), "body"},
 	}
 	for _, tc := range refused {
 		t.Run(tc.name, func(t *testing.T) {
@@ -144,7 +145,7 @@ func TestRefreshTokenPlacedOnlyAsTheRefreshField(t *testing.T) {
 
 	for _, tc := range []struct{ name, raw string }{
 		{"spaced json", post("/v1/oauth/token", "", "{ \"grant_type\" : \"refresh_token\" ,\n \"refresh_token\" : \""+ort+"\" }")},
-		{"slash runs", post("//v1//oauth/token", "", `{"refresh_token":"`+ort+`","client_id":"x"}`)},
+		{"query", post("/v1/oauth/token?x=1", "", `{"refresh_token":"`+ort+`","client_id":"x"}`)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := parseReq(t, tc.raw)
@@ -182,9 +183,9 @@ func TestRefreshTokenField(t *testing.T) {
 
 func TestIsOAuthPathSlashesAndSchemes(t *testing.T) {
 	for target, want := range map[string]bool{
-		"//v1/oauth/token":                    true,
-		"/v1//oauth///token":                  true,
-		"/v1/oauth/%2F/token":                 true,
+		"//v1/oauth/token":                    false,
+		"/v1//oauth///token":                  false,
+		"/v1/oauth/%2F/token":                 false,
 		"wss://api.anthropic.com/oauth/token": true,
 		"HTTPS://x/v1/oauth/token?y":          true,
 		"/v1/oauth/%2525252574oken":           false,

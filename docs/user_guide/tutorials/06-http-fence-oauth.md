@@ -119,9 +119,9 @@ sequenceDiagram
 The hard rules:
 
 - **Where it applies**: only on `/oauth/token` or `/v1/oauth/token`. Also, the SNI and the `Host` must agree on a core host that has the `CLAUDE_ORT` credential kind.
-    - The broker normalizes the request target first. Before this step, the broker refuses all targets that are not origin-form.
-    - The broker decodes percent-encoding to a fixed point. It collapses runs of `/` and resolves dot-segments.
-    - If a target does not settle, it is not a refresh path. Thus the broker refuses a refresh token that goes to that target. It never substitutes it.
+    - The broker refuses all targets that are not origin-form. It forwards the target as the agent wrote it.
+    - The path must be exactly one of the two paths. A query after `?` is permitted.
+    - A fragment, a percent escape, a dot segment, a run of `/` or a case variant makes the target not a refresh path. Thus the broker refuses a refresh token that goes to that target. It never substitutes it.
 - **Bound to exactly one slot.** The broker gets the slot from the single top-level `refresh_token` value in the body, or from a live refresh token in the bearer header.
     - The broker refuses a refresh-token placeholder in all headers.
     - A body that only *mentions* a different slot cannot send the harvest to that slot.
