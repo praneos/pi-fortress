@@ -267,6 +267,8 @@ fi
 source "${LIB_DIR}/netman.sh"
 # shellcheck source=lib/dhcp.sh
 source "${LIB_DIR}/dhcp.sh"
+# shellcheck source=lib/harden.sh
+source "${LIB_DIR}/harden.sh"
 # The location where seg_dhcp_sync (lib/dhcp.sh) keeps the dnsmasq conf,
 # leases, log and unit of each segment. They are here, not in the lib, so
 # that this file names all that apply writes.
@@ -274,9 +276,13 @@ DHCP_ETC=/etc/pi-fortress
 DHCP_STATE=/var/lib/pi-fortress
 DHCP_LOGS=/var/log/pi-fortress
 DHCP_UNITS=/etc/systemd/system
+# The same for the OS files of lib/harden.sh.
+HARDEN_SYSCTL_D=/etc/sysctl.d
+HARDEN_APT_D=/etc/apt/apt.conf.d
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "${WORKDIR}"' EXIT
+HARDEN_WORK="${WORKDIR}"
 
 # Each segment that the closing line claims must have its address. If
 # not, the line is false and the operator looks in the wrong place.
@@ -639,7 +645,7 @@ rm -f "${RESOLVED_CARRY}"
 
 # Forwarding depends on the ruleset. It is not a peer of the ruleset. So
 # apply enables it here and nowhere else: only after this line is there a
-# fence to forward through. /etc/sysctl.d ships ip_forward=0 (provision.sh).
+# fence to forward through. /etc/sysctl.d ships ip_forward=0 (lib/harden.sh).
 # Thus each path that does not get to this line (a render refusal, a failed
 # nft load, a box that did not complete provisioning) leaves a Pi that
 # routes nothing. It does not leave a Pi that routes everything.
@@ -2034,6 +2040,15 @@ systemctl disable --now pi-fortress-console pi-fortress-console-kiosk 2>/dev/nul
 rm -f /etc/systemd/system/pi-fortress-console.service /etc/systemd/system/pi-fortress-console-kiosk.service
 rm -rf /usr/local/lib/pi-fortress/console
 systemctl daemon-reload
+
+# The OS hardening of provision.sh (lib/harden.sh): the sysctl file and
+# the unattended-upgrades config. pf upgrade and a ship run this apply,
+# not provision.sh. Thus a box from an older release gets the files of
+# this release here, as a fresh install does. Only on a full apply: a
+# --local or --refresh run changes policy, not the OS.
+harden_sysctl_write
+harden_sysctl_load
+harden_apt
 
 # pf apply gets to this script through syscall.Exec, which replaces the
 # Go process. internal/admin records that an apply was requested, and can

@@ -158,6 +158,13 @@ No code of `pf upgrade` duplicates these items (`internal/install/upgrade.go`, `
 
 There is no network wizard, and `provision.sh` does not run again. Reason: an upgrade changes code and policy defaults, not interfaces or apt packages. `-confirm` still execs `pf ship confirm`.
 
+The OS hardening files are not only in `provision.sh`. They are in `vm/pi/lib/harden.sh`, and each full `pf apply` writes them again. Thus an upgraded box gets the files of the new release, the same as a fresh install:
+
+- the sysctl file `/etc/sysctl.d/99-pi-fortress.conf`. apply sets its values at once, except `ip_forward`: apply enables forwarding only after it loads the ruleset.
+- the unattended-upgrades config `/etc/apt/apt.conf.d/20auto-upgrades` and `52-pi-fortress-upgrades`.
+
+apply writes a file only when its content changes. apply installs no package. If `unattended-upgrades` is not installed, apply prints a warning. Install the package with `apt-get install unattended-upgrades`.
+
 ### OS packages and reboots
 
 `pf upgrade` does not update the OS packages. On a fresh install, `provision.sh` enables `unattended-upgrades`. It installs updates each day and does not reboot (`Automatic-Reboot "false"`). Thus a kernel or core library fix is not active until you reboot the gateway.

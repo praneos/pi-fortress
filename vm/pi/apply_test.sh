@@ -1458,11 +1458,71 @@ grep -qF 'mv "${_oldoff}" "${_newoff}"' "${apply}" ||
 # accept-policy conf of Debian enabled and started: an open router. The
 # order below is the full fix. Thus the test asserts it by line number.
 prov="${here}/provision.sh"
-awk '/^cat >\/etc\/sysctl.d\/99-pi-fortress.conf/,/^EOF$/' "${prov}" >"${tmp}/sysctl.conf"
+# The OS hardening files (lib/harden.sh), written into a scratch root with
+# stub sysctl and systemctl. provision.sh writes them on a fresh box and
+# apply.sh on each full apply, so an upgraded box has the same files.
+hroot="${tmp}/hardenroot"
+mkdir -p "${hroot}/bin" "${hroot}/work"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"%s"\n[[ "$3" == *.live ]] && cp "$3" "%s"\nexit 0\n' "${hroot}/sysctl.log" "${hroot}/live" >"${hroot}/bin/sysctl"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"%s"\n' "${hroot}/systemctl.log" >"${hroot}/bin/systemctl"
+chmod +x "${hroot}/bin"/*
+# Only the stubs and these host tools: the host may have its own
+# unattended-upgrade, sshd or ssh-keygen.
+for _c in bash cat cmp cp install grep mkdir rm sort stat tr; do
+  ln -s "$(type -P "${_c}")" "${hroot}/bin/${_c}"
+done
+# harden_run [uu]: the three steps of apply.sh. "uu" puts a stub
+# unattended-upgrade on PATH; without it, the package is missing.
+harden_run() {
+  (
+    # shellcheck source=lib/harden.sh
+    source "${here}/lib/harden.sh"
+    HARDEN_SYSCTL_D="${hroot}/sysctl.d" HARDEN_APT_D="${hroot}/apt.conf.d" HARDEN_WORK="${hroot}/work"
+    if [[ "${1:-}" == uu ]]; then
+      printf '#!/bin/sh\n' >"${hroot}/bin/unattended-upgrade"
+      chmod +x "${hroot}/bin/unattended-upgrade"
+    else
+      rm -f "${hroot}/bin/unattended-upgrade"
+    fi
+    PATH="${hroot}/bin"
+    harden_sysctl_write
+    harden_sysctl_load
+    harden_apt
+  )
+}
+harden_run uu 2>"${hroot}/err" || fail "the hardening steps failed: $(cat "${hroot}/err")"
+cp "${hroot}/sysctl.d/99-pi-fortress.conf" "${tmp}/sysctl.conf"
+for _l in kernel.kptr_restrict=2 kernel.yama.ptrace_scope=2 fs.protected_regular=2 net.ipv4.tcp_syncookies=1; do
+  grep -qxF "${_l}" "${tmp}/sysctl.conf" || fail "99-pi-fortress.conf lacks ${_l}"
+done
+grep -qF 'label=Debian-Security' "${hroot}/apt.conf.d/52-pi-fortress-upgrades" || fail "no security origin in 52-pi-fortress-upgrades"
+grep -qxF 'APT::Periodic::Unattended-Upgrade "1";' "${hroot}/apt.conf.d/20auto-upgrades" || fail "20auto-upgrades does not turn on unattended upgrades"
+grep -qx 'enable unattended-upgrades' "${hroot}/systemctl.log" || fail "the hardening did not enable unattended-upgrades"
+[[ ! -s "${hroot}/err" ]] || fail "the hardening warned with the package present: $(cat "${hroot}/err")"
+# Forwarding: the file says 0 for the next boot, but the live load must
+# not turn off the forwarding that apply enabled after the ruleset.
+grep -q 'ip_forward' "${hroot}/live" && fail "the live sysctl load sets ip_forward; each apply would cut the agent off"
+grep -qx 'kernel.kptr_restrict=2' "${hroot}/live" || fail "the live sysctl load lost the other values"
+# Idempotent: a second run with no change writes nothing.
+touch -d '2000-01-01' "${hroot}/sysctl.d/99-pi-fortress.conf" "${hroot}/apt.conf.d"/*
+harden_run uu 2>/dev/null
+[[ -z "$(find "${hroot}/sysctl.d" "${hroot}/apt.conf.d" -type f -newermt '2001-01-01')" ]] ||
+  fail "a second hardening run rewrote a file that did not change"
+# A box without the package: one warning, the files still written.
+harden_run 2>"${hroot}/err" || fail "the hardening failed without unattended-upgrades"
+grep -q 'unattended-upgrades is not installed' "${hroot}/err" || fail "no warning when unattended-upgrades is missing"
+# Only on a full apply, after the --local exit, and from provision.sh.
+_local_exit="$(grep -n '^if \[\[ "${LOCAL_ONLY}" -eq 1 \]\]; then$' "${apply}" | tail -1 | cut -d: -f1)"
+for _f in harden_sysctl_write harden_sysctl_load harden_apt; do
+  _at="$(grep -n "^${_f}$" "${apply}" | head -1 | cut -d: -f1)"
+  [[ -n "${_at}" && "${_at}" -gt "${_local_exit}" ]] || fail "apply.sh does not run ${_f} on a full apply"
+done
+grep -q '^harden_sysctl_write$' "${prov}" || fail "provision.sh does not write the sysctl file"
+grep -q '^harden_apt$' "${prov}" || fail "provision.sh does not write the unattended-upgrades config"
 grep -qx 'net.ipv4.ip_forward=0' "${tmp}/sysctl.conf" ||
-  fail "provision.sh does not ship net.ipv4.ip_forward=0 in /etc/sysctl.d/99-pi-fortress.conf"
+  fail "lib/harden.sh does not ship net.ipv4.ip_forward=0 in /etc/sysctl.d/99-pi-fortress.conf"
 grep -qx 'net.ipv4.ip_forward=1' "${tmp}/sysctl.conf" &&
-  fail "provision.sh persists ip_forward=1 again; a boot without a good ruleset would route"
+  fail "lib/harden.sh persists ip_forward=1 again; a boot without a good ruleset would route"
 _nft_line="$(grep -n '^nft -f /etc/nftables.conf$' "${apply}" | head -1 | cut -d: -f1)"
 _fwd_line="$(grep -n '^sysctl -w net.ipv4.ip_forward=1' "${apply}" | head -1 | cut -d: -f1)"
 [[ -n "${_nft_line}" ]] || fail "apply.sh no longer loads /etc/nftables.conf"

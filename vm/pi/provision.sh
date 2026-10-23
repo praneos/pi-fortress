@@ -157,48 +157,17 @@ if [[ ! -x /usr/local/sbin/pf ]]; then
 fi
 ln -sfn pf /usr/local/sbin/pi-fortress
 
-# Forwarding ships OFF. Before, it was 1 here, persisted and applied again
-# at each boot. But the ruleset that makes forwarding safe was only
-# conditional: an apply that failed before it installed /etc/nftables.conf
-# left the stock Debian accept-policy file. provision then enabled
-# and started that file -- an open router between the agent segment and the
-# uplink, announced by one line on stderr. apply.sh enables forwarding at
-# runtime after it loads our ruleset. The nftables.service drop-in that it
-# installs does the same at boot. Thus the two can never be out of sync again.
-cat >/etc/sysctl.d/99-pi-fortress.conf <<'EOF'
-net.ipv4.ip_forward=0
-net.ipv6.conf.all.forwarding=0
-net.ipv6.conf.all.disable_ipv6=1
-net.ipv6.conf.default.disable_ipv6=1
-net.ipv6.conf.lo.disable_ipv6=1
-net.netfilter.nf_conntrack_acct=1
-net.ipv4.tcp_syncookies=1
-net.ipv4.conf.all.rp_filter=1
-net.ipv4.conf.default.rp_filter=1
-net.ipv4.conf.all.accept_redirects=0
-net.ipv4.conf.default.accept_redirects=0
-net.ipv4.conf.all.secure_redirects=0
-net.ipv4.conf.default.secure_redirects=0
-net.ipv4.conf.all.send_redirects=0
-net.ipv4.conf.default.send_redirects=0
-net.ipv4.conf.all.accept_source_route=0
-net.ipv4.conf.default.accept_source_route=0
-net.ipv4.icmp_echo_ignore_broadcasts=1
-net.ipv4.icmp_ignore_bogus_error_responses=1
-net.ipv4.conf.all.arp_ignore=1
-net.ipv4.conf.default.arp_ignore=1
-net.ipv4.conf.all.arp_announce=2
-net.ipv4.conf.default.arp_announce=2
-kernel.kptr_restrict=2
-kernel.dmesg_restrict=1
-kernel.unprivileged_bpf_disabled=2
-kernel.yama.ptrace_scope=2
-fs.protected_symlinks=1
-fs.protected_hardlinks=1
-fs.protected_fifos=2
-fs.protected_regular=2
-fs.suid_dumpable=0
-EOF
+# The sysctl file, the unattended-upgrades config: lib/harden.sh. apply.sh
+# writes the same files on each apply, so an upgraded box keeps them in
+# step with this release. Here, sysctl --system also sets ip_forward=0
+# now; the first apply enables it after it loads the ruleset.
+HARDEN_SYSCTL_D=/etc/sysctl.d
+HARDEN_APT_D=/etc/apt/apt.conf.d
+HARDEN_WORK="$(mktemp -d)"
+trap 'rm -rf "${HARDEN_WORK}"' EXIT
+# shellcheck source=lib/harden.sh
+source "${SRC}/vm/pi/lib/harden.sh"
+harden_sysctl_write
 sysctl -e --system >/dev/null
 
 # Key-only SSH, but only after a key is installed: to enforce it on a
@@ -235,20 +204,7 @@ if [[ -f /boot/firmware/config.txt ]] && ! grep -q '^dtoverlay=disable-bt' /boot
 fi
 
 apt-get install -y --no-install-recommends unattended-upgrades
-cat >/etc/apt/apt.conf.d/20auto-upgrades <<'EOF'
-APT::Periodic::Update-Package-Lists "1";
-APT::Periodic::Unattended-Upgrade "1";
-EOF
-cat >/etc/apt/apt.conf.d/52-pi-fortress-upgrades <<'EOF'
-Unattended-Upgrade::Origins-Pattern {
-  "origin=Debian,codename=${distro_codename},label=Debian-Security";
-  "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
-  "origin=Raspberry Pi Foundation,codename=${distro_codename}";
-};
-Unattended-Upgrade::Remove-Unused-Dependencies "true";
-Unattended-Upgrade::Automatic-Reboot "false";
-EOF
-systemctl enable unattended-upgrades >/dev/null 2>&1 || true
+harden_apt
 
 systemctl disable --now dnsmasq 2>/dev/null || true
 systemctl mask dnsmasq 2>/dev/null || true
