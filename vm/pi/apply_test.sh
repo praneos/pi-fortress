@@ -2674,4 +2674,101 @@ for _s in apply.sh provision.sh; do
   [[ $'\n'"${_head}"$'\n' == *$'\numask 022\n'* ]] || fail "${_s} does not pin umask 022 before it writes anything"
 done
 
+# An egress change of a segment ends its open flows, except the flows of
+# the box itself. conntrack and ip are fakes: the test reads no real table.
+(
+  # shellcheck source=/dev/null
+  source <(sed -n -e '/^egress_state() {$/,/^}$/p' -e '/^egress_cut() {$/,/^}$/p' -e '/^egress_cuts() {$/,/^}$/p' "${apply}")
+  declare -F egress_cuts >/dev/null || fail "egress_cuts is gone from apply.sh"
+  ec="${tmp}/egresscut"
+  mkdir -p "${ec}/bin"
+  cat >"${ec}/bin/conntrack" <<'EOF'
+#!/bin/bash
+echo "$*" >>"${CT_LOG}"
+case "$1 $2" in
+  "-L -s") cat "${CT_DIR}/list-src" ;;
+  "-L -d") cat "${CT_DIR}/list-dst" ;;
+  -D*) exit "${CT_DEL_RC:-0}" ;;
+esac
+EOF
+  cat >"${ec}/bin/ip" <<'EOF'
+#!/bin/bash
+echo "2: wlan0    inet 192.168.1.10/24 brd 192.168.1.255 scope global wlan0"
+echo "5: eth0.79    inet 10.79.0.1/30 brd 10.79.0.3 scope global eth0.79"
+EOF
+  chmod +x "${ec}/bin/conntrack" "${ec}/bin/ip"
+  # The desk (10.79.0.2) to the web twice, to the Pi on the segment and
+  # uplink addresses, and UDP out. Into the desk: SSH_FROM, and the Pi.
+  cat >"${ec}/list-src" <<'EOF'
+tcp      6 431999 ESTABLISHED src=10.79.0.2 dst=198.51.100.7 sport=50000 dport=443 src=198.51.100.7 dst=192.168.1.10 sport=443 dport=50000 [ASSURED] mark=0 use=1
+tcp      6 431999 ESTABLISHED src=10.79.0.2 dst=198.51.100.7 sport=50001 dport=443 src=198.51.100.7 dst=192.168.1.10 sport=443 dport=50001 [ASSURED] mark=0 use=1
+tcp      6 431999 ESTABLISHED src=10.79.0.2 dst=10.79.0.1 sport=50002 dport=22 src=10.79.0.1 dst=10.79.0.2 sport=22 dport=50002 [ASSURED] mark=0 use=1
+tcp      6 431999 ESTABLISHED src=10.79.0.2 dst=192.168.1.10 sport=50003 dport=22 src=192.168.1.10 dst=10.79.0.2 sport=22 dport=50003 [ASSURED] mark=0 use=1
+udp      17 29 src=10.79.0.2 dst=192.0.2.1 sport=40000 dport=3478 [UNREPLIED] src=192.0.2.1 dst=192.168.1.10 sport=3478 dport=40000 mark=0 use=1
+EOF
+  cat >"${ec}/list-dst" <<'EOF'
+tcp      6 431999 ESTABLISHED src=10.78.0.20 dst=10.79.0.2 sport=40001 dport=22 src=10.79.0.2 dst=10.78.0.20 sport=22 dport=40001 [ASSURED] mark=0 use=1
+icmp     1 29 src=10.79.0.1 dst=10.79.0.2 type=8 code=0 id=7 src=10.79.0.2 dst=10.79.0.1 type=0 code=0 id=7 mark=0 use=1
+EOF
+  export CT_LOG="${ec}/ct.log" CT_DIR="${ec}"
+  PATH="${ec}/bin:${PATH}"
+  PI_IP=10.77.0.1 HOUSE_IP=10.78.0.1 HOUSE_NET=10.78.0.0/24 HOUSE_EGRESS_FP=aaaa
+  SEG_NAME=(desk guest) SEG_NET=(10.79.0.0/30 10.80.0.0/24) SEG_IP=(10.79.0.1 10.80.0.1) SEG_EGRESS_FP=(bbbb cccc)
+  st="${ec}/state/egress.state"
+  : >"${CT_LOG}"
+
+  # The first apply records the values and ends nothing.
+  egress_state >"${ec}/new"
+  egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "the first egress_cuts failed"
+  [[ -s "${CT_LOG}" ]] && fail "the first apply called conntrack: $(cat "${CT_LOG}")"
+  [[ "$(stat -c %a "${st}")" == 600 ]] || fail "the egress state is not 0600"
+  grep -qx 'seg:desk bbbb 10.79.0.0/30' "${st}" || fail "the egress state has no desk line: $(cat "${st}")"
+
+  # The same values end nothing.
+  egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "an unchanged egress_cuts failed"
+  [[ -s "${CT_LOG}" ]] && fail "an unchanged policy called conntrack"
+
+  # A new desk value ends the desk flows, and only those.
+  SEG_EGRESS_FP=(dddd cccc)
+  egress_state >"${ec}/new"
+  egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed on a changed desk"
+  sort "${CT_LOG}" >"${ec}/ct.sorted"
+  printf '%s\n' '-D -s 10.78.0.20 -d 10.79.0.2' '-D -s 10.79.0.2 -d 192.0.2.1' '-D -s 10.79.0.2 -d 198.51.100.7' \
+    '-L -d 10.79.0.0/30' '-L -s 10.79.0.0/30' >"${ec}/ct.want"
+  diff -u "${ec}/ct.want" "${ec}/ct.sorted" || fail "the desk cut deleted the wrong flows (a flow of the Pi, or the guest)"
+  grep -qx 'pi-fortress: the egress policy of desk changed; ended the open flows of 3 address pair(s) in 10.79.0.0/30' "${ec}/out" ||
+    fail "no cut line for the desk: $(cat "${ec}/out")"
+  grep -qx 'seg:desk dddd 10.79.0.0/30' "${st}" || fail "the egress state did not take the new desk value"
+
+  # Exit 1 (the flow closed after the list) is no failure. Exit 2 warns.
+  # Neither stops apply.
+  : >"${CT_LOG}"
+  HOUSE_EGRESS_FP=eeee
+  egress_state >"${ec}/new"
+  CT_DEL_RC=1 egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed on conntrack exit 1"
+  grep -q 'WARN' "${ec}/out" && fail "conntrack exit 1 gave a warning: $(cat "${ec}/out")"
+  grep -q -- '-L -s 10.78.0.0/24' "${CT_LOG}" || fail "a new house value did not end the house flows"
+  HOUSE_EGRESS_FP=ffff
+  egress_state >"${ec}/new"
+  CT_DEL_RC=2 egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed on conntrack exit 2"
+  grep -q 'WARN conntrack failed for house' "${ec}/out" || fail "conntrack exit 2 gave no warning: $(cat "${ec}/out")"
+
+  # Without conntrack, apply warns, records the value, and continues. The
+  # PATH has only the tools that egress_cuts needs.
+  mkdir -p "${ec}/noct"
+  for _t in awk dirname install; do
+    ln -s "$(command -v "${_t}")" "${ec}/noct/${_t}"
+  done
+  SEG_EGRESS_FP=(dddd 9999)
+  egress_state >"${ec}/new"
+  PATH="${ec}/noct" egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed without conntrack"
+  grep -qx 'pi-fortress: WARN conntrack is not installed; the open flows of guest keep the old egress policy until they close (apt-get install -y conntrack)' "${ec}/out" ||
+    fail "no warning without conntrack: $(cat "${ec}/out")"
+  grep -qx 'seg:guest 9999 10.80.0.0/24' "${st}" || fail "the egress state did not take the value without conntrack"
+)
+grep -qF 'egress_cuts "${EGRESS_STATE}"' "${apply}" || fail "apply no longer ends the flows of a changed egress policy"
+_load="$(grep -n '^nft -f /etc/nftables.conf$' "${apply}" | head -1 | cut -d: -f1 || true)"
+_cut="$(grep -nF 'egress_cuts "${EGRESS_STATE}"' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_load}" && -n "${_cut}" && "${_load}" -lt "${_cut}" ]] || fail "apply ends flows before the new ruleset is loaded"
+
 echo "apply_test: ok"

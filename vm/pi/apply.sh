@@ -645,6 +645,111 @@ nft -f /etc/nftables.conf
   echo "pi-fortress: could not put the resolved addresses back; the sets are empty and a client that answers from its own DNS cache waits out that cache before the gate lets it through again" >&2
 rm -f "${RESOLVED_CARRY}"
 
+# An established flow goes through the conntrack accept and does not meet
+# the egress policy again. Thus a flow that the house or a plain segment
+# opened under the old policy keeps the old permission until it closes.
+# render gives a fingerprint of the egress policy of each segment
+# (HOUSE_EGRESS_FP, SEG_EGRESS_FP; render/egressfp.go). Apply keeps the
+# last values in EGRESS_STATE. When a value changes, apply ends the open
+# flows of that segment after the new ruleset is loaded. Then each new
+# flow meets the new policy. The agent needs nothing: its raw chain
+# checks each packet.
+#
+# A flow to or from an address of this box stays. Thus the SSH session of
+# the operator to the Pi, DNS and DHCP continue. The first apply (no
+# state file) only records the values. A missing conntrack gives a
+# warning, never a failed apply: the new policy is loaded already.
+EGRESS_STATE=/var/lib/pi-fortress/egress.state
+
+# One line for each segment with an egress policy: key, fingerprint, subnet.
+egress_state() {
+  local i
+  if [[ -n "${HOUSE_EGRESS_FP:-}" ]]; then
+    printf 'house %s %s\n' "${HOUSE_EGRESS_FP}" "${HOUSE_NET}"
+  fi
+  for i in "${!SEG_NAME[@]}"; do
+    printf 'seg:%s %s %s\n' "${SEG_NAME[${i}]}" "${SEG_EGRESS_FP[${i}]}" "${SEG_NET[${i}]}"
+  done
+}
+
+# egress_cut NAME NET SELF ends each tracked flow whose original source
+# or destination is in NET, except a flow to or from an address in SELF
+# (space separated). It deletes by the address pair of the original
+# direction. All flows of such a pair are flows of the segment.
+egress_cut() {
+  local name="$1" net="$2" self="$3" pairs s d rc n=0 bad=0
+  pairs="$({
+    conntrack -L -s "${net}" 2>/dev/null || [[ $? -eq 1 ]] || bad=1
+    conntrack -L -d "${net}" 2>/dev/null || [[ $? -eq 1 ]] || bad=1
+    [[ "${bad}" -eq 0 ]] || echo "list-failed"
+  } | awk -v self=" ${self} " '
+    $1 == "list-failed" { print; next }
+    {
+      s = d = ""
+      for (i = 1; i <= NF; i++) {
+        if (s == "" && $i ~ /^src=/) s = substr($i, 5)
+        else if (d == "" && $i ~ /^dst=/) d = substr($i, 5)
+      }
+      if (s == "" || d == "" || index(self, " " s " ") || index(self, " " d " ")) next
+      print s, d
+    }' | sort -u)"
+  while read -r s d; do
+    [[ -n "${s}" ]] || continue
+    if [[ "${s}" == list-failed ]]; then
+      bad=1
+      continue
+    fi
+    rc=0
+    conntrack -D -s "${s}" -d "${d}" >/dev/null 2>&1 || rc=$?
+    # Exit 1 is no entry: the flow closed after the list.
+    if [[ "${rc}" -eq 0 ]]; then
+      n=$((n + 1))
+    elif [[ "${rc}" -ne 1 ]]; then
+      bad=1
+    fi
+  done <<<"${pairs}"
+  echo "pi-fortress: the egress policy of ${name} changed; ended the open flows of ${n} address pair(s) in ${net}"
+  if [[ "${bad}" -ne 0 ]]; then
+    echo "pi-fortress: WARN conntrack failed for ${name}; some open flows of ${net} keep the old egress policy until they close (sudo conntrack -L -s ${net})" >&2
+  fi
+}
+
+# egress_cuts STATE NEW compares NEW (the egress_state lines of this apply)
+# with STATE, ends the flows of each changed segment, then keeps NEW in
+# STATE.
+egress_cuts() {
+  local state="$1" new="$2" key fp net old self c
+  local -a cut=()
+  if [[ -f "${state}" ]]; then
+    while read -r key fp net; do
+      old="$(awk -v k="${key}" '$1 == k { print $2; exit }' "${state}")"
+      if [[ -n "${old}" && "${old}" != "${fp}" ]]; then
+        cut+=("${key#seg:} ${net}")
+      fi
+    done <"${new}"
+  fi
+  if [[ "${#cut[@]}" -gt 0 ]]; then
+    if command -v conntrack >/dev/null 2>&1; then
+      self="$(ip -4 -o addr show 2>/dev/null | awk '{ sub(/\/.*/, "", $4); printf "%s ", $4 }')"
+      self+=" ${PI_IP:-} ${HOUSE_IP:-} ${SEG_IP[*]:-}"
+      for c in "${cut[@]}"; do
+        # shellcheck disable=SC2086 # c is "name net", two words by design
+        egress_cut ${c} "${self}"
+      done
+    else
+      for c in "${cut[@]}"; do
+        echo "pi-fortress: WARN conntrack is not installed; the open flows of ${c%% *} keep the old egress policy until they close (apt-get install -y conntrack)" >&2
+      done
+    fi
+  fi
+  install -d -m 0755 "$(dirname "${state}")"
+  install -m 0600 "${new}" "${state}"
+}
+
+egress_state >"${WORKDIR}/egress.state"
+egress_cuts "${EGRESS_STATE}" "${WORKDIR}/egress.state" ||
+  echo "pi-fortress: WARN could not record the egress policy in ${EGRESS_STATE}; the next apply compares with an older record" >&2
+
 # Forwarding depends on the ruleset. It is not a peer of the ruleset. So
 # apply enables it here and nowhere else: only after this line is there a
 # fence to forward through. /etc/sysctl.d ships ip_forward=0 (lib/harden.sh).

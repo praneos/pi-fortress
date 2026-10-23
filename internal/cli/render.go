@@ -85,7 +85,7 @@ func runRender(args []string, _, stderr io.Writer) int {
 	if err := os.WriteFile(*outNFT, []byte(c.Ruleset(e)), 0644); err != nil {
 		return refuse(err)
 	}
-	if err := os.WriteFile(*outEnv, []byte(c.EnvFile()), 0644); err != nil {
+	if err := os.WriteFile(*outEnv, []byte(c.EnvFile()+c.EgressEnv(e)), 0644); err != nil {
 		return refuse(err)
 	}
 	return 0
