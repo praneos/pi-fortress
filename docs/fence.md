@@ -62,14 +62,14 @@ Names are case-insensitive.
 A placeholder of an allowed kind in any other header refuses the whole
 request (`placeholder_outside_header`, with `where` naming the header). The
 fence writes nothing into the request. Examples are `User-Agent`, `Referer`,
-`Cookie` unless declared, and any `X-` header. Reason: these headers go into
-access logs and come back in audit APIs (the GitHub API returns
+`Cookie`, and any `X-` header that is not declared. Reason: these headers go
+into access logs and come back in audit APIs (the GitHub API returns
 `user_agent`). There, they get past the literal scrub.
 
 You can never declare these headers: `User-Agent`, `Referer`, `Origin`,
-`Host`, `Via`, `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Content-*`,
-`Transfer-Encoding`, `Connection`, `Keep-Alive`, `Upgrade`, `TE`, `Trailer`
-and `Proxy-*`. `pf apply` refuses such a line and names the file and the
+`Cookie`, `Set-Cookie`, `Host`, `Via`, `Forwarded`, `X-Forwarded-*`,
+`X-Real-IP`, `Content-*`, `Transfer-Encoding`, `Connection`, `Keep-Alive`,
+`Upgrade`, `TE`, `Trailer` and `Proxy-*`. `pf apply` refuses such a line and names the file and the
 line. `pf enroll mint --header` also refuses it.
 
 The lines for one host add up, for kinds and for headers. The operator puts
