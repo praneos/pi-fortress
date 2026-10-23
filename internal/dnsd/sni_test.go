@@ -209,6 +209,27 @@ func TestSNIHoldsASplitClientHello(t *testing.T) {
 	}
 }
 
+// A retransmit can carry more data than the first send from the same
+// sequence number: the client joins the segments that are not yet
+// acknowledged. The longer copy replaces the shorter one.
+func TestSNIKeepsTheLongerRetransmit(t *testing.T) {
+	r := &fakeResolve{ans: map[string][]netip.Addr{"example.com": {netip.MustParseAddr("172.66.147.243")}}}
+	c, q := newTestCheck(t, r)
+	ctx := context.Background()
+	hello := clientHello(t, "example.com")
+	cut := len(hello) / 2
+	c.packet(ctx, nfq.Packet{ID: 9, Payload: tcp4f("172.66.147.243", 4999, tcpSYN, nil)})
+	q.wait(t, 9)
+	c.packet(ctx, nfq.Packet{ID: 10, Payload: tcp4("172.66.147.243", 5000, hello[:cut])})
+	q.none(t, 10)
+	c.packet(ctx, nfq.Packet{ID: 11, Payload: tcp4("172.66.147.243", 5000, hello)})
+	for _, id := range []uint32{10, 11} {
+		if v := q.wait(t, id); v.mark != sniOK {
+			t.Fatalf("packet %d: %+v", id, v)
+		}
+	}
+}
+
 func TestSNIRefuses(t *testing.T) {
 	r := &fakeResolve{
 		ans: map[string][]netip.Addr{
