@@ -96,7 +96,7 @@ Add `host KIND...` to `/opt/pi-fortress/vm/policy/core.hosts.local`. This file i
 - `*.name` covers all subdomains.
 - A line with no kinds allows the name as an authority. The gateway does not inject anything for that name.
 
-A new *kind* does not need a change to the minting command, because that command accepts all names in capitals. But a new kind needs a token pattern in `key_prefixes.rules`, so that the broker can strip the token elsewhere. The pattern must start with a literal prefix, for example `ghp_`. The broker does not start with a pattern that has no prefix.
+A new *kind* does not need a change to the minting command, because that command accepts all names in capitals. But a new kind needs a token pattern, so that the broker can strip the token elsewhere. Add the pattern to `/opt/pi-fortress/vm/policy/key_prefixes.rules.local`, in the format of `key_prefixes.rules`, then run `pf apply`. An upgrade replaces `key_prefixes.rules`, but it keeps `key_prefixes.rules.local`. Do not edit `key_prefixes.rules`. The pattern must start with a literal prefix, for example `ghp_`. `pf apply` refuses a pattern that has no prefix.
 
 **My tool sends its key in a header other than `Authorization`. Why is the request refused?**
 The broker replaces a placeholder only in `Authorization` and `X-Api-Key`, unless you declare a different header for that host and kind.
@@ -172,7 +172,7 @@ An OS update that changes the system CA bundle restarts the broker only when the
 - The blocklist (a feed edit or a blacklist edit).
 - The allowlist.
 - The git push allowlist.
-- The core hosts (`core.hosts.local`) or the token patterns (`key_prefixes.rules`).
+- The core hosts (`core.hosts.local`) or the token patterns (`key_prefixes.rules.local`).
 - Paranoid mode.
 - The network settings of the gateway.
 

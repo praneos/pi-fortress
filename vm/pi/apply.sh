@@ -1022,29 +1022,34 @@ fi
 # success without them.
 # Without /vagrant, POLICY is /etc/pi-fortress, and a copy of a file onto
 # itself fails. set -e then stops apply.
-for _f in allow.domains key_prefixes.rules dns_types.allow; do
+for _f in allow.domains dns_types.allow; do
   if [[ -f "${POLICY}/${_f}" && ! "${POLICY}/${_f}" -ef "/etc/pi-fortress/${_f}" ]]; then
     install -m 0644 "${POLICY}/${_f}" "/etc/pi-fortress/${_f}"
   fi
 done
-# core.hosts ships, and each upgrade replaces it. core.hosts.local is the
-# file of the operator, and apply keeps it. The daemons read one file, so
-# the installed core.hosts is the shipped one with the local one below a
-# marker. Apply reads the shipped part up to that marker. Thus on a box
-# whose policy dir IS /etc/pi-fortress, the rewrite replaces the old local
-# part in place. It does not add a copy on each apply. A local file with
-# only comments adds nothing, and apply omits it. Thus the installed copy
-# stays the same as the shipped one, byte for byte.
-CORE_LOCAL_MARK='# ---- core.hosts.local (pf apply appends it here; edit that file, not this) ----'
-if [[ -f "${POLICY}/core.hosts" ]]; then
-  awk -v m="${CORE_LOCAL_MARK}" '$0 == m { exit } { print }' "${POLICY}/core.hosts" >"${WORKDIR}/core.hosts"
-  if [[ -f "${POLICY}/core.hosts.local" ]] && grep -qv '^[[:space:]]*\(#.*\)\{0,1\}$' "${POLICY}/core.hosts.local"; then
-    { printf '%s\n' "${CORE_LOCAL_MARK}"; awk '{ print }' "${POLICY}/core.hosts.local"; } >>"${WORKDIR}/core.hosts"
+# core.hosts and key_prefixes.rules ship, and each upgrade replaces them.
+# core.hosts.local and key_prefixes.rules.local are the files of the
+# operator, and apply keeps them. The daemons read one file, so the
+# installed file is the shipped one with the local one below a marker.
+# Apply reads the shipped part up to that marker. Thus on a box whose
+# policy dir IS /etc/pi-fortress, the rewrite replaces the old local part
+# in place. It does not add a copy on each apply. A local file with only
+# comments adds nothing, and apply omits it. Thus the installed copy
+# stays the same as the shipped one, byte for byte. pf compile above
+# already refused a bad line in each local file.
+install_with_local() {
+  local name=$1 mark="# ---- $1.local (pf apply appends it here; edit that file, not this) ----"
+  [[ -f "${POLICY}/${name}" ]] || return 0
+  awk -v m="${mark}" '$0 == m { exit } { print }' "${POLICY}/${name}" >"${WORKDIR}/${name}"
+  if [[ -f "${POLICY}/${name}.local" ]] && grep -qv '^[[:space:]]*\(#.*\)\{0,1\}$' "${POLICY}/${name}.local"; then
+    { printf '%s\n' "${mark}"; awk '{ print }' "${POLICY}/${name}.local"; } >>"${WORKDIR}/${name}"
   fi
-  if ! cmp -s "${WORKDIR}/core.hosts" /etc/pi-fortress/core.hosts; then
-    install -m 0644 "${WORKDIR}/core.hosts" /etc/pi-fortress/core.hosts
+  if ! cmp -s "${WORKDIR}/${name}" "/etc/pi-fortress/${name}"; then
+    install -m 0644 "${WORKDIR}/${name}" "/etc/pi-fortress/${name}"
   fi
-fi
+}
+install_with_local core.hosts
+install_with_local key_prefixes.rules
 # pf dns refuses a dns_types.allow that it is told about and cannot read.
 # So a box whose policy dir is older than the seed gets an empty one: no
 # overrides, which is also what the seed says. This is better than a

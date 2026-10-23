@@ -82,6 +82,11 @@ func PiOwned() []string {
 	// Nor this: the core.hosts lines of the operator. Upgrades keep these
 	// lines, and replace core.hosts itself.
 	add("core.hosts.local")
+	// The other overlays of the operator on a shipped file: token rules
+	// and DoH resolvers. Upgrades replace the shipped files and keep these.
+	add("key_prefixes.rules.local")
+	add("doh.ips.local")
+	add("doh.domains.local")
 	sort.Strings(out)
 	return out
 }

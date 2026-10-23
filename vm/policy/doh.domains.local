@@ -1,0 +1,3 @@
+# Your own DoH resolver names. Upgrades replace doh.domains and keep this
+# file. pf apply sinkholes these names, the same as the names in
+# doh.domains. One name a line.

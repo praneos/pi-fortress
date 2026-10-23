@@ -63,8 +63,9 @@ fi
 # Each list here is in PI_OWNED (Makefile): the operator owns it, and a
 # ship keeps it. doh.*, core.hosts and key_prefixes.rules are not: they
 # ship, and each ship and each provision replace them.
-# The operator lines of core.hosts are in core.hosts.local, which apply
-# appends and this step never writes.
+# The operator lines of each are in its .local file (core.hosts.local,
+# key_prefixes.rules.local, doh.ips.local, doh.domains.local). apply and
+# pf compile add that file, and this step never writes it.
 for _f in blacklist.ips blacklist.domains never_block.ips never_block.domains direct_ip.allow sources.json \
   allow.domains dns_types.allow git_push.allow; do
   if [[ ! -e "/etc/pi-fortress/${_f}" ]]; then

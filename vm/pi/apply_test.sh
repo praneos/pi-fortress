@@ -2528,6 +2528,50 @@ EOF
   grep -qx 'gitlab.com GITLAB_TOKEN:User-Agent' "${lab2}/etc/pi-fortress/core.hosts" && fail "a refused core.hosts.local was installed"
   cp "${tmp}/core.hosts.local.seed" "${lab2}/vagrant/vm/policy/core.hosts.local"
 
+  # key_prefixes.rules.local, in the same way: the installed rules are the
+  # shipped rules, the marker, then the local rules, one time. A change to
+  # it restarts the fence. A rule with no literal prefix stops the apply
+  # in pf compile, which names the file, and apply installs nothing.
+  _kmark='# ---- key_prefixes.rules.local (pf apply appends it here; edit that file, not this) ----'
+  _klocal="${lab2}/vagrant/vm/policy/key_prefixes.rules.local"
+  cp "${_klocal}" "${tmp}/key_prefixes.rules.local.seed"
+  printf '%s\n' '# mine' 'acme	acme_[A-Za-z0-9]{32,}	ACME_TOKEN' >"${_klocal}"
+  { cat "${lab2}/vagrant/vm/policy/key_prefixes.rules"; printf '%s\n' "${_kmark}"; cat "${_klocal}"; } >"${tmp}/key_prefixes.rules.want"
+  for _run in 1 2; do
+    local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
+    cmp -s "${tmp}/key_prefixes.rules.want" "${lab2}/etc/pi-fortress/key_prefixes.rules" ||
+      fail "run ${_run}: installed key_prefixes.rules is not the shipped rules + marker + local rules: $(diff "${tmp}/key_prefixes.rules.want" "${lab2}/etc/pi-fortress/key_prefixes.rules")"
+    if [[ "${_run}" -eq 1 ]]; then
+      grep -q 'restart pi-fortress-broker.service' "${lab2}.systemctl" ||
+        fail "a new key_prefixes.rules.local rule did not restart the fence"
+    fi
+  done
+  grep -q 'restart pi-fortress-broker.service' "${lab2}.systemctl" &&
+    fail "an unchanged key_prefixes.rules.local restarted the fence on the second run"
+  printf 'acme\t[A-Za-z0-9]{40,}\n' >"${_klocal}"
+  if PATH="${lstub}:${lsafe}" PF_ALLOW_ANY_HOST=1 PF_INT_IF=lo PF_WAN_IF="${lwan}" SYSTEMCTL_LOG="${lab2}.systemctl" \
+    NFT_LOG="${lab2}.nft" bash "${lab2}/vagrant/vm/pi/apply.sh" --local >"${lab2}.bad.log" 2>&1; then
+    fail "apply --local accepted a key_prefixes.rules.local rule with no literal prefix"
+  fi
+  grep -q 'key_prefixes.rules.local.*acme' "${lab2}.bad.log" ||
+    fail "the refusal does not name key_prefixes.rules.local and the rule: $(tail -3 "${lab2}.bad.log")"
+  grep -qF '[A-Za-z0-9]{40,}' "${lab2}/etc/pi-fortress/key_prefixes.rules" && fail "a refused key_prefixes.rules.local was installed"
+  cp "${tmp}/key_prefixes.rules.local.seed" "${_klocal}"
+  local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
+  cmp -s "${lab2}/vagrant/vm/policy/key_prefixes.rules" "${lab2}/etc/pi-fortress/key_prefixes.rules" ||
+    fail "a key_prefixes.rules.local emptied back to comments left its rules installed"
+
+  # doh.ips.local and doh.domains.local add to the shipped DoH lists. pf
+  # compile reads them from the policy dir, the same as the shipped lists.
+  cp "${lab2}/vagrant/vm/policy/doh.domains.local" "${tmp}/doh.domains.local.seed"
+  echo 'doh.resolver.example' >>"${lab2}/vagrant/vm/policy/doh.domains.local"
+  local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
+  grep -qx 'address=/doh.resolver.example/0.0.0.0' "${lab2}/etc/pi-fortress/doh-domains.conf" ||
+    fail "a doh.domains.local name is not in the installed DoH sinkhole"
+  grep -qx 'address=/dns.google/0.0.0.0' "${lab2}/etc/pi-fortress/doh-domains.conf" ||
+    fail "doh.domains.local replaced the shipped DoH names, not added to them"
+  cp "${tmp}/doh.domains.local.seed" "${lab2}/vagrant/vm/policy/doh.domains.local"
+
   # An /etc/pi-fortress box: the policy dir and the installed copies are
   # the same files. Here, before, the same-file guard hid the full change.
   app2="${tmp}/lroot2"
@@ -2593,6 +2637,25 @@ EOF
   local_apply "${app2}" "${app2}/usr/local/lib/pi-fortress/apply.sh"
   cmp -s "${tmp}/core.hosts.app2" "${app2}/etc/pi-fortress/core.hosts" ||
     fail "same-file: a removed core.hosts.local left its lines in core.hosts"
+
+  # The same-file box keeps key_prefixes.rules.local across a provision.
+  # provision.sh copies the shipped key_prefixes.rules over the installed
+  # one. The next apply puts the local rules back below the marker, one time.
+  cp "${app2}/etc/pi-fortress/key_prefixes.rules" "${tmp}/key_prefixes.rules.app2"
+  printf '%s\n' 'acme	acme_[A-Za-z0-9]{32,}	ACME_TOKEN' >"${app2}/etc/pi-fortress/key_prefixes.rules.local"
+  { cat "${tmp}/key_prefixes.rules.app2"; printf '%s\n' "${_kmark}"; cat "${app2}/etc/pi-fortress/key_prefixes.rules.local"; } >"${tmp}/key_prefixes.rules.want2"
+  for _run in 1 2 provision; do
+    if [[ "${_run}" == provision ]]; then
+      cp "${here}/../policy/key_prefixes.rules" "${app2}/etc/pi-fortress/key_prefixes.rules"
+    fi
+    local_apply "${app2}" "${app2}/usr/local/lib/pi-fortress/apply.sh"
+    cmp -s "${tmp}/key_prefixes.rules.want2" "${app2}/etc/pi-fortress/key_prefixes.rules" ||
+      fail "same-file run ${_run}: key_prefixes.rules is not shipped + marker + local: $(diff "${tmp}/key_prefixes.rules.want2" "${app2}/etc/pi-fortress/key_prefixes.rules")"
+  done
+  rm "${app2}/etc/pi-fortress/key_prefixes.rules.local"
+  local_apply "${app2}" "${app2}/usr/local/lib/pi-fortress/apply.sh"
+  cmp -s "${tmp}/key_prefixes.rules.app2" "${app2}/etc/pi-fortress/key_prefixes.rules" ||
+    fail "same-file: a removed key_prefixes.rules.local left its rules in key_prefixes.rules"
 fi
 
 # Also the shape behind those runs: the restart decision comes from the

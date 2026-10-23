@@ -4,6 +4,7 @@
 package policycompile
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"pi-fortress/internal/base"
 
 	"pi-fortress/internal/corepolicy"
+	"pi-fortress/internal/fence"
 )
 
 var (
@@ -430,6 +432,53 @@ func LoadTokens(path, kind string) ([]string, error) {
 	return out, err
 }
 
+// loadWithLocal is LoadTokens of path and then of path.local: the shipped
+// list plus the lines of the operator. An upgrade or a provision replaces
+// the shipped list and keeps the local one. A token in both files counts
+// one time.
+func loadWithLocal(path, kind string) ([]string, error) {
+	shipped, err := LoadTokens(path, kind)
+	if err != nil {
+		return nil, err
+	}
+	local, err := LoadTokens(path+".local", kind)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(shipped)+len(local))
+	out := make([]string, 0, len(shipped)+len(local))
+	for _, t := range append(shipped, local...) {
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+// checkKeyRulesLocal loads key_prefixes.rules.local as the broker loads
+// its rules. apply appends this file to the shipped key_prefixes.rules,
+// and the broker, the engine, pf dns and pf observe read the result. Thus
+// a rule that does not compile, or that has no literal prefix, stops the
+// apply here, before anything installs. It does not stop the broker at
+// its start. A missing file, or a file with only comments, adds nothing.
+func checkKeyRulesLocal(path string) error {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	tr, err := fence.LoadTokenRules(path)
+	if errors.Is(err, fence.ErrNoRules) {
+		return nil
+	}
+	if err == nil {
+		err = tr.Streamable()
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", filepath.Base(path), err)
+	}
+	return nil
+}
+
 // badLine is a line loadTokens skipped: its 1-based number and token.
 type badLine struct {
 	n     int
@@ -764,12 +813,14 @@ func Compile(policyDir string, out Out) (Summary, error) {
 		return Summary{}, err
 	}
 
-	dohIPs, err := LoadTokens(filepath.Join(policyDir, "doh.ips"), "ips")
+	// doh.ips and doh.domains ship, and each upgrade replaces them. The
+	// operator adds resolvers in doh.ips.local and doh.domains.local.
+	dohIPs, err := loadWithLocal(filepath.Join(policyDir, "doh.ips"), "ips")
 	if err != nil {
 		return Summary{}, err
 	}
 	dohIPFinal := CoalesceIPv4(dohIPs)
-	dohDomains, err := LoadTokens(filepath.Join(policyDir, "doh.domains"), "domains")
+	dohDomains, err := loadWithLocal(filepath.Join(policyDir, "doh.domains"), "domains")
 	if err != nil {
 		return Summary{}, err
 	}
@@ -792,6 +843,9 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	// makes a malformed line stop an apply before anything installs.
 	gitPush, err := corepolicy.LoadGitPush(filepath.Join(policyDir, "git_push.allow"))
 	if err != nil {
+		return Summary{}, err
+	}
+	if err := checkKeyRulesLocal(filepath.Join(policyDir, "key_prefixes.rules.local")); err != nil {
 		return Summary{}, err
 	}
 

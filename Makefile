@@ -206,7 +206,7 @@ PI_SSH = ssh -o IPQoS=none -o ConnectTimeout=15 -o ServerAliveInterval=10 -o Con
 # until a person applies it there. house_default.domains is shipped code
 # and is intentionally not in this list. generated/ holds the CA and agent
 # credentials of the Pi. alert.url is gitignored and cannot seed.
-PI_OWNED = core.hosts.local house.domains house_never_block.domains house_private_dns.domains house_private_dns.ips blacklist.domains blacklist.ips never_block.domains never_block.ips direct_ip.allow house_direct_ip.allow ssh_allow.ips git_push.allow allow.domains dns_types.allow sources.json
+PI_OWNED = core.hosts.local key_prefixes.rules.local doh.ips.local doh.domains.local house.domains house_never_block.domains house_private_dns.domains house_private_dns.ips blacklist.domains blacklist.ips never_block.domains never_block.ips direct_ip.allow house_direct_ip.allow ssh_allow.ips git_push.allow allow.domains dns_types.allow sources.json
 PI_KEEP = --exclude '/vm/policy/generated/' --exclude '/vm/policy/alert.url' $(foreach f,$(PI_OWNED),--exclude '/vm/policy/$(f)')
 PI_SEED = $(addprefix vm/policy/,$(PI_OWNED))
 
