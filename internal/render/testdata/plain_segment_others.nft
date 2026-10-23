@@ -234,6 +234,7 @@ table inet fortress {
   chain house_egress {
     tcp dport 80 return
     tcp dport { 443, 465, 993, 5223, 5228, 8443 } return
+    tcp dport { 143, 587 } return
     udp dport 123 return
     icmp type echo-request limit rate 10/second burst 20 packets return
     tcp dport 5222 ip daddr @house_whatsapp_v4 return

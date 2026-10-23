@@ -413,6 +413,13 @@ const houseSNIFlood = "\n\n  chain house_sni_flood {" +
 // house gave out.
 var houseTLSPorts = []string{"443", "465", "993", "5223", "5228", "8443"}
 
+// houseSTARTTLSPorts are the mail ports that strict egress lets out with no
+// name check: IMAP (143) and SMTP submission (587). These start in clear
+// text and change to TLS with STARTTLS. Thus the first packet is not a TLS
+// ClientHello and has no name to check. Do not put them in houseTLSPorts:
+// the name check would drop each flow.
+const houseSTARTTLSPorts = "143, 587"
+
 // houseCallUDP is the STUN/TURN and media of the call apps: 3478-3497 STUN
 // and TURN (Teams, WhatsApp, FaceTime), 8801-8810 Zoom, 16384-16403
 // FaceTime, 19302-19309 Google Meet. Without it, these apps relay over
@@ -429,6 +436,7 @@ func (f *fragments) houseEgress() string {
 	r := func(s string) string { return "\n    " + s }
 	body := r("tcp dport 80 return") +
 		r("tcp dport { "+strings.Join(houseTLSPorts, ", ")+" } return") +
+		r("tcp dport { "+houseSTARTTLSPorts+" } return") +
 		r("udp dport 123 return") +
 		r("icmp type echo-request limit rate 10/second burst 20 packets return")
 	if f.HouseAllowWiFiCalling == "on" {
@@ -999,13 +1007,14 @@ func (f *fragments) sshFromIFs(i int) string {
 }
 
 // segEgress is the port policy of a plain segment: the strict set of the
-// house (web, the TLS ports that mail and push use, time, ping) plus
-// ALLOW_PORTS. No WhatsApp, Wi-Fi calling or call-media switches: a desk
-// that needs one names the ports.
+// house (web, the mail and push ports, time, ping) plus ALLOW_PORTS. No
+// WhatsApp, Wi-Fi calling or call-media switches: a desk that needs one
+// names the ports.
 func segEgress(chain string, s Segment) string {
 	r := func(x string) string { return "\n    " + x }
 	body := r("tcp dport 80 return") +
 		r("tcp dport { "+strings.Join(houseTLSPorts, ", ")+" } return") +
+		r("tcp dport { "+houseSTARTTLSPorts+" } return") +
 		r("udp dport 123 return") +
 		r("icmp type echo-request limit rate 10/second burst 20 packets return")
 	if s.AllowTCP != "" {

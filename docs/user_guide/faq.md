@@ -223,7 +223,7 @@ Some things that a normal home network allows. Each item has a fix in the file o
 | What breaks | Why | Fix |
 |---|---|---|
 | HTTP/3 | The gateway drops UDP 443 | No action is necessary. Browsers then use HTTPS over TCP |
-| An app on a port other than web, encrypted mail, push and time. Examples: a game, the direct media of a call app, a service on an unusual port | `EGRESS` is `strict` | Set `EGRESS=audit` for one day. Read `sudo journalctl -k -g <name>-audit` on the Pi. Then list the ports in `ALLOW_PORTS` and set `strict` again |
+| An app on a port other than web, mail, push and time. Examples: a game, the direct media of a call app, a service on an unusual port | `EGRESS` is `strict` | Set `EGRESS=audit` for one day. Read `sudo journalctl -k -g <name>-audit` on the Pi. Then list the ports in `ALLOW_PORTS` and set `strict` again |
 | A printer, a NAS, the admin page of the router, all other devices on your local network | The desk can never reach local addresses, on any port, whatever the `EGRESS` value | Use those devices from the house network |
 | Pages that fail in a browser with hundreds of open tabs | The limit is 128 open connections for each device | `CONN_PER_IP=512` |
 | Teams, XMPP or mail autodiscover, some single sign-on and VPN clients | They query SRV or TXT records. The desk DNS answers only with addresses | `DNS_TYPES="SRV TXT"`. Add `MX` if a mail client needs it |

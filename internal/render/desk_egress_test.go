@@ -57,6 +57,7 @@ func TestPlainSegmentIsStrictByDefault(t *testing.T) {
 	mustHave(t, "seg_desk_egress", eg,
 		"tcp dport 80 return",
 		"tcp dport { "+strings.Join(houseTLSPorts, ", ")+" } return",
+		"tcp dport { "+houseSTARTTLSPorts+" } return",
 		"udp dport 123 return",
 		`log prefix "pi-fortress desk-port: "`,
 		"counter drop")
