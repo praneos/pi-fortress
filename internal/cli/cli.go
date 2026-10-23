@@ -53,7 +53,7 @@ func Commands() []Command {
 		{"claim", "issue a one-time claim code for a slot, without the TUI (-slot)", runClaim},
 		{"tui", "management screens at the seat or over ssh (sudo)", runTUI},
 		{"www", "agent-NIC HTTP: setup.sh + ca.pem", runWWW},
-		{"engine", "TLS engine on :8080 (-init-ca mints the CA)", runEngine},
+		{"engine", "TLS engine on :8080 (-init-ca mints the CA; ca status|rotate|promote|retire changes it)", runEngine},
 		{"broker", "credential broker on a unix socket", runBroker},
 	}
 	sort.Slice(cmds, func(i, j int) bool { return cmds[i].Name < cmds[j].Name })

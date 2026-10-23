@@ -189,7 +189,8 @@ func pruneReleases(root string, keep int) error {
 // directory covers all below it.
 //
 // Live credentials, the CA private key and the WireGuard key are
-// excluded for the reason that backup.Exclusions gives. Otherwise, a
+// excluded for the reason that backup.Exclusions gives. The files of a
+// CA rotation go with the key (one of them holds the next key). Otherwise, a
 // state.tar kept for three generations would outlive each seal and each
 // delete, and -with-state would bring back a credential that the
 // operator removed. The trust roots and the lab marker are also
@@ -208,7 +209,7 @@ var stateSkip = map[string][]string{
 		"lab",
 	},
 	"lib": {
-		"engine/ca.pem", "mitm", "www/claims", "www/claims-redeemed",
+		"engine/ca.pem", "engine/ca-next.pem", "engine/ca-old.pem", "engine/ca-link.pem", "mitm", "www/claims", "www/claims-redeemed",
 		"*.offset", "*.last", "journal.cursor", "observe.json", "observe", "*.leases", "monitor",
 		"releases", "incoming", "ship-work", "install", "install-work", "upgrade",
 		"ship.version", "ship.pending", ".ship.pending-*", "ship.lock", "state.version", ".pf-ship-*",
