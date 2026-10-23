@@ -3,11 +3,58 @@ Description=pi-fortress signed ship: verify, swap the tree, pf apply
 Documentation=file:///opt/pi-fortress/docs/signed_ship.md
 After=network-online.target
 
-# No sandbox: the unit applies a verified bundle as root. That is its purpose.
-# The upload directory belongs to pfship and is untrusted. pf ship install
+# Root: the unit applies a verified bundle. That is its purpose. The
+# upload directory belongs to pfship and is untrusted. pf ship install
 # copies the pair from it before it reads a byte.
 [Service]
 Type=oneshot
 ExecStart=/usr/local/sbin/pf ship install
 UMask=0022
 TimeoutStartSec=45min
+# The sandbox below lets a full apply do all that it does, and keeps the
+# rest of the system out of reach. ship-deadman.service has the same
+# lines, because a revert is the same swap and apply. A new release
+# applies under the unit of the release before it. Thus a path that a new
+# apply writes goes into these lines one release before the apply uses it.
+#
+# Resource caps (pf-broker.service explains the scheme): the bundle, pf
+# compile and nft with the full feed sets.
+MemoryHigh=768M
+MemoryMax=1G
+TasksMax=256
+NoNewPrivileges=yes
+PrivateTmp=yes
+# read-only, not yes: apply turns SSH password login off when it finds a
+# usable key in /home/*/.ssh/authorized_keys (lib/harden.sh).
+ProtectHome=read-only
+ProtectSystem=strict
+# Not ProtectKernelTunables: apply writes the sysctls of lib/harden.sh
+# and the network sysctls.
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+# Not RestrictSUIDSGID: apply makes setgid directories (the claims
+# directories and the fake-IP journal directory).
+# AF_NETLINK is for nft, ip, conntrack and ss. AF_INET and AF_INET6 are
+# for the feed download, the post-upgrade doctor and the alert. AF_UNIX
+# is for systemctl and nmcli.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# A call outside the set fails with EPERM. A kill would stop the swap or
+# the apply between two steps, with no message.
+SystemCallErrorNumber=EPERM
+# The fetch.service set (it gives the reason for each), plus SYS_ADMIN for
+# kernel.kptr_restrict, kernel.dmesg_restrict and
+# kernel.unprivileged_bpf_disabled in lib/harden.sh. SYS_PTRACE also sets
+# kernel.yama.ptrace_scope there.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_FOWNER CAP_FSETID CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_LINUX_IMMUTABLE CAP_SYS_PTRACE CAP_AUDIT_WRITE CAP_SYS_ADMIN
+# /opt: the swap renames /opt/pi-fortress, /opt/pi-fortress.new and
+# /opt/pi-fortress.prev, so it needs the parent directory. /var/lib/pi-fortress:
+# the upload, the work directory, the releases and the version files. The
+# rest is what a full apply writes (fetch.service gives the reasons).
+ReadWritePaths=/etc /opt /usr/local /var/lib/pi-fortress /var/log/pi-fortress -/var/lib/systemd/timesync -/run/pi-fortress -/vagrant/vm/policy/generated

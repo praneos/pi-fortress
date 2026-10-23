@@ -117,6 +117,14 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   `/var/lib/pi-fortress/www/claims` (`root:pf-fortress 2750`), so it cannot
   create or change a claim. `/etc/pi-fortress/broker` stays in
   `InaccessiblePaths`.
+- The feed refresh (`fetch.service`, `pf apply --refresh`), the signed ship
+  (`ship.service`) and the ship dead-man (`ship-deadman.service`) stay root.
+  apply loads nft, sets sysctls, adds the daemon accounts and writes `/etc`.
+  Each unit has a sandbox: `ProtectSystem=strict` with only the paths that
+  apply writes, a capability bounding set, `SystemCallFilter=@system-service`,
+  `NoNewPrivileges` and memory and task caps. The feed refresh cannot read
+  `/etc/pi-fortress/broker`, `/var/lib/pi-fortress/engine` or
+  `/var/lib/pi-fortress/www`.
 - The broker serves one source prefix. The unit reads `AGENT_NET` from
   `net.env` for `-agent-net`. With this flag, the broker refuses with 403 a
   preamble with a source outside that prefix. It does this before it parses
