@@ -33,10 +33,7 @@ type Host struct {
 	Lease         *Lease
 }
 
-var (
-	hostnameRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
-	ifaceRE    = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9._-]{0,14}$`)
-)
+var hostnameRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 
 func ParseLeases(text string) []Lease { return leases.ParseLeases(text) }
 
@@ -356,8 +353,10 @@ func checkOnOff(v string) error {
 	return nil
 }
 
+// checkIface takes the names that render takes. Thus the TUI never
+// writes a name that the next apply refuses.
 func checkIface(v string) error {
-	if !ifaceRE.MatchString(v) {
+	if !render.ValidIfaceName(v) {
 		return errors.New("invalid interface name")
 	}
 	return nil
