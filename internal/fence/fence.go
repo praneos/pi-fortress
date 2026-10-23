@@ -685,6 +685,7 @@ func plan(s *scanner, req *httpwire.Request) PlanResult {
 	}
 	u := s.at("url")
 	u.noteAll([]byte(req.Target), "url")
+	u.noteTarget(req.Target)
 	out.Target = u.classify([]byte(req.Target))
 	return out
 }

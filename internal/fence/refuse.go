@@ -101,6 +101,13 @@ const (
 	// name is. The fence cannot rewrite a method, because the method gives
 	// the request its meaning. Thus it refuses the request.
 	CauseKeyInMethod RefusalCause = "key_in_method"
+	// CauseEncodedURLToken is a live value or a token-prefix match in the
+	// percent-decoded target that the raw target does not show: what a
+	// literal target strips. The raw bytes are different, so the fence
+	// cannot strip it in place. A target that does not decode to a stable
+	// form in a few rounds is also this cause, because the fence cannot see
+	// what the origin decodes. Thus the fence refuses the request.
+	CauseEncodedURLToken RefusalCause = "encoded_url_token"
 )
 
 type Refusal struct {
@@ -207,6 +214,33 @@ func (s *scanner) noteMethod(method string) {
 	}
 	if s.all.match(b) {
 		s.refuse(CauseKeyInMethod, "", "", "method")
+	}
+}
+
+// noteTarget scans the percent-decoded target, because the origin decodes
+// it. A placeholder there refuses the request as in the raw target. The
+// live value and token scans read the decoded form of the target after
+// the raw strip. Thus a literal match strips as before, and only an
+// encoded match refuses (CauseEncodedURLToken). A '+' stays a '+', as in
+// GitPushTarget.
+func (s *scanner) noteTarget(target string) {
+	if !strings.Contains(target, "%") {
+		return
+	}
+	dec, stable := unescapeAll(target)
+	if !stable {
+		s.refuse(CauseEncodedURLToken, "", "", "url")
+		return
+	}
+	s.noteAll([]byte(dec), "url")
+	b, _ := unescapeAll(string(s.strip([]byte(target))))
+	for _, sl := range s.idx.Lives {
+		if !s.keeps(sl) && strings.Contains(b, sl.Live) {
+			s.refuse(CauseEncodedURLToken, sl.ID, sl.Kind, "url")
+		}
+	}
+	if s.tokens.match([]byte(b)) {
+		s.refuse(CauseEncodedURLToken, "", "", "url")
 	}
 }
 

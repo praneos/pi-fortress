@@ -507,6 +507,10 @@ Substitution can fail for these reasons:
 - The request method holds a placeholder, a live value, or a token-prefix
   match (`key_in_method`). The fence cannot rewrite a method, because the
   method gives the request its meaning.
+- The percent-decoded request target holds a live value or a token-prefix
+  match that the raw target does not show, or the target does not decode to
+  a stable form in a few rounds (`encoded_url_token`). The raw bytes are
+  different, so the fence cannot strip the value in place.
 
 For all of them, the agent gets one response, byte for byte: a 503 with
 `Retry-After: 60` and a body that names no cause. The broker refuses the
@@ -530,9 +534,10 @@ The detail is not deleted. It only goes to a different place. The broker
 writes each cause to the strip log as `substitution_refused`, with the cause,
 slot, kind, and SNI. `kind_not_allowed_for_sni`,
 `placeholder_outside_header`, `placeholder_in_ws` (5.3c),
-`encoded_body_token`, `key_in_header_name`, and `key_in_method` are always
-marked `alert`. Each other cause is marked `alert` one time for each broker
-start. These six are not an operational fault to fix. They show the fence
+`encoded_body_token`, `key_in_header_name`, `key_in_method`, and
+`encoded_url_token` are always marked `alert`. Each other cause is marked
+`alert` one time for each broker start. These seven are not an operational
+fault to fix. They show the fence
 catching a credential aimed where it may not go. This is the signature of a
 compromised or badly broken agent.
 
@@ -940,7 +945,7 @@ These all refuse in the same way, `encoded_body_unscannable`:
 A live value or token-prefix match found after the decode is
 `encoded_body_token`. `encoded_body_token` alerts every time, the same as
 `kind_not_allowed_for_sni`, `placeholder_outside_header`,
-`key_in_header_name`, and `key_in_method` (5.2b).
+`key_in_header_name`, `key_in_method`, and `encoded_url_token` (5.2b).
 `encoded_body_unscannable` alerts one time for each broker run, like a sealed
 store. Reason: the broker refuses every request of a harmless client that
 compresses its uploads with zstd. An alert on each one would fill the hourly
