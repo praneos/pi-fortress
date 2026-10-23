@@ -1,0 +1,126 @@
+# Shared parents. THIS FILE IS CODE, not operator state: each ship
+# replaces it, and the TUI cannot edit it. To change it, change it here,
+# in git, and ship.
+#
+# Many unrelated owners have their own sites under each name here. A
+# blocked name also blocks every name under it. Thus a feed line for
+# github.io blocks the sites of all owners, not only the one bad site
+# that the feed meant. pf compile drops a feed entry that is a name of
+# this list or a parent of one (github.io, io). An entry under a name of
+# this list (bad.github.io) still compiles.
+#
+# This list applies only to the fetched feeds. A name that the operator
+# writes in blacklist.domains or house.domains compiles as written.
+# One name per line.
+
+# Code and static sites
+github.io
+gitlab.io
+bitbucket.io
+codeberg.page
+pages.dev
+workers.dev
+r2.dev
+netlify.app
+vercel.app
+now.sh
+surge.sh
+neocities.org
+readthedocs.io
+gitbook.io
+webflow.io
+framer.website
+notion.site
+carrd.co
+
+# Application and storage platforms
+herokuapp.com
+fly.dev
+onrender.com
+railway.app
+glitch.me
+replit.app
+repl.co
+deno.dev
+koyeb.app
+ondigitalocean.app
+digitaloceanspaces.com
+linodeobjects.com
+pythonanywhere.com
+azurewebsites.net
+azurestaticapps.net
+azureedge.net
+azurefd.net
+cloudapp.net
+cloudapp.azure.com
+trafficmanager.net
+blob.core.windows.net
+web.core.windows.net
+sharepoint.com
+appspot.com
+firebaseapp.com
+web.app
+a.run.app
+cloudfunctions.net
+storage.googleapis.com
+sites.google.com
+docs.google.com
+drive.google.com
+s3.amazonaws.com
+cloudfront.net
+elasticbeanstalk.com
+amplifyapp.com
+awsapprunner.com
+b-cdn.net
+myshopify.com
+
+# Blogs and site builders
+blogspot.com
+wordpress.com
+tumblr.com
+wixsite.com
+weebly.com
+squarespace.com
+jimdosite.com
+godaddysites.com
+square.site
+strikingly.com
+site123.me
+substack.com
+000webhostapp.com
+
+# Dynamic DNS
+duckdns.org
+ddns.net
+hopto.org
+zapto.org
+sytes.net
+no-ip.org
+dynu.net
+
+# Public suffixes with two labels
+co.uk
+org.uk
+ac.uk
+gov.uk
+me.uk
+com.au
+net.au
+org.au
+co.nz
+co.jp
+ne.jp
+or.jp
+co.kr
+co.in
+co.za
+co.id
+com.br
+com.cn
+com.mx
+com.tr
+com.sg
+com.hk
+com.tw
+com.ar
+com.my

@@ -120,6 +120,20 @@ type Summary struct {
 	// line was not an address that the list accepts, and the compiler skipped
 	// it. Line prints each one after the counts.
 	Warnings []string
+	// SharedParents are the feed entries that did not compile because each
+	// is at a shared parent (AtSharedParent), in order. Line prints them.
+	SharedParents []string
+}
+
+// skipLine tells the operator which feed entries did not compile, and why.
+// It names the first few. A feed that goes wrong can carry many of them.
+func skipLine(items []string, why string) string {
+	const show = 5
+	names := strings.Join(items[:min(len(items), show)], ", ")
+	if len(items) > show {
+		names += ", ..."
+	}
+	return fmt.Sprintf("\ncompile: skipped %d feed entries %s: %s", len(items), why, names)
 }
 
 func (s Summary) Line() string {
@@ -144,6 +158,9 @@ func (s Summary) Line() string {
 	}
 	for _, w := range s.Warnings {
 		line += "\ncompile: warning: " + w
+	}
+	if len(s.SharedParents) > 0 {
+		line += skipLine(s.SharedParents, "at a shared parent ("+SharedParentsFile+")")
 	}
 	return line
 }
@@ -288,6 +305,64 @@ func BlocksCoreHost(entry string, core *corepolicy.Policy) bool {
 		}
 	}
 	return false
+}
+
+// SharedParentsFile lists the shared parents: names under which many
+// unrelated owners have their own sites (github.io, herokuapp.com), and
+// public suffixes with two labels (co.uk). It ships, and each ship
+// replaces it.
+const SharedParentsFile = "shared_parents.domains"
+
+// SharedParents gives the set that AtSharedParent reads: each name of
+// the list and each parent of it.
+func SharedParents(names []string) map[string]struct{} {
+	m := make(map[string]struct{}, 2*len(names))
+	for _, name := range names {
+		for {
+			m[name] = struct{}{}
+			_, rest, ok := strings.Cut(name, ".")
+			if !ok {
+				break
+			}
+			name = rest
+		}
+	}
+	return m
+}
+
+// AtSharedParent says if a feed entry is a shared parent or a parent of
+// one. A feed line for github.io blocks the sites of all owners under it,
+// not only the one bad site that the feed meant. So the entry does not
+// compile. An entry under a shared parent (x.github.io) stays. The rule
+// applies only to the feeds: a name that the operator writes in a block
+// list compiles as written.
+func AtSharedParent(entry string, shared map[string]struct{}) bool {
+	_, ok := shared[entry]
+	return ok
+}
+
+// dropFeed removes from items each entry that refuse matches, and adds it
+// to dropped.
+func dropFeed(items []string, refuse func(string) bool, dropped map[string]struct{}) []string {
+	var kept []string
+	for _, item := range items {
+		if refuse(item) {
+			dropped[item] = struct{}{}
+			continue
+		}
+		kept = append(kept, item)
+	}
+	return kept
+}
+
+// sorted gives the items of a set in order.
+func sorted(m map[string]struct{}) []string {
+	out := make([]string, 0, len(m))
+	for item := range m {
+		out = append(out, item)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // set is the membership set of items.
@@ -550,22 +625,22 @@ func loadTokens(path, kind string) ([]string, []badLine, error) {
 	return out, bad, nil
 }
 
-func collect(policyDir string, seg SegmentPolicy, kind string) (items []string, never []string, err error) {
+// collect loads the block list of a segment in two halves: feed, which pf
+// fetch writes, and local, which the operator writes.
+func collect(policyDir string, seg SegmentPolicy, kind string) (feed, local, never []string, err error) {
 	never, err = LoadTokens(filepath.Join(policyDir, seg.File("never_block."+kind)), kind)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	for _, name := range []string{
-		filepath.Join(policyDir, seg.Generated(kind)),
-		filepath.Join(policyDir, seg.Sinkhole(kind)),
-	} {
-		got, err := LoadTokens(name, kind)
-		if err != nil {
-			return nil, nil, err
-		}
-		items = append(items, got...)
+	feed, err = LoadTokens(filepath.Join(policyDir, seg.Generated(kind)), kind)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	return items, never, nil
+	local, err = LoadTokens(filepath.Join(policyDir, seg.Sinkhole(kind)), kind)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	return feed, local, never, nil
 }
 
 func nftElements(items []string) string {
@@ -693,7 +768,10 @@ func compileOperatorIPs(src, kind, what string, warn *[]string, path string) ([]
 	return final, nil
 }
 
-func compileHouse(policyDir string, house SegmentPolicy, out Out) (houseFinal, houseVPNFinal []string, err error) {
+// compileHouse removes the entries of the two house feeds that refuseFeed
+// matches. The shipped defaults and house.domains of the operator compile
+// as written.
+func compileHouse(policyDir string, house SegmentPolicy, out Out, refuseFeed func([]string) []string) (houseFinal, houseVPNFinal []string, err error) {
 	if out.HouseDNS == "" {
 		return nil, nil, nil
 	}
@@ -709,14 +787,20 @@ func compileHouse(policyDir string, house SegmentPolicy, out Out) (houseFinal, h
 	seenHouse := map[string]struct{}{}
 	// The defaults go first. Thus the head of the compiled file is the shipped
 	// baseline, and the volatile feed is in the middle of each diff.
-	for _, name := range []string{
-		filepath.Join(policyDir, house.File("default.domains")),
-		filepath.Join(policyDir, house.Generated("domains")),
-		filepath.Join(policyDir, house.Sinkhole("domains")),
+	for _, f := range []struct {
+		name string
+		feed bool
+	}{
+		{house.File("default.domains"), false},
+		{house.Generated("domains"), true},
+		{house.Sinkhole("domains"), false},
 	} {
-		got, err := LoadTokens(name, "domains")
+		got, err := LoadTokens(filepath.Join(policyDir, f.name), "domains")
 		if err != nil {
 			return nil, nil, err
+		}
+		if f.feed {
+			got = refuseFeed(got)
 		}
 		houseFinal = keepNew(houseFinal, got, seenHouse, isNever)
 	}
@@ -730,7 +814,7 @@ func compileHouse(policyDir string, house SegmentPolicy, out Out) (houseFinal, h
 	if err != nil {
 		return nil, nil, err
 	}
-	houseVPNFinal = keepNew(nil, got, seenHouse, isNever)
+	houseVPNFinal = keepNew(nil, refuseFeed(got), seenHouse, isNever)
 	if err := writeFile(out.HouseVPNDNS, dnsLines(houseVPNFinal)); err != nil {
 		return nil, nil, err
 	}
@@ -764,14 +848,26 @@ func compilePrivateDNS(policyDir string, house SegmentPolicy, out Out, dohDomain
 
 func Compile(policyDir string, out Out) (Summary, error) {
 	agent := SegmentFor(DenyByDefault)
-	ips, neverIPTokens, err := collect(policyDir, agent, "ips")
+	feedIPs, localIPs, neverIPTokens, err := collect(policyDir, agent, "ips")
 	if err != nil {
 		return Summary{}, err
 	}
-	domains, neverDomainsList, err := collect(policyDir, agent, "domains")
+	feedDomains, localDomains, neverDomainsList, err := collect(policyDir, agent, "domains")
 	if err != nil {
 		return Summary{}, err
 	}
+	sharedList, err := LoadTokens(filepath.Join(policyDir, SharedParentsFile), "domains")
+	if err != nil {
+		return Summary{}, err
+	}
+	shared := SharedParents(sharedList)
+	sharedDropped := map[string]struct{}{}
+	refuseFeed := func(items []string) []string {
+		return dropFeed(items, func(d string) bool { return AtSharedParent(d, shared) }, sharedDropped)
+	}
+	// The feed half goes first, as before the split.
+	ips := append(feedIPs, localIPs...)
+	domains := append(refuseFeed(feedDomains), localDomains...)
 	neverNets := make([]netip.Prefix, 0, len(neverIPTokens))
 	for _, token := range neverIPTokens {
 		p, ok := parsePrefix4(token)
@@ -850,7 +946,7 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	}
 
 	house := SegmentFor(AllowByDefault)
-	houseFinal, houseVPNFinal, err := compileHouse(policyDir, house, out)
+	houseFinal, houseVPNFinal, err := compileHouse(policyDir, house, out, refuseFeed)
 	if err != nil {
 		return Summary{}, err
 	}
@@ -889,5 +985,6 @@ func Compile(policyDir string, out Out) (Summary, error) {
 		SSHAllows:       len(sshFinal),
 		GitPushes:       gitPush.Len(),
 		Warnings:        warnings,
+		SharedParents:   sorted(sharedDropped),
 	}, nil
 }
