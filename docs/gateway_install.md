@@ -158,6 +158,18 @@ No code of `pf upgrade` duplicates these items (`internal/install/upgrade.go`, `
 
 There is no network wizard, and `provision.sh` does not run again. Reason: an upgrade changes code and policy defaults, not interfaces or apt packages. `-confirm` still execs `pf ship confirm`.
 
+### OS packages and reboots
+
+`pf upgrade` does not update the OS packages. On a fresh install, `provision.sh` enables `unattended-upgrades`. It installs updates each day and does not reboot (`Automatic-Reboot "false"`). Thus a kernel or core library fix is not active until you reboot the gateway.
+
+`pf doctor` shows this on rung `reboot`:
+
+- `warn`: `/var/run/reboot-required` is there. The rung shows its age and the packages from `/var/run/reboot-required.pkgs`. Each package that asks for a reboot writes the flag again, so the age is the time since the last request.
+- `warn`: the running kernel is no longer installed, or a newer kernel of the same flavor is installed. The rung compares `uname -r` with the directories in `/lib/modules`. A kernel that is installed again with the same release string does not show here; the flag shows it.
+- `FAIL`: the flag is older than 7 days.
+
+Plan the reboot: `sudo reboot`. The agents have no gateway while it starts.
+
 ## Two signers, on purpose
 
 There are two different signer files:

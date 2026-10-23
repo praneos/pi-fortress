@@ -74,6 +74,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	if r, ok := doctor.ShipRung(jsonl.LastShip(*shipLog)); ok {
 		rs = append(rs, r)
 	}
+	rs = append(rs, doctor.RebootRung(doctor.DefaultRebootPaths(), time.Now()))
 	return doctor.Report(stdout, rs)
 }
 
