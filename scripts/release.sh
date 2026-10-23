@@ -47,7 +47,8 @@ preflight() {
 	[ "$have" = "$want" ] || die "go is $have, go.mod pins $want"
 }
 
-# build SRC OUT: one static pf per arch.
+# build SRC OUT: one pf per arch. It is a position-independent executable
+# with no shared libraries. The kernel loads its code at a random address.
 build() {
 	local src=$1 out=$2 ver epoch arch
 	preflight "$src"
@@ -59,7 +60,7 @@ build() {
 		# clean flag, all fixed by preflight. Backup manifests read it.
 		(cd "$src" && env GOENV=off GOTOOLCHAIN=local GOFLAGS=-mod=vendor GOPROXY=off GOWORK=off \
 			GOEXPERIMENT= CGO_ENABLED=0 GOOS=linux GOARCH="$arch" GOAMD64=v1 GOARM64=v8.0 \
-			go build -trimpath -buildvcs=true \
+			go build -buildmode=pie -trimpath -buildvcs=true \
 			-ldflags "-s -w -buildid= -X pi-fortress/internal/cli.Version=$ver" \
 			-o "$out/pf-linux-$arch" ./cmd/pf)
 		chmod 0755 "$out/pf-linux-$arch"

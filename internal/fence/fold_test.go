@@ -76,14 +76,24 @@ func TestFoldIsASCIIOnly(t *testing.T) {
 	}
 }
 
-// The placeholder stays exact: the gateway spells it one way, and only
-// that spelling is one of its own.
+// The scan finds a placeholder in any letter case. Only the spelling of
+// the gateway is exact, and only an exact placeholder gets a live value.
 func TestPlaceholderStaysExact(t *testing.T) {
-	if len(secrets.FindPlaceholderSpans([]byte("pf_0123456789abcdef_GITHUB_TOKEN"))) != 1 {
-		t.Fatal("placeholder not found")
-	}
-	if len(secrets.FindPlaceholderSpans([]byte("PF_0123456789abcdef_GITHUB_TOKEN"))) != 0 {
-		t.Fatal("an upper-cased placeholder spelling was taken for the gateway's")
+	for in, exact := range map[string]bool{
+		"pf_0123456789abcdef_GITHUB_TOKEN":  true,
+		"pf_0123456789ABCDEF_GITHUB_TOKEN":  true,
+		"PF_0123456789abcdef_GITHUB_TOKEN":  false,
+		"pf_0123456789abcdef_github_token":  false,
+		"pf_0123456789abcdef_GITHUB_TOKENx": false,
+	} {
+		b := []byte(in)
+		sp := secrets.FindPlaceholderSpans(b)
+		if len(sp) != 1 || sp[0] != [2]int{0, len(b)} {
+			t.Fatalf("%s: spans %v", in, sp)
+		}
+		if secrets.PlaceholderExact(b, sp[0]) != exact {
+			t.Fatalf("%s: exact %v", in, !exact)
+		}
 	}
 }
 

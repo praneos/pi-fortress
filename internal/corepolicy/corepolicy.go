@@ -152,6 +152,7 @@ func DefaultHeader(name string) bool {
 var (
 	deniedHeaders = map[string]struct{}{
 		"user-agent": {}, "referer": {}, "origin": {},
+		"cookie": {}, "set-cookie": {},
 		"host": {}, "via": {}, "forwarded": {}, "x-real-ip": {},
 		"transfer-encoding": {}, "connection": {}, "keep-alive": {},
 		"upgrade": {}, "te": {}, "trailer": {},

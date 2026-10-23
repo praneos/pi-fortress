@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-var refPlaceholder = regexp.MustCompile(`pf_([0-9a-fA-F]{16})_([A-Z][A-Z0-9_]*)\b`)
+var refPlaceholder = regexp.MustCompile(`(?i:pf)_([0-9a-fA-F]{16})_([A-Za-z][A-Za-z0-9_]*)`)
 
 func FuzzFindPlaceholderSpans(f *testing.F) {
 	f.Add("pf_a1b2c3d4e5f67890_CLAUDE_OAT")

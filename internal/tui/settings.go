@@ -30,7 +30,7 @@ var houseGroups = []settingGroup{
 		{"HOUSE_BLOCK_VPN", "Block devices' own VPNs", "on drops WireGuard, OpenVPN, Tailscale, WARP and VPN/proxy domains, so no device routes around the filter."},
 	}},
 	{"Apps & ports", []setting{
-		{"HOUSE_EGRESS", "Outbound ports", "strict: web, NTP, ping and the switches below. audit: log what strict would drop, pass it. open: any port. Enter cycles."},
+		{"HOUSE_EGRESS", "Outbound ports", "strict: web, mail, push, NTP, ping and the switches below. audit: log what strict would drop, pass it. open: any port. Enter cycles."},
 		{"HOUSE_ALLOW_WIFI_CALLING", "Wi-Fi calling", "on opens IPsec (UDP 500/4500, ESP) to anywhere; IKEv2 VPNs get through too."},
 		{"HOUSE_ALLOW_CALL_UDP", "Call apps' UDP", "Meet, Zoom, Teams, WhatsApp, FaceTime media. Off, calls relay over TCP 443 with a little more delay."},
 		{"HOUSE_ALLOW_WHATSAPP", "WhatsApp messages", "on lets WhatsApp's non-TLS chat reach Meta's ranges only. Off, WhatsApp messages stop on this network."},

@@ -2,7 +2,6 @@ package www
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -13,7 +12,7 @@ import (
 func TestRotatedLedgerStaysGroupWritable(t *testing.T) {
 	old := syscall.Umask(0o022)
 	defer syscall.Umask(old)
-	dir := t.TempDir()
+	dir := newClaimsDir(t)
 	p := LedgerPath(dir)
 	if err := os.WriteFile(p, []byte(strings.Repeat("x", ledgerCap+1)), 0660); err != nil {
 		t.Fatal(err)
@@ -21,7 +20,7 @@ func TestRotatedLedgerStaysGroupWritable(t *testing.T) {
 	if err := AppendEvent(dir, Event{Ev: "setup"}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "ledger.jsonl.1")); err != nil {
+	if _, err := os.Stat(p + ".1"); err != nil {
 		t.Fatalf("no rotated generation: %v", err)
 	}
 	fi, err := os.Stat(p)

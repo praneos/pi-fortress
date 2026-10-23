@@ -33,7 +33,7 @@ func parseExpires(raw string) map[string]int64 {
 		if err != nil || ts <= 0 {
 			continue
 		}
-		if id := strings.ToLower(f[0]); validSlotID(id) == nil {
+		if id := strings.ToLower(f[0]); ValidSlotID(id) == nil {
 			out[id] = ts
 		}
 	}

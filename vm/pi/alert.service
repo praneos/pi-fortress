@@ -41,7 +41,11 @@ CapabilityBoundingSet=
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged
-ReadWritePaths=/var/lib/pi-fortress /var/log/pi-fortress
+# The three files that the sidecar rewrites in place, nothing else. It
+# only reads the logs. apply.sh makes the files, owned by pf-sidecar,
+# before it starts the unit. A "-" lets the unit start before the first
+# apply. Then the sidecar cannot save its place until apply restarts it.
+ReadWritePaths=-/var/lib/pi-fortress/alert.offset -/var/lib/pi-fortress/alert-notice.offset -/var/lib/pi-fortress/alert.last
 InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine
 ExecStart=/usr/local/sbin/pf alert run
 

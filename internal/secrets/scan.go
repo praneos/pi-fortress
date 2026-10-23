@@ -8,23 +8,28 @@ import (
 
 const phPrefix = "pf_"
 
-// IsPlaceholder reports whether v is one whole placeholder and nothing
-// else. A prefix test would also accept a live value that only starts
-// with "pf_" as a placeholder.
+// IsPlaceholder reports whether v is one whole exact placeholder and
+// nothing else. A prefix test would also accept a live value that only
+// starts with "pf_" as a placeholder.
 func IsPlaceholder(v string) bool {
-	sp := FindPlaceholderSpans([]byte(v))
-	return len(sp) == 1 && sp[0] == [2]int{0, len(v)}
+	b := []byte(v)
+	sp := FindPlaceholderSpans(b)
+	return len(sp) == 1 && sp[0] == [2]int{0, len(v)} && PlaceholderExact(b, sp[0])
 }
 
-// FindPlaceholderSpans returns [start,end) of each placeholder in b. It
-// matches pf_<16 hex>_<KIND> with the same boundary rule as the
-// regexp: the kind is a maximal run of [A-Z0-9_], and a lowercase
-// letter must not follow it. No regexp: one Index for each candidate.
+// FindPlaceholderSpans returns [start,end) of each placeholder in b, in
+// any letter case. It matches pf_<16 hex>_<kind>: the prefix in any case,
+// and the kind is a letter and then a maximal run of [A-Za-z0-9_]. The
+// slot ID is the secret part. An origin can change the case back, or
+// remove a letter that the agent added. Thus a span is also each such
+// variant of a placeholder. The fence substitutes only an exact span
+// (PlaceholderExact). It refuses each other span as it refuses a
+// placeholder in a forbidden place. No regexp: one index for each
+// candidate.
 func FindPlaceholderSpans(b []byte) [][2]int {
 	var out [][2]int
-	pre := []byte(phPrefix)
 	for i := 0; i < len(b); {
-		j := bytes.Index(b[i:], pre)
+		j := indexPrefix(b[i:])
 		if j < 0 {
 			break
 		}
@@ -39,37 +44,48 @@ func FindPlaceholderSpans(b []byte) [][2]int {
 	return out
 }
 
-// TrailingPlaceholders returns the start of the run of placeholders that
-// ends exactly at len(b). In the run, each one ends where the next
-// begins. It returns len(b) when no placeholder ends there. It finds, in
-// one backward pass, what FindPlaceholderSpans would find if repeated on
-// shorter and shorter prefixes. A span holds no 'p' past its first byte.
-// Thus the only candidate that ends at n is the last pf_ before n, and
-// the code never examines the bytes of one candidate again.
-func TrailingPlaceholders(b []byte) int {
-	pre := []byte(phPrefix)
-	n := len(b)
-	for {
-		s := bytes.LastIndex(b[:n], pre)
-		if s < 0 {
-			return n
-		}
-		if e, ok := placeholderEnd(b[:n], s); !ok || e != n {
-			return n
-		}
-		n = s
+// PlaceholderExact reports whether the span is a placeholder as the
+// gateway writes it: the prefix "pf_" and a kind of [A-Z0-9_] only. The
+// slot hex can be in either case. Only an exact span gets a live value.
+func PlaceholderExact(b []byte, span [2]int) bool {
+	if string(b[span[0]:span[0]+len(phPrefix)]) != phPrefix {
+		return false
 	}
+	for _, c := range b[span[0]+len(phPrefix)+17 : span[1]] {
+		if c >= 'a' && c <= 'z' {
+			return false
+		}
+	}
+	return true
+}
+
+// TrailingPlaceholders returns the start of the placeholder that ends
+// exactly at len(b), or len(b) when no placeholder ends there. Each byte
+// of a span is in [A-Za-z0-9_], and the kind run is maximal. Thus a span
+// that ends at len(b) is in the last run of such bytes. It is the first
+// span in that run, because it takes the run to its end. Two spans are
+// never adjacent: a span ends before a byte outside the run, and a span
+// starts with p or P.
+func TrailingPlaceholders(b []byte) int {
+	r := len(b)
+	for r > 0 && isWord(b[r-1]) {
+		r--
+	}
+	if sp := FindPlaceholderSpans(b[r:]); len(sp) > 0 && r+sp[0][1] == len(b) {
+		return r + sp[0][0]
+	}
+	return len(b)
 }
 
 // PlaceholderHold reports how many trailing bytes of b may still belong
 // to a placeholder whose end has not arrived: from the earliest pf_
-// candidate that b cannot settle, or a partial prefix exactly at the
-// end. A streamed scan may emit all bytes before them. What it emits can
-// never be the head of a placeholder that the next read completes.
+// candidate (any case) that b cannot settle, or a partial prefix exactly
+// at the end. A streamed scan may emit all bytes before them. What it
+// emits can never be the head of a placeholder that the next read
+// completes.
 func PlaceholderHold(b []byte) int {
-	pre := []byte(phPrefix)
 	for i := 0; i < len(b); {
-		j := bytes.Index(b[i:], pre)
+		j := indexPrefix(b[i:])
 		if j < 0 {
 			break
 		}
@@ -79,8 +95,8 @@ func PlaceholderHold(b []byte) int {
 		}
 		i = s + 1
 	}
-	for k := min(len(pre)-1, len(b)); k > 0; k-- {
-		if bytes.HasSuffix(b, pre[:k]) {
+	for k := min(len(phPrefix)-1, len(b)); k > 0; k-- {
+		if hasPrefixFold(b[len(b)-k:], phPrefix[:k]) {
 			return k
 		}
 	}
@@ -104,11 +120,11 @@ func placeholderOpen(b []byte, s int) bool {
 	if k >= len(b) {
 		return true
 	}
-	if !isUpper(b[k]) {
+	if !isLetter(b[k]) {
 		return false
 	}
 	e := k + 1
-	for e < len(b) && isKind(b[e]) {
+	for e < len(b) && isWord(b[e]) {
 		e++
 	}
 	return e == len(b)
@@ -128,27 +144,58 @@ func placeholderEnd(b []byte, s int) (int, bool) {
 		return 0, false
 	}
 	k := p + 17
-	if !isUpper(b[k]) {
+	if !isLetter(b[k]) {
 		return 0, false
 	}
 	e := k + 1
-	for e < len(b) && isKind(b[e]) {
+	for e < len(b) && isWord(b[e]) {
 		e++
 	}
-	if e < len(b) && b[e] >= 'a' && b[e] <= 'z' {
-		return 0, false
-	}
 	return e, true
+}
+
+// indexPrefix returns the index of the first "pf_" in b, in any letter
+// case, or -1.
+func indexPrefix(b []byte) int {
+	for i := 0; ; {
+		j := bytes.IndexByte(b[i:], '_')
+		if j < 0 {
+			return -1
+		}
+		u := i + j
+		if u >= 2 && hasPrefixFold(b[u-2:u], "pf") {
+			return u - 2
+		}
+		i = u + 1
+	}
+}
+
+// hasPrefixFold reports whether b starts with the lower-case ASCII
+// string p, in any letter case.
+func hasPrefixFold(b []byte, p string) bool {
+	if len(b) < len(p) {
+		return false
+	}
+	for i := 0; i < len(p); i++ {
+		c := b[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		if c != p[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func isHex(c byte) bool {
 	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
 
-func isUpper(c byte) bool { return c >= 'A' && c <= 'Z' }
+func isLetter(c byte) bool { return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') }
 
-func isKind(c byte) bool {
-	return isUpper(c) || (c >= '0' && c <= '9') || c == '_'
+func isWord(c byte) bool {
+	return isLetter(c) || (c >= '0' && c <= '9') || c == '_'
 }
 
 // PlaceholderParts splits the placeholder at span into its slot ID,

@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"pi-fortress/internal/enroll"
+	"pi-fortress/internal/secrets"
 )
 
 const (
@@ -76,7 +79,41 @@ func fileSHA256(path string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// ClaimsDir holds the claim files. Only root writes it. www is in its group
+// and reads it (vm/pi/apply.sh installs it 2750 root:pf-fortress).
 func ClaimsDir(wwwDir string) string { return filepath.Join(wwwDir, "claims") }
+
+// RedeemedDir is the directory that www writes: one marker for each spent
+// code, and the ledger. It is next to claimsDir (2770 root:pf-fortress).
+// www can redeem a claim, but it can never create, change or remove one.
+func RedeemedDir(claimsDir string) string { return filepath.Clean(claimsDir) + "-redeemed" }
+
+func markerPath(claimsDir, code string) string {
+	return filepath.Join(RedeemedDir(claimsDir), code+".redeemed")
+}
+
+// makeRedeemedDir makes RedeemedDir when it is missing, in the group of
+// claimsDir, mode 2770. Root calls it. The parent is not writable by www,
+// so a chown and chmod by name are safe here.
+func makeRedeemedDir(claimsDir string) error {
+	rd := RedeemedDir(claimsDir)
+	if err := os.Mkdir(rd, 0770); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return nil
+		}
+		return err
+	}
+	fi, err := os.Stat(claimsDir)
+	if err != nil {
+		return err
+	}
+	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+		if err := os.Chown(rd, -1, int(st.Gid)); err != nil && !errors.Is(err, os.ErrPermission) {
+			return err
+		}
+	}
+	return os.Chmod(rd, 0770|os.ModeSetgid)
+}
 
 func NewCode() (string, error) {
 	b := make([]byte, claimLen)
@@ -104,11 +141,17 @@ func validCode(code string) bool {
 // IssueClaim writes claims/<CODE>.json. This file is the only record that
 // the redeem side needs. The TUI runs as root, and www runs as a DynamicUser
 // in the group of the claims directory. So the file goes in that group with
-// mode 0640. www reads it and renames it (rename needs the directory, not
-// the file), but www can never rewrite the slot that it names. apply.sh
+// mode 0640. www can read the file, but it cannot write the file or the
+// directory. Thus www can never create a claim, or rewrite the slot that a
+// claim names. To spend a code, www makes a marker in RedeemedDir. apply.sh
 // also sets the directory setgid. With the chown here, a directory that a
-// user made again by hand cannot silently break enrolment.
+// user made again by hand cannot silently break enrolment. IssueClaim first
+// sweeps old claims and markers, because www cannot remove them.
 func IssueClaim(dir, slot string, kinds []string, gitHosts ...string) (Claim, error) {
+	Sweep(dir)
+	if err := makeRedeemedDir(dir); err != nil {
+		return Claim{}, err
+	}
 	code, err := NewCode()
 	if err != nil {
 		return Claim{}, err
@@ -117,6 +160,9 @@ func IssueClaim(dir, slot string, kinds []string, gitHosts ...string) (Claim, er
 	c := Claim{Code: code, Slot: strings.ToLower(slot), Kinds: kinds, Issued: now, Expires: now.Add(ClaimTTL), GitHosts: gitHosts,
 		// dir is ClaimsDir(wwwDir), so its parent is what www serves.
 		SetupSHA256: fileSHA256(setupPath(filepath.Dir(dir))), CASHA256: fileSHA256(caPath(filepath.Dir(dir)))}
+	if !scriptFields(c) {
+		return Claim{}, errors.New("claim: invalid slot or kind")
+	}
 	raw, err := json.Marshal(c)
 	if err != nil {
 		return Claim{}, err
@@ -142,8 +188,7 @@ func IssueClaim(dir, slot string, kinds []string, gitHosts ...string) (Claim, er
 
 // groupOfDir puts f in the group of dir, so the redeem side can read it.
 // The redeem side shares that group and nothing else. It works by
-// descriptor: www can write dir, so at the time of a chown by name, the
-// name could be a link that www left there.
+// descriptor, so the chown applies only to the file that this call made.
 func groupOfDir(dir string, f *os.File) error {
 	fi, err := os.Stat(dir)
 	if err != nil {
@@ -159,51 +204,120 @@ func groupOfDir(dir string, f *os.File) error {
 	return nil
 }
 
-// RedeemClaim consumes a code. The rename is the single-use guarantee: a
-// second caller finds no <CODE>.json. RedeemClaim also consumes expired
-// files, and refuses them.
+// RedeemClaim consumes a code. www reads claims from dir and writes only in
+// RedeemedDir(dir). The marker <CODE>.redeemed, made with O_EXCL, is the
+// single-use guarantee: a second caller cannot make it again. The marker
+// is on disk, so a code stays spent after a restart. RedeemClaim makes a
+// marker only for a claim file that exists, so a guess leaves no file.
+// After the marker, it reads the claim. It refuses an expired claim, a
+// claim file that the owner of dir did not make, and a field that
+// scriptFields does not accept. That answer is the same as for an unknown
+// code.
 func RedeemClaim(dir, code string) (Claim, error) {
 	code = strings.ToUpper(strings.TrimSpace(code))
 	if !validCode(code) {
 		return Claim{}, ErrNoClaim
 	}
 	src := filepath.Join(dir, code+".json")
-	dst := filepath.Join(dir, code+".redeemed")
-	if err := os.Rename(src, dst); err != nil {
+	if _, err := os.Lstat(src); err != nil {
 		return Claim{}, ErrNoClaim
 	}
-	raw, err := os.ReadFile(dst)
+	m, err := os.OpenFile(markerPath(dir, code), os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0640)
+	if err != nil {
+		return Claim{}, ErrNoClaim
+	}
+	if err := m.Close(); err != nil {
+		return Claim{}, ErrNoClaim
+	}
+	raw, err := readClaim(dir, src)
 	if err != nil {
 		return Claim{}, ErrNoClaim
 	}
 	var c Claim
-	if json.Unmarshal(raw, &c) != nil || c.Code != code || time.Now().After(c.Expires) {
+	if json.Unmarshal(raw, &c) != nil || c.Code != code || time.Now().After(c.Expires) || !scriptFields(c) {
 		return Claim{}, ErrNoClaim
 	}
 	return c, nil
 }
 
-// Sweep removes redeemed files and expired claims older than an hour.
-func Sweep(dir string) {
-	entries, err := os.ReadDir(dir)
+// claimMax bounds the read of one claim file. A real claim is far smaller.
+const claimMax = 64 << 10
+
+// readClaim reads the claim file at path. The file must be a regular file
+// with the owner of dir. Root owns dir and makes each claim. So a file with
+// a different owner is not a claim.
+func readClaim(dir, path string) ([]byte, error) {
+	di, err := os.Stat(dir)
 	if err != nil {
-		return
+		return nil, err
 	}
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() || !sameOwner(di, fi) {
+		return nil, ErrNoClaim
+	}
+	return io.ReadAll(io.LimitReader(f, claimMax))
+}
+
+// sameOwner reports whether a and b have the same owner.
+func sameOwner(a, b os.FileInfo) bool {
+	sa, ok1 := a.Sys().(*syscall.Stat_t)
+	sb, ok2 := b.Sys().(*syscall.Stat_t)
+	return ok1 && ok2 && sa.Uid == sb.Uid
+}
+
+// Sweep removes old claims, and then the marker of each claim that is gone.
+// Root runs it (IssueClaim, pf www -init-ledger), because www can remove
+// nothing in dir. A claim goes after an hour. A file in dir that the owner
+// of dir did not make goes at once: no redeem accepts it. A marker goes
+// only after its claim, so a code stays spent while its claim file exists.
+// A <CODE>.redeemed in dir is a spent claim of the layout before
+// RedeemedDir. It goes after an hour.
+func Sweep(dir string) {
 	cut := time.Now().Add(-sweepAfter)
+	if di, err := os.Stat(dir); err == nil {
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			name := e.Name()
+			if !strings.HasSuffix(name, ".redeemed") && !strings.HasSuffix(name, ".json") {
+				continue
+			}
+			if fi, err := e.Info(); err == nil && (fi.ModTime().Before(cut) || !sameOwner(di, fi)) {
+				_ = os.Remove(filepath.Join(dir, name))
+			}
+		}
+	}
+	entries, _ := os.ReadDir(RedeemedDir(dir))
 	for _, e := range entries {
-		name := e.Name()
-		if !strings.HasSuffix(name, ".redeemed") && !strings.HasSuffix(name, ".json") {
+		code, ok := strings.CutSuffix(e.Name(), ".redeemed")
+		if !ok {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(dir, code+".json")); !errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if fi, err := e.Info(); err == nil && fi.ModTime().Before(cut) {
-			_ = os.Remove(filepath.Join(dir, name))
+			_ = os.Remove(filepath.Join(RedeemedDir(dir), e.Name()))
 		}
 	}
 }
 
 // ClaimScript is what the agent pipes into sh: setup.sh for the CA and
-// network, then the placeholder files for the slot.
+// network, then the placeholder files for the slot. ClaimScript writes the
+// fields of c and pi into shell. So it writes no value that does not match
+// its grammar (scriptFields, scriptHost). For such a value, the script only
+// stops.
 func ClaimScript(pi string, c Claim) string {
+	if !scriptHost(pi) || !scriptFields(c) {
+		return "#!/bin/sh\necho 'pi-fortress: this claim is not valid; issue another on the gateway' >&2\nexit 1\n"
+	}
 	var b strings.Builder
 	b.WriteString("#!/bin/sh\nset -e\nPI='" + pi + "'\n")
 	// Without both hashes, nothing below can be checked. A claim issued before
@@ -317,6 +431,39 @@ echo 'pi-fortress: git not found, git credentials skipped'
 fi
 `
 }
+
+// scriptFields reports whether each field of c that ClaimScript writes
+// matches its grammar. The slot must be in its stored form: 16 lower-case
+// hex digits. Each kind must be a stored kind. Each hash must be empty or
+// 64 lower-case hex digits. GitHosts is not in this check. gitCredentials
+// drops each name that safeHost refuses, because core.hosts can give a
+// "*." name that has no place in ~/.git-credentials.
+func scriptFields(c Claim) bool {
+	if c.Slot != strings.ToLower(strings.TrimSpace(c.Slot)) || secrets.ValidSlotID(c.Slot) != nil {
+		return false
+	}
+	for _, k := range c.Kinds {
+		if !secrets.ValidKind(k) {
+			return false
+		}
+	}
+	return validSum(c.SetupSHA256) && validSum(c.CASHA256)
+}
+
+// validSum accepts "" or the hex sha256 that fileSHA256 gives.
+func validSum(s string) bool {
+	if s == "" {
+		return true
+	}
+	if len(s) != 2*sha256.Size || s != strings.ToLower(s) {
+		return false
+	}
+	_, err := hex.DecodeString(s)
+	return err == nil
+}
+
+// scriptHost accepts an IP address or a name that safeHost accepts.
+func scriptHost(h string) bool { return net.ParseIP(h) != nil || safeHost(h) }
 
 func safeHost(h string) bool {
 	if h == "" {

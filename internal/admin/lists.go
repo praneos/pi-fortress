@@ -230,6 +230,8 @@ type FetchStatus struct {
 	Ran   bool
 	Fail  int
 	Stale int
+	// Truncated counts the lists that their cap in sources.json cut.
+	Truncated int
 }
 
 func (c *Config) FetchStatus() FetchStatus {
@@ -248,6 +250,8 @@ func (c *Config) FetchStatus() FetchStatus {
 			st.Fail++
 		case "STALE":
 			st.Stale++
+		case "TRUNCATED":
+			st.Truncated++
 		}
 	}
 	if fi, err := os.Stat(path); err == nil {
@@ -273,6 +277,8 @@ func (s FetchStatus) Warning() string {
 		return fmt.Sprintf("feeds: %d failed with nothing to fall back on (fetched %s)", s.Fail, fetch.Ago(s.Age))
 	case s.Stale > 0:
 		return fmt.Sprintf("feeds: %d serving the last good copy (fetched %s)", s.Stale, fetch.Ago(s.Age))
+	case s.Truncated > 0:
+		return fmt.Sprintf("feeds: %d lists cut to their cap in sources.json (fetched %s)", s.Truncated, fetch.Ago(s.Age))
 	case s.Age > StaleAfter:
 		return fmt.Sprintf("feeds: last fetched %s; the refresh timer is not running", fetch.Ago(s.Age))
 	}

@@ -19,6 +19,7 @@ import (
 
 	"pi-fortress/internal/audit"
 	"pi-fortress/internal/monitor"
+	"pi-fortress/internal/observe"
 	"pi-fortress/internal/secrets"
 
 	"pi-fortress/internal/base"
@@ -135,8 +136,8 @@ func Defaults() *Config {
 		HouseLeases: "/var/lib/pi-fortress/house.leases",
 		SegmentsDir: "/etc/pi-fortress/segments.d",
 		SecretsPath: "/etc/pi-fortress/broker/secrets.env",
-		ObservePath: "/var/lib/pi-fortress/observe.json",
-		OffsetPath:  "/var/lib/pi-fortress/dns.offset",
+		ObservePath: observe.StateDir + "/observe.json",
+		OffsetPath:  observe.StateDir + "/dns.offset",
 		DNSLogPath:  "/var/log/pi-fortress/dns.jsonl",
 		HouseDNSLog: "/var/log/pi-fortress/dns-house.jsonl",
 		StripLog:    "/var/log/pi-fortress/strip.jsonl",

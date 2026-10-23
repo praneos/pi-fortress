@@ -41,8 +41,8 @@ Then:
 
 1. Mint your own AWS canary at canarytokens.org. Then its alert comes to
    you.
-2. Enrol it on the gateway: `sudo pf enroll mint --kind CANARY --value
-   ... --expires none`.
+2. Enrol it on the gateway: `sudo pf enroll mint --kind CANARY --stdin
+   --expires none`. Paste the canary, push Enter, then push Ctrl-D.
 3. Claim its placeholder into the agent (`sudo pf tui`, Agent network,
    Keys, `c` on the slot).
 

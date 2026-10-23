@@ -94,7 +94,9 @@ func (b *Broker) echo(w io.Writer, p *preamble.Preamble, req *httpwire.Request, 
 		if err != nil {
 			return err
 		}
-		rewriteResponse(resp, withMinted(slots, minted))
+		if _, err := rewriteResponse(resp, withMinted(slots, minted)); err != nil {
+			return err
+		}
 		_, err = resp.WriteTo(w)
 		return err
 	}
@@ -124,7 +126,9 @@ func (b *Broker) echo(w io.Writer, p *preamble.Preamble, req *httpwire.Request, 
 		// reflection would give the agent the credential that the placeholder
 		// must keep from it. Scrub it the same as each origin response. Then the
 		// invariant does not depend on which fixture was selected.
-		rewriteResponse(resp, slots)
+		if _, err := rewriteResponse(resp, slots); err != nil {
+			return err
+		}
 	}
 	_, err := resp.WriteTo(w)
 	return err

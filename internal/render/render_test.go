@@ -1469,6 +1469,7 @@ func TestHouseEgress(t *testing.T) {
 	order(t, eg, "house_egress",
 		"tcp dport 80 return",
 		"tcp dport { 443, 465, 993, 5223, 5228, 8443 } return",
+		"tcp dport { 143, 587 } return",
 		"udp dport 123 return",
 		"icmp type echo-request limit rate 10/second burst 20 packets return",
 		`log prefix "pi-fortress house-port: "`,
@@ -1516,6 +1517,11 @@ func TestHouseEgress(t *testing.T) {
 	}
 	// A TLS port that the operator opened is no longer checked by name. This
 	// is the way out for a client that sends no name.
+	// The STARTTLS mail ports send no ClientHello first, so the name check
+	// must not see them.
+	if g := chain(t, strict, "resolver_gate"); strings.Contains(g, "143") || strings.Contains(g, "587") {
+		t.Errorf("the name check sees a STARTTLS port:\n%s", g)
+	}
 	gate := chain(t, render("HOUSE_ALLOW_PORTS=tcp:5223\n"), "resolver_gate")
 	if !strings.Contains(gate, "tcp dport { 443, 465, 993, 5228, 8443 } ct state new") {
 		t.Errorf("an allowed TLS port is still checked:\n%s", gate)

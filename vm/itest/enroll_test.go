@@ -101,7 +101,7 @@ func enrollTests(t *testing.T) {
 		_, _ = ssh(t, 30*time.Second, "pi", "sudo pf enroll delete --slot "+slot+" || true")
 		_, _ = ssh(t, 20*time.Second, "pi", "sudo rm -f /vagrant/vm/policy/generated/agent-credentials-"+slot+".json /etc/pi-fortress/agent-credentials-"+slot+".json")
 		for _, c := range codes {
-			_, _ = ssh(t, 20*time.Second, "pi", "sudo rm -f /var/lib/pi-fortress/www/claims/"+c+".json /var/lib/pi-fortress/www/claims/"+c+".redeemed")
+			_, _ = ssh(t, 20*time.Second, "pi", "sudo rm -f /var/lib/pi-fortress/www/claims/"+c+".json /var/lib/pi-fortress/www/claims-redeemed/"+c+".redeemed")
 		}
 	})
 
@@ -114,7 +114,7 @@ func enrollTests(t *testing.T) {
 		}
 		// mint also writes the agent paste on the synced folder. That file
 		// is copied manually onto agents, so it is a leak path of its own.
-		paste, err := ssh(t, 20*time.Second, "pi", "cat /vagrant/vm/policy/generated/agent-credentials-"+slot+".json")
+		paste, err := ssh(t, 20*time.Second, "pi", "sudo cat /vagrant/vm/policy/generated/agent-credentials-"+slot+".json")
 		if err == nil && (contains(paste, "sk-ant") || !contains(paste, phOAT)) {
 			t.Fatalf("agent paste file is wrong:\n%s", paste)
 		}

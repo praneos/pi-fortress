@@ -12,7 +12,7 @@ import (
 func TestPartialLedgerIsNotRenderedAsNever(t *testing.T) {
 	c, _ := testConfig(t)
 	c.WWWDir = t.TempDir()
-	claims := filepath.Join(c.WWWDir, "claims")
+	claims := filepath.Join(c.WWWDir, "claims-redeemed")
 	if err := os.MkdirAll(claims, 0770); err != nil {
 		t.Fatal(err)
 	}

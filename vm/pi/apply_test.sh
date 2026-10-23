@@ -84,8 +84,10 @@ want 'iifname "eth1" ip saddr 10.78.0.20 tcp dport 22 ct state new limit rate 30
 want 'ip saddr 10.78.0.0/24 oifname "wlan0" counter masquerade'
 want 'log prefix "pi-fortress house-drop: "'
 
-# Isolation comes before all agent forward rules.
-iso="$(grep -n 'iifname "eth0" oifname "eth1" counter drop' "${tmp}/house.nft" | cut -d: -f1)"
+# Isolation comes before all agent forward rules. The first match is in
+# forward; isolate_ct has the same drop for established flows.
+iso="$(grep -n 'iifname "eth0" oifname "eth1" counter drop' "${tmp}/house.nft" | head -1 | cut -d: -f1)"
+want 'ct state established jump isolate_ct'
 agent="$(grep -n 'iifname "eth0" meta nfproto ipv6 counter drop' "${tmp}/house.nft" | tail -1 | cut -d: -f1)"
 [[ "${iso}" -lt "${agent}" ]] || fail "isolation rule is not before the agent forward block"
 
@@ -331,7 +333,7 @@ grep -qF 'ENGINE_INSPECT="${ENGINE_INSPECT} -max-conns 512"' "${apply}" && grep 
 
 # Isolation is before the agent forward block. Thus the gateway first
 # compares a desk packet with the cross-segment rules.
-iso="$(grep -n 'iifname "eth0.79" oifname "eth0" counter drop' "${tmp}/desk.nft" | cut -d: -f1)"
+iso="$(grep -n 'iifname "eth0.79" oifname "eth0" counter drop' "${tmp}/desk.nft" | head -1 | cut -d: -f1)"
 agent="$(grep -n 'iifname "eth0" udp dport 443 counter drop' "${tmp}/desk.nft" | tail -1 | cut -d: -f1)"
 [[ -n "${iso}" && -n "${agent}" && "${iso}" -lt "${agent}" ]] || fail "desk: isolation is not before the agent forward block"
 
@@ -1087,6 +1089,21 @@ grep -q 'apt-get\|install' "${tmp}/prov.out" && fail "provision.sh acted before 
 grep -qE '(^|[^A-Za-z_])/vagrant/' "${prov}" && fail "provision.sh still hardcodes a /vagrant path"
 grep -q 'SRC="\${SRC:-/vagrant}"' "${prov}" || fail "provision.sh lost the /vagrant default the lab mounts"
 
+# A second provision keeps the lists of the operator. On a box with no
+# tree, /etc/pi-fortress is the policy. provision.sh seeds each list of
+# PI_OWNED (Makefile) only when it is absent, and never copies one over.
+_owned="$(sed -n 's/^PI_OWNED = //p' "${here}/../../Makefile")"
+[[ -n "${_owned}" ]] || fail "no PI_OWNED in the Makefile"
+_seed="$(awk '/^for _f in blacklist\.ips /,/; do$/' "${prov}" | tr '\\\n;' '   ')"
+for _l in allow.domains dns_types.allow git_push.allow blacklist.ips never_block.domains sources.json; do
+  [[ " ${_seed} " == *" ${_l} "* ]] || fail "provision.sh does not seed ${_l} only when absent"
+done
+for _l in ${_owned}; do
+  if grep -E "^[[:space:]]*(cp|install)[[:space:]].*/etc/pi-fortress/${_l//./\\.}([[:space:]]|$)" "${prov}"; then
+    fail "provision.sh copies over ${_l}, a list of the operator"
+  fi
+done
+
 # The two scripts refuse a host that is not a Pi, a lab VM or the appliance.
 # They name the host and the override, before they change anything. A fake
 # device-tree model acts as a desktop. apt-get and systemctl are stubs that
@@ -1456,11 +1473,135 @@ grep -qF 'mv "${_oldoff}" "${_newoff}"' "${apply}" ||
 # accept-policy conf of Debian enabled and started: an open router. The
 # order below is the full fix. Thus the test asserts it by line number.
 prov="${here}/provision.sh"
-awk '/^cat >\/etc\/sysctl.d\/99-pi-fortress.conf/,/^EOF$/' "${prov}" >"${tmp}/sysctl.conf"
+# The OS hardening files (lib/harden.sh), written into a scratch root with
+# stub sysctl and systemctl. provision.sh writes them on a fresh box and
+# apply.sh on each full apply, so an upgraded box has the same files.
+hroot="${tmp}/hardenroot"
+mkdir -p "${hroot}/bin" "${hroot}/uubin" "${hroot}/work"
+printf '#!/bin/sh\n' >"${hroot}/uubin/unattended-upgrade"
+chmod +x "${hroot}/uubin/unattended-upgrade"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"%s"\n[[ "$3" == *.live ]] && cp "$3" "%s"\nexit 0\n' "${hroot}/sysctl.log" "${hroot}/live" >"${hroot}/bin/sysctl"
+printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"%s"\n' "${hroot}/systemctl.log" >"${hroot}/bin/systemctl"
+chmod +x "${hroot}/bin"/*
+# Only the stubs and these host tools: the host may have its own
+# unattended-upgrade, sshd or ssh-keygen.
+for _c in bash cat cmp cp install grep mkdir rm sort stat tr; do
+  ln -s "$(type -P "${_c}")" "${hroot}/bin/${_c}"
+done
+# harden_run [uu]: the three steps of apply.sh. "uu" puts a stub
+# unattended-upgrade on PATH; without it, the package is missing.
+harden_run() {
+  (
+    # shellcheck source=lib/harden.sh
+    source "${here}/lib/harden.sh"
+    HARDEN_SYSCTL_D="${hroot}/sysctl.d" HARDEN_APT_D="${hroot}/apt.conf.d" HARDEN_WORK="${hroot}/work"
+    PATH="${hroot}/bin"
+    if [[ "${1:-}" == uu ]]; then
+      PATH="${PATH}:${hroot}/uubin"
+    fi
+    harden_sysctl_write
+    harden_sysctl_load
+    harden_apt
+  )
+}
+harden_run uu 2>"${hroot}/err" || fail "the hardening steps failed: $(cat "${hroot}/err")"
+cp "${hroot}/sysctl.d/99-pi-fortress.conf" "${tmp}/sysctl.conf"
+for _l in kernel.kptr_restrict=2 kernel.yama.ptrace_scope=2 fs.protected_regular=2 net.ipv4.tcp_syncookies=1; do
+  grep -qxF "${_l}" "${tmp}/sysctl.conf" || fail "99-pi-fortress.conf lacks ${_l}"
+done
+grep -qF 'label=Debian-Security' "${hroot}/apt.conf.d/52-pi-fortress-upgrades" || fail "no security origin in 52-pi-fortress-upgrades"
+grep -qxF 'APT::Periodic::Unattended-Upgrade "1";' "${hroot}/apt.conf.d/20auto-upgrades" || fail "20auto-upgrades does not turn on unattended upgrades"
+grep -qx 'enable unattended-upgrades' "${hroot}/systemctl.log" || fail "the hardening did not enable unattended-upgrades"
+[[ ! -s "${hroot}/err" ]] || fail "the hardening warned with the package present: $(cat "${hroot}/err")"
+# Forwarding: the file says 0 for the next boot, but the live load must
+# not turn off the forwarding that apply enabled after the ruleset.
+grep -q 'ip_forward' "${hroot}/live" && fail "the live sysctl load sets ip_forward; each apply would cut the agent off"
+grep -qx 'kernel.kptr_restrict=2' "${hroot}/live" || fail "the live sysctl load lost the other values"
+# Idempotent: a second run with no change writes nothing.
+touch -d '2000-01-01' "${hroot}/sysctl.d/99-pi-fortress.conf" "${hroot}/apt.conf.d"/*
+harden_run uu 2>/dev/null
+[[ -z "$(find "${hroot}/sysctl.d" "${hroot}/apt.conf.d" -type f -newermt '2001-01-01')" ]] ||
+  fail "a second hardening run rewrote a file that did not change"
+# A box without the package: one warning, the files still written.
+harden_run 2>"${hroot}/err" || fail "the hardening failed without unattended-upgrades"
+grep -q 'unattended-upgrades is not installed' "${hroot}/err" || fail "no warning when unattended-upgrades is missing"
+# Only on a full apply, after the --local exit, and from provision.sh.
+_local_exit="$(grep -n '^if \[\[ "${LOCAL_ONLY}" -eq 1 \]\]; then$' "${apply}" | tail -1 | cut -d: -f1)"
+for _f in harden_sysctl_write harden_sysctl_load harden_apt; do
+  _at="$(grep -n "^${_f}$" "${apply}" | head -1 | cut -d: -f1)"
+  [[ -n "${_at}" && "${_at}" -gt "${_local_exit}" ]] || fail "apply.sh does not run ${_f} on a full apply"
+done
+grep -q '^harden_sysctl_write$' "${prov}" || fail "provision.sh does not write the sysctl file"
+grep -q '^harden_apt$' "${prov}" || fail "provision.sh does not write the unattended-upgrades config"
 grep -qx 'net.ipv4.ip_forward=0' "${tmp}/sysctl.conf" ||
-  fail "provision.sh does not ship net.ipv4.ip_forward=0 in /etc/sysctl.d/99-pi-fortress.conf"
+  fail "lib/harden.sh does not ship net.ipv4.ip_forward=0 in /etc/sysctl.d/99-pi-fortress.conf"
 grep -qx 'net.ipv4.ip_forward=1' "${tmp}/sysctl.conf" &&
-  fail "provision.sh persists ip_forward=1 again; a boot without a good ruleset would route"
+  fail "lib/harden.sh persists ip_forward=1 again; a boot without a good ruleset would route"
+
+# Key-only SSH (harden_ssh). The sshd stub passes -t unless sshd.bad
+# exists, and prints sshd.T for -T. The ssh-keygen stub takes a file
+# that holds an ed25519 key line, as ssh-keygen -l does.
+printf '#!/bin/bash\nif [[ "$1" == -t ]]; then [[ ! -e "%s" ]]; exit; fi\ncat "%s" 2>/dev/null\n' "${hroot}/sshd.bad" "${hroot}/sshd.T" >"${hroot}/bin/sshd"
+printf '#!/bin/bash\n[[ "$1" == -l && "$2" == -f ]] && grep -qE "(^|[ ])ssh-ed25519 AAAA" "$3"\n' >"${hroot}/bin/ssh-keygen"
+chmod +x "${hroot}/bin/sshd" "${hroot}/bin/ssh-keygen"
+hhome="${hroot}/home"
+hconf="${hroot}/sshd_config.d/99-pi-fortress.conf"
+mkdir -p "${hhome}/op/.ssh"
+chmod 0755 "${hhome}/op"
+chmod 0700 "${hhome}/op/.ssh"
+: >"${hhome}/op/.ssh/authorized_keys"
+chmod 0600 "${hhome}/op/.ssh/authorized_keys"
+ssh_run() {
+  (
+    # shellcheck source=lib/harden.sh
+    source "${here}/lib/harden.sh"
+    HARDEN_SSHD_D="${hroot}/sshd_config.d" HARDEN_HOME="${hhome}" HARDEN_WORK="${hroot}/work"
+    PATH="${hroot}/bin"
+    harden_ssh
+  ) >"${hroot}/ssh.out" 2>"${hroot}/ssh.err" || fail "harden_ssh failed: $(cat "${hroot}/ssh.err")"
+}
+: >"${hroot}/systemctl.log"
+# No key, only a key with a forced command, a key that sshd ignores
+# (group-writable file): password login stays on, with a warning.
+for _keys in '' 'command="/bin/true" ssh-ed25519 AAAAC3Nza op' 'ssh-ed25519 AAAAC3Nza op'; do
+  printf '%s\n' "${_keys}" >"${hhome}/op/.ssh/authorized_keys"
+  if [[ -n "${_keys}" && "${_keys}" != command=* ]]; then
+    chmod 0620 "${hhome}/op/.ssh/authorized_keys"
+  fi
+  ssh_run
+  [[ ! -e "${hconf}" ]] || fail "harden_ssh turned off passwords with no usable key ('${_keys}')"
+  grep -q 'password login stays on' "${hroot}/ssh.err" || fail "harden_ssh did not warn that password login is on ('${_keys}')"
+  chmod 0600 "${hhome}/op/.ssh/authorized_keys"
+done
+grep -q reload "${hroot}/systemctl.log" && fail "harden_ssh reloaded sshd with no usable key"
+# sshd -t refuses the drop-in: it does not stay.
+touch "${hroot}/sshd.bad"
+ssh_run
+[[ ! -e "${hconf}" ]] || fail "harden_ssh kept a drop-in that sshd -t refused"
+grep -q 'sshd rejected' "${hroot}/ssh.err" || fail "harden_ssh did not warn when sshd -t failed"
+grep -q reload "${hroot}/systemctl.log" && fail "harden_ssh reloaded sshd after sshd -t failed"
+# A usable key: key-only, one reload, and no second reload on the next run.
+mv "${hroot}/sshd.bad" "${hroot}/sshd.ok"
+ssh_run
+grep -qx 'PasswordAuthentication no' "${hconf}" || fail "harden_ssh did not write the key-only drop-in"
+grep -qx 'KbdInteractiveAuthentication no' "${hconf}" || fail "the key-only drop-in leaves keyboard-interactive on"
+grep -q 'login keys for: op' "${hroot}/ssh.out" || fail "harden_ssh did not name the users with a key"
+[[ "$(grep -c '^reload ssh' "${hroot}/systemctl.log")" == 1 ]] || fail "harden_ssh did not reload sshd once"
+ssh_run
+[[ "$(grep -c '^reload ssh' "${hroot}/systemctl.log")" == 1 ]] || fail "harden_ssh reloaded sshd with no change"
+# A changed drop-in that sshd refuses: the old one comes back.
+echo 'PasswordAuthentication no' >"${hconf}"
+mv "${hroot}/sshd.ok" "${hroot}/sshd.bad"
+ssh_run
+[[ "$(cat "${hconf}")" == 'PasswordAuthentication no' ]] || fail "harden_ssh did not put back the drop-in that sshd accepted"
+mv "${hroot}/sshd.bad" "${hroot}/sshd.ok"
+# An earlier file keeps passwords on: the effective value says so.
+echo 'passwordauthentication yes' >"${hroot}/sshd.T"
+ssh_run
+grep -q 'sshd still takes passwords' "${hroot}/ssh.err" || fail "harden_ssh did not warn that sshd -T still shows passwords"
+for _f in "${apply}" "${prov}"; do
+  grep -q '^harden_ssh$' "${_f}" || fail "${_f##*/} does not run harden_ssh"
+done
 _nft_line="$(grep -n '^nft -f /etc/nftables.conf$' "${apply}" | head -1 | cut -d: -f1)"
 _fwd_line="$(grep -n '^sysctl -w net.ipv4.ip_forward=1' "${apply}" | head -1 | cut -d: -f1)"
 [[ -n "${_nft_line}" ]] || fail "apply.sh no longer loads /etc/nftables.conf"
@@ -2387,6 +2528,50 @@ EOF
   grep -qx 'gitlab.com GITLAB_TOKEN:User-Agent' "${lab2}/etc/pi-fortress/core.hosts" && fail "a refused core.hosts.local was installed"
   cp "${tmp}/core.hosts.local.seed" "${lab2}/vagrant/vm/policy/core.hosts.local"
 
+  # key_prefixes.rules.local, in the same way: the installed rules are the
+  # shipped rules, the marker, then the local rules, one time. A change to
+  # it restarts the fence. A rule with no literal prefix stops the apply
+  # in pf compile, which names the file, and apply installs nothing.
+  _kmark='# ---- key_prefixes.rules.local (pf apply appends it here; edit that file, not this) ----'
+  _klocal="${lab2}/vagrant/vm/policy/key_prefixes.rules.local"
+  cp "${_klocal}" "${tmp}/key_prefixes.rules.local.seed"
+  printf '%s\n' '# mine' 'acme	acme_[A-Za-z0-9]{32,}	ACME_TOKEN' >"${_klocal}"
+  { cat "${lab2}/vagrant/vm/policy/key_prefixes.rules"; printf '%s\n' "${_kmark}"; cat "${_klocal}"; } >"${tmp}/key_prefixes.rules.want"
+  for _run in 1 2; do
+    local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
+    cmp -s "${tmp}/key_prefixes.rules.want" "${lab2}/etc/pi-fortress/key_prefixes.rules" ||
+      fail "run ${_run}: installed key_prefixes.rules is not the shipped rules + marker + local rules: $(diff "${tmp}/key_prefixes.rules.want" "${lab2}/etc/pi-fortress/key_prefixes.rules")"
+    if [[ "${_run}" -eq 1 ]]; then
+      grep -q 'restart pi-fortress-broker.service' "${lab2}.systemctl" ||
+        fail "a new key_prefixes.rules.local rule did not restart the fence"
+    fi
+  done
+  grep -q 'restart pi-fortress-broker.service' "${lab2}.systemctl" &&
+    fail "an unchanged key_prefixes.rules.local restarted the fence on the second run"
+  printf 'acme\t[A-Za-z0-9]{40,}\n' >"${_klocal}"
+  if PATH="${lstub}:${lsafe}" PF_ALLOW_ANY_HOST=1 PF_INT_IF=lo PF_WAN_IF="${lwan}" SYSTEMCTL_LOG="${lab2}.systemctl" \
+    NFT_LOG="${lab2}.nft" bash "${lab2}/vagrant/vm/pi/apply.sh" --local >"${lab2}.bad.log" 2>&1; then
+    fail "apply --local accepted a key_prefixes.rules.local rule with no literal prefix"
+  fi
+  grep -q 'key_prefixes.rules.local.*acme' "${lab2}.bad.log" ||
+    fail "the refusal does not name key_prefixes.rules.local and the rule: $(tail -3 "${lab2}.bad.log")"
+  grep -qF '[A-Za-z0-9]{40,}' "${lab2}/etc/pi-fortress/key_prefixes.rules" && fail "a refused key_prefixes.rules.local was installed"
+  cp "${tmp}/key_prefixes.rules.local.seed" "${_klocal}"
+  local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
+  cmp -s "${lab2}/vagrant/vm/policy/key_prefixes.rules" "${lab2}/etc/pi-fortress/key_prefixes.rules" ||
+    fail "a key_prefixes.rules.local emptied back to comments left its rules installed"
+
+  # doh.ips.local and doh.domains.local add to the shipped DoH lists. pf
+  # compile reads them from the policy dir, the same as the shipped lists.
+  cp "${lab2}/vagrant/vm/policy/doh.domains.local" "${tmp}/doh.domains.local.seed"
+  echo 'doh.resolver.example' >>"${lab2}/vagrant/vm/policy/doh.domains.local"
+  local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
+  grep -qx 'address=/doh.resolver.example/0.0.0.0' "${lab2}/etc/pi-fortress/doh-domains.conf" ||
+    fail "a doh.domains.local name is not in the installed DoH sinkhole"
+  grep -qx 'address=/dns.google/0.0.0.0' "${lab2}/etc/pi-fortress/doh-domains.conf" ||
+    fail "doh.domains.local replaced the shipped DoH names, not added to them"
+  cp "${tmp}/doh.domains.local.seed" "${lab2}/vagrant/vm/policy/doh.domains.local"
+
   # An /etc/pi-fortress box: the policy dir and the installed copies are
   # the same files. Here, before, the same-file guard hid the full change.
   app2="${tmp}/lroot2"
@@ -2452,6 +2637,25 @@ EOF
   local_apply "${app2}" "${app2}/usr/local/lib/pi-fortress/apply.sh"
   cmp -s "${tmp}/core.hosts.app2" "${app2}/etc/pi-fortress/core.hosts" ||
     fail "same-file: a removed core.hosts.local left its lines in core.hosts"
+
+  # The same-file box keeps key_prefixes.rules.local across a provision.
+  # provision.sh copies the shipped key_prefixes.rules over the installed
+  # one. The next apply puts the local rules back below the marker, one time.
+  cp "${app2}/etc/pi-fortress/key_prefixes.rules" "${tmp}/key_prefixes.rules.app2"
+  printf '%s\n' 'acme	acme_[A-Za-z0-9]{32,}	ACME_TOKEN' >"${app2}/etc/pi-fortress/key_prefixes.rules.local"
+  { cat "${tmp}/key_prefixes.rules.app2"; printf '%s\n' "${_kmark}"; cat "${app2}/etc/pi-fortress/key_prefixes.rules.local"; } >"${tmp}/key_prefixes.rules.want2"
+  for _run in 1 2 provision; do
+    if [[ "${_run}" == provision ]]; then
+      cp "${here}/../policy/key_prefixes.rules" "${app2}/etc/pi-fortress/key_prefixes.rules"
+    fi
+    local_apply "${app2}" "${app2}/usr/local/lib/pi-fortress/apply.sh"
+    cmp -s "${tmp}/key_prefixes.rules.want2" "${app2}/etc/pi-fortress/key_prefixes.rules" ||
+      fail "same-file run ${_run}: key_prefixes.rules is not shipped + marker + local: $(diff "${tmp}/key_prefixes.rules.want2" "${app2}/etc/pi-fortress/key_prefixes.rules")"
+  done
+  rm "${app2}/etc/pi-fortress/key_prefixes.rules.local"
+  local_apply "${app2}" "${app2}/usr/local/lib/pi-fortress/apply.sh"
+  cmp -s "${tmp}/key_prefixes.rules.app2" "${app2}/etc/pi-fortress/key_prefixes.rules" ||
+    fail "same-file: a removed key_prefixes.rules.local left its rules in key_prefixes.rules"
 fi
 
 # Also the shape behind those runs: the restart decision comes from the
@@ -2515,10 +2719,78 @@ _first="$(grep -nF -e ' "${SECRETS}"' -e ' "${BROKER_DIR}/' "${apply}" | head -1
 [[ -n "${_stop}" && -n "${_check}" && -n "${_first}" && "${_stop}" -lt "${_check}" && "${_check}" -lt "${_first}" ]] ||
   fail "apply works by name in the broker's directory before stopping the broker and checking those names"
 
-# www writes the claims directory. Thus root gets to the ledger
-# through the descriptor of pf, and never chowns or chmods it by name.
+# www writes claims-redeemed/, where the ledger is. Thus root gets to the
+# ledger through the descriptor of pf, and never chowns or chmods it by name.
 grep -qF '"${PF}" www -init-ledger -dir "${WWW}"' "${apply}" || fail "apply no longer makes the ledger through pf www -init-ledger"
 grep -qE '(touch|chown|chmod) .*ledger\.jsonl' "${apply}" && fail "apply works on the ledger by name in a directory www can write"
+
+# Only root writes claims/. www reads it, and writes only claims-redeemed/.
+grep -qF 'install -d -m 2750 -o root -g pf-fortress "${WWW}/claims"' "${apply}" || fail "apply does not make claims/ 2750 root:pf-fortress"
+grep -qF 'install -d -m 2770 -o root -g pf-fortress "${WWW}/claims-redeemed"' "${apply}" || fail "apply does not make claims-redeemed/ 2770 root:pf-fortress"
+[[ "$(grep '^ReadWritePaths=' "${here}/www.service")" == "ReadWritePaths=/var/lib/pi-fortress/www/claims-redeemed" ]] ||
+  fail "www.service must have claims-redeemed as its only writable path"
+
+# observe and alert write only their own state. Neither can write
+# claims-redeemed/ or any other state under /var/lib/pi-fortress.
+[[ "$(grep '^ReadWritePaths=' "${here}/observe.service")" == "ReadWritePaths=/var/lib/pi-fortress/observe /var/log/pi-fortress" ]] ||
+  fail "observe.service must write only its state directory and the logs"
+[[ "$(grep '^ReadWritePaths=' "${here}/alert.service")" == "ReadWritePaths=-/var/lib/pi-fortress/alert.offset -/var/lib/pi-fortress/alert-notice.offset -/var/lib/pi-fortress/alert.last" ]] ||
+  fail "alert.service must write only its three state files"
+# The units name the paths that the daemons use.
+grep -qF 'const StateDir = "/var/lib/pi-fortress/observe"' "${here}/../../internal/observe/observe.go" ||
+  fail "pf observe keeps its state outside the directory that observe.service can write"
+for _f in alert.offset alert-notice.offset alert.last; do
+  grep -qF "\"/var/lib/pi-fortress/${_f}\"" "${here}/../../internal/alert/alert.go" ||
+    fail "pf alert does not write /var/lib/pi-fortress/${_f}, which alert.service names"
+done
+# apply makes the directory and the files before it starts the units.
+# provision.sh makes the directory too: it can start observe before the
+# first apply.
+_mk="$(grep -nF 'install -d -m 0755 "${OBSERVE_STATE}"' "${apply}" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nF 'systemctl restart pi-fortress-observe.service' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "apply does not make the observe state directory before it starts observe"
+_mk="$(grep -n '^for _f in /var/lib/pi-fortress/alert.offset /var/lib/pi-fortress/alert.last /var/lib/pi-fortress/alert-notice.offset; do' "${apply}" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nF 'systemctl restart pi-fortress-alert.service' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "apply does not make the alert state files before it starts alert"
+_mk="$(grep -nF 'install -d -m 0755 /var/lib/pi-fortress/observe' "${here}/provision.sh" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nF 'systemctl restart pi-fortress-observe' "${here}/provision.sh" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "provision.sh does not make the observe state directory before it starts observe"
+# An install from before kept the observe state at the top of
+# /var/lib/pi-fortress. apply moves it into the directory one time, with
+# observe stopped. A file at the top is newer than a copy in the directory.
+# The state of other daemons stays where it is.
+(
+  ob="${tmp}/obsmove"
+  lib="${ob}/var/lib/pi-fortress"
+  mkdir -p "${lib}/observe"
+  # shellcheck disable=SC2329 # the eval of the apply step below calls it
+  systemctl() { printf '%s\n' "$*" >>"${ob}/systemctl.log"; }
+  for _f in observe.json observe.json.lock dns.offset dns-house.offset dns-desk.offset journal.cursor strip.offset \
+    alert.offset alert.last house.leases; do
+    printf 'top %s\n' "${_f}" >"${lib}/${_f}"
+  done
+  printf 'stale\n' >"${lib}/observe/observe.json"
+  _move="$(sed -n '/^OBSERVE_STATE=/,/^fi$/p' "${apply}" | sed "s#/var/lib/pi-fortress#${lib}#g")"
+  [[ -n "${_move}" ]] || fail "the observe state move is gone from apply.sh"
+  eval "${_move}"
+  for _f in observe.json dns.offset dns-house.offset dns-desk.offset journal.cursor strip.offset; do
+    [[ -e "${lib}/${_f}" ]] && fail "apply left ${_f} at the top of the state directory"
+    [[ "$(cat "${lib}/observe/${_f}")" == "top ${_f}" ]] || fail "apply did not move ${_f} into observe/"
+  done
+  [[ -e "${lib}/observe.json.lock" ]] && fail "apply left the old observe lock"
+  for _f in alert.offset alert.last house.leases; do
+    [[ "$(cat "${lib}/${_f}")" == "top ${_f}" ]] || fail "apply moved ${_f}, which is not observe state"
+  done
+  grep -qx 'stop pi-fortress-observe.service' "${ob}/systemctl.log" || fail "apply moved the observe state with observe running"
+  : >"${ob}/systemctl.log"
+  eval "${_move}"
+  if [[ -s "${ob}/systemctl.log" ]]; then
+    fail "apply stopped observe with nothing to move"
+  fi
+)
 
 # Each file that apply and provision write with > gets its mode from the
 # umask. Thus neither script may inherit the umask of the caller.
@@ -2526,5 +2798,145 @@ for _s in apply.sh provision.sh; do
   _head="$(sed -n 1,6p "${here}/${_s}")"
   [[ $'\n'"${_head}"$'\n' == *$'\numask 022\n'* ]] || fail "${_s} does not pin umask 022 before it writes anything"
 done
+
+# An egress change of a segment ends its open flows, except the flows of
+# the box itself and the flows between the agent, the house and the
+# segments. conntrack and ip are fakes: the test reads no real table.
+(
+  # shellcheck source=/dev/null
+  source <(sed -n -e '/^egress_state() {$/,/^}$/p' -e '/^egress_cut() {$/,/^}$/p' -e '/^egress_cuts() {$/,/^}$/p' "${apply}")
+  declare -F egress_cuts >/dev/null || fail "egress_cuts is gone from apply.sh"
+  ec="${tmp}/egresscut"
+  mkdir -p "${ec}/bin"
+  cat >"${ec}/bin/conntrack" <<'EOF'
+#!/bin/bash
+echo "$*" >>"${CT_LOG}"
+case "$1 $2" in
+  "-L -s") cat "${CT_DIR}/list-src" ;;
+  "-L -d") cat "${CT_DIR}/list-dst" ;;
+  -D*) exit "${CT_DEL_RC:-0}" ;;
+esac
+EOF
+  cat >"${ec}/bin/ip" <<'EOF'
+#!/bin/bash
+echo "2: wlan0    inet 192.168.1.10/24 brd 192.168.1.255 scope global wlan0"
+echo "5: eth0.79    inet 10.79.0.1/30 brd 10.79.0.3 scope global eth0.79"
+EOF
+  chmod +x "${ec}/bin/conntrack" "${ec}/bin/ip"
+  # The desk (10.79.0.2) to the web twice, to the Pi on the segment and
+  # uplink addresses, UDP out, and SSH out through ssh_allow. Admin SSH
+  # to an agent (10.77.0.20) from the desk (SSH_TO), the house admin
+  # (HOUSE_SSH_TO) and a guest host. Into the desk: SSH_FROM, and the Pi.
+  cat >"${ec}/list-src" <<'EOF'
+tcp      6 431999 ESTABLISHED src=10.79.0.2 dst=203.0.113.9 sport=50005 dport=22 src=203.0.113.9 dst=192.168.1.10 sport=22 dport=50005 [ASSURED] mark=0 use=1
+tcp      6 431999 ESTABLISHED src=10.79.0.2 dst=10.77.0.20 sport=50004 dport=22 src=10.77.0.20 dst=10.79.0.2 sport=22 dport=50004 [ASSURED] mark=0 use=1
+tcp      6 431999 ESTABLISHED src=10.78.0.20 dst=10.77.0.20 sport=40002 dport=22 src=10.77.0.20 dst=10.78.0.20 sport=22 dport=40002 [ASSURED] mark=0 use=1
+tcp      6 431999 ESTABLISHED src=10.80.0.5 dst=10.77.0.20 sport=40003 dport=22 src=10.77.0.20 dst=10.80.0.5 sport=22 dport=40003 [ASSURED] mark=0 use=1
+tcp      6 431999 ESTABLISHED src=10.79.0.2 dst=198.51.100.7 sport=50000 dport=443 src=198.51.100.7 dst=192.168.1.10 sport=443 dport=50000 [ASSURED] mark=0 use=1
+tcp      6 431999 ESTABLISHED src=10.79.0.2 dst=198.51.100.7 sport=50001 dport=443 src=198.51.100.7 dst=192.168.1.10 sport=443 dport=50001 [ASSURED] mark=0 use=1
+tcp      6 431999 ESTABLISHED src=10.79.0.2 dst=10.79.0.1 sport=50002 dport=22 src=10.79.0.1 dst=10.79.0.2 sport=22 dport=50002 [ASSURED] mark=0 use=1
+tcp      6 431999 ESTABLISHED src=10.79.0.2 dst=192.168.1.10 sport=50003 dport=22 src=192.168.1.10 dst=10.79.0.2 sport=22 dport=50003 [ASSURED] mark=0 use=1
+udp      17 29 src=10.79.0.2 dst=192.0.2.1 sport=40000 dport=3478 [UNREPLIED] src=192.0.2.1 dst=192.168.1.10 sport=3478 dport=40000 mark=0 use=1
+EOF
+  cat >"${ec}/list-dst" <<'EOF'
+tcp      6 431999 ESTABLISHED src=10.78.0.20 dst=10.79.0.2 sport=40001 dport=22 src=10.79.0.2 dst=10.78.0.20 sport=22 dport=40001 [ASSURED] mark=0 use=1
+icmp     1 29 src=10.79.0.1 dst=10.79.0.2 type=8 code=0 id=7 src=10.79.0.2 dst=10.79.0.1 type=0 code=0 id=7 mark=0 use=1
+EOF
+  export CT_LOG="${ec}/ct.log" CT_DIR="${ec}"
+  PATH="${ec}/bin:${PATH}"
+  PI_IP=10.77.0.1 AGENT_NET=10.77.0.0/24 HOUSE_IP=10.78.0.1 HOUSE_NET=10.78.0.0/24 HOUSE_EGRESS_FP=aaaa
+  SEG_NAME=(desk guest) SEG_NET=(10.79.0.0/30 10.80.0.0/24) SEG_IP=(10.79.0.1 10.80.0.1) SEG_EGRESS_FP=(bbbb cccc)
+  st="${ec}/state/egress.state"
+  : >"${CT_LOG}"
+
+  # With no state file (a lost file, or the first apply), each segment
+  # counts as changed. An empty file is the same.
+  egress_state >"${ec}/new"
+  mkdir -p "${ec}/state"
+  : >"${st}"
+  egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed on an empty state"
+  grep -c -- '^-L -s ' "${CT_LOG}" | grep -qx 3 || fail "an empty state did not end the flows of each segment: $(cat "${CT_LOG}")"
+  : >"${CT_LOG}"
+  mv "${st}" "${ec}/state.old"
+  egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "the first egress_cuts failed"
+  for _n in 10.78.0.0/24 10.79.0.0/30 10.80.0.0/24; do
+    grep -qx -- "-L -s ${_n}" "${CT_LOG}" || fail "no state file did not end the flows of ${_n}: $(cat "${CT_LOG}")"
+  done
+  grep -q -- '-D -s 10.79.0.2 -d 10.79.0.1' "${CT_LOG}" && fail "no state file ended a flow of the Pi"
+  grep -q -- '-D -s 10.78.0.20 -d 10.77.0.20' "${CT_LOG}" && fail "no state file ended the admin SSH from the house to an agent"
+  [[ "$(stat -c %a "${st}")" == 600 ]] || fail "the egress state is not 0600"
+  grep -qx 'seg:desk bbbb 10.79.0.0/30' "${st}" || fail "the egress state has no desk line: $(cat "${st}")"
+  : >"${CT_LOG}"
+
+  # The same values end nothing.
+  egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "an unchanged egress_cuts failed"
+  [[ -s "${CT_LOG}" ]] && fail "an unchanged policy called conntrack"
+
+  # A new desk value ends the desk flows to the outside, and only those.
+  # The SSH sessions between the agent, the house and the segments stay:
+  # isolate_ct decides them.
+  SEG_EGRESS_FP=(dddd cccc)
+  egress_state >"${ec}/new"
+  egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed on a changed desk"
+  sort "${CT_LOG}" >"${ec}/ct.sorted"
+  printf '%s\n' '-D -s 10.79.0.2 -d 192.0.2.1' '-D -s 10.79.0.2 -d 198.51.100.7' '-D -s 10.79.0.2 -d 203.0.113.9' \
+    '-L -d 10.79.0.0/30' '-L -s 10.79.0.0/30' >"${ec}/ct.want"
+  diff -u "${ec}/ct.want" "${ec}/ct.sorted" || fail "the desk cut deleted the wrong flows (a flow of the Pi, an admin SSH, or the guest)"
+  grep -qx 'pi-fortress: the egress policy of desk changed; ended the open flows of 3 address pair(s) in 10.79.0.0/30' "${ec}/out" ||
+    fail "no cut line for the desk: $(cat "${ec}/out")"
+  grep -qx 'seg:desk dddd 10.79.0.0/30' "${st}" || fail "the egress state did not take the new desk value"
+
+  # Exit 1 (the flow closed after the list) is no failure. Exit 2 warns.
+  # Neither stops apply.
+  : >"${CT_LOG}"
+  HOUSE_EGRESS_FP=eeee
+  egress_state >"${ec}/new"
+  CT_DEL_RC=1 egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed on conntrack exit 1"
+  grep -q 'WARN' "${ec}/out" && fail "conntrack exit 1 gave a warning: $(cat "${ec}/out")"
+  grep -q -- '-L -s 10.78.0.0/24' "${CT_LOG}" || fail "a new house value did not end the house flows"
+  HOUSE_EGRESS_FP=ffff
+  egress_state >"${ec}/new"
+  CT_DEL_RC=2 egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed on conntrack exit 2"
+  grep -q 'WARN conntrack failed for house' "${ec}/out" || fail "conntrack exit 2 gave no warning: $(cat "${ec}/out")"
+
+  # Without conntrack, apply warns, records the value, and continues. The
+  # PATH has only the tools that egress_cuts needs.
+  mkdir -p "${ec}/noct"
+  for _t in awk dirname install; do
+    ln -s "$(command -v "${_t}")" "${ec}/noct/${_t}"
+  done
+  SEG_EGRESS_FP=(dddd 9999)
+  egress_state >"${ec}/new"
+  PATH="${ec}/noct" egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed without conntrack"
+  grep -qx 'pi-fortress: WARN conntrack is not installed; the open flows of guest keep the old egress policy until they close (apt-get install -y conntrack)' "${ec}/out" ||
+    fail "no warning without conntrack: $(cat "${ec}/out")"
+  grep -qx 'seg:guest 9999 10.80.0.0/24' "${st}" || fail "the egress state did not take the value without conntrack"
+
+  # A segment removed from the policy ends its flows, from its old subnet.
+  # So does a removed house.
+  : >"${CT_LOG}"
+  SEG_NAME=(desk) SEG_NET=(10.79.0.0/30) SEG_IP=(10.79.0.1) SEG_EGRESS_FP=(dddd)
+  egress_state >"${ec}/new"
+  egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed on a removed segment"
+  grep -v -- '^-D ' "${CT_LOG}" | sort >"${ec}/ct.sorted"
+  printf '%s\n' '-L -d 10.80.0.0/24' '-L -s 10.80.0.0/24' >"${ec}/ct.want"
+  diff -u "${ec}/ct.want" "${ec}/ct.sorted" || fail "a removed segment did not end its flows, or ended others"
+  grep -q '^seg:guest ' "${st}" && fail "the egress state keeps the removed segment"
+  grep -qx -- '-D -s 10.80.0.5 -d 10.77.0.20' "${CT_LOG}" || fail "a removed segment kept its SSH to an agent"
+  grep -q -- '-D -s 10.79.0.2 -d 10.77.0.20' "${CT_LOG}" && fail "a removed segment ended the SSH of the desk to an agent"
+  : >"${CT_LOG}"
+  HOUSE_EGRESS_FP=
+  egress_state >"${ec}/new"
+  egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed on a removed house"
+  grep -qx -- '-L -s 10.78.0.0/24' "${CT_LOG}" || fail "a removed house did not end its flows: $(cat "${CT_LOG}")"
+  grep -q -- '-L -s 10.79.0.0/30' "${CT_LOG}" && fail "a removed house ended the desk flows"
+  grep -qx -- '-D -s 10.78.0.20 -d 10.77.0.20' "${CT_LOG}" || fail "a removed house kept its SSH to an agent"
+  egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "a second egress_cuts failed after a removal"
+  grep -c -- '^-L -s ' "${CT_LOG}" | grep -qx 1 || fail "a removal ended flows again at the next apply: $(cat "${CT_LOG}")"
+)
+grep -qF 'egress_cuts "${EGRESS_STATE}"' "${apply}" || fail "apply no longer ends the flows of a changed egress policy"
+_load="$(grep -n '^nft -f /etc/nftables.conf$' "${apply}" | head -1 | cut -d: -f1 || true)"
+_cut="$(grep -nF 'egress_cuts "${EGRESS_STATE}"' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_load}" && -n "${_cut}" && "${_load}" -lt "${_cut}" ]] || fail "apply ends flows before the new ruleset is loaded"
 
 echo "apply_test: ok"

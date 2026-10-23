@@ -345,10 +345,9 @@ func TestFakeIPKeyShapedSNIAnyCase(t *testing.T) {
 			}
 		})
 	}
-	// The placeholder check stays exact. An upper-cased pf_ spelling is not a
-	// placeholder of the gateway, and nothing else in it is key-shaped.
+	// The placeholder check folds case too. The origin can undo the case.
 	b, _ := testBroker(t)
-	if got := b.keyRule("PF_0123456789ABCDEF_GITHUB_TOKEN.evil.example"); got != "" {
+	if got := b.keyRule("PF_0123456789ABCDEF_GITHUB_TOKEN.evil.example"); got != "placeholder" {
 		t.Fatalf("an upper-cased placeholder spelling matched %q", got)
 	}
 	// A real name whose TLD completes a shape once the dot is gone.

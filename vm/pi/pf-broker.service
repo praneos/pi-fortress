@@ -104,6 +104,12 @@ EnvironmentFile=/etc/pi-fortress/net.env
 # overlay, and a required EnvironmentFile that is absent fails the unit.
 EnvironmentFile=-/etc/pi-fortress/net.env.local
 ExecStart=/usr/local/sbin/pf broker -sock /run/pi-fortress/broker/broker.sock -admin-sock /run/pi-fortress/broker/admin.sock -policy /etc/pi-fortress/core.hosts -rules /etc/pi-fortress/key_prefixes.rules -allow /etc/pi-fortress/allow.domains -secrets /etc/pi-fortress/broker/secrets.env -agent-net=${AGENT_NET} -blocked /etc/pi-fortress/blocked-domains.conf -git-push /etc/pi-fortress/git_push.allow $PF_BROKER_FLAGS $PF_PARANOID_BROKER_FLAGS $PF_FAKEIP_BROKER_FLAGS
+# A new broker process reads the current system CA roots. Thus each start
+# removes the marker that ca-restart.sh writes when a sealed store kept it
+# from a restart (pf doctor rung ca). + runs only this command as root and
+# outside the sandbox; the broker itself keeps the sandbox above. - keeps a
+# failed removal from failing the start.
+ExecStartPost=-+/bin/rm -f /var/lib/pi-fortress/ca-restart-pending
 
 [Install]
 WantedBy=multi-user.target

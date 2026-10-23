@@ -25,7 +25,7 @@ func parseDisabled(raw string) map[string]int64 {
 		if len(f) > 1 {
 			ts, _ = strconv.ParseInt(f[1], 10, 64)
 		}
-		if id := strings.ToLower(f[0]); validSlotID(id) == nil {
+		if id := strings.ToLower(f[0]); ValidSlotID(id) == nil {
 			out[id] = ts
 		}
 	}

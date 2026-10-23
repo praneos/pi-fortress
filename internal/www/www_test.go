@@ -10,6 +10,19 @@ import (
 	"testing"
 )
 
+// newClaimsDir is a claims directory with its RedeemedDir, as apply makes
+// them.
+func newClaimsDir(t *testing.T) string {
+	t.Helper()
+	claims := filepath.Join(t.TempDir(), "claims")
+	for _, d := range []string{claims, RedeemedDir(claims)} {
+		if err := os.MkdirAll(d, 0770); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return claims
+}
+
 func testServer(t *testing.T) (*Server, *httptest.Server) {
 	t.Helper()
 	dir := t.TempDir()

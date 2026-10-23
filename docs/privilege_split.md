@@ -85,7 +85,9 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
 
 ## 2. Locks
 
-- Do not put `core.hosts`, kinds, or `secrets.env` in the engine.
+- Do not put `core.hosts`, kinds, or `secrets.env` in the engine. The
+  engine reads `key_prefixes.rules` for the SNI key-shape check. It keeps
+  only the compiled shapes, not the kind column.
 - Do not dial the origin server from the engine.
 - If the broker socket is absent or refuses the connection, **close** the
   agent connection after the handshake. Never pass through. Never buffer and
@@ -98,14 +100,22 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   put a second process on `:8080`.
 - A third user, `pf-sidecar`, runs alert and monitor. These are file tailers
   with no capabilities. The state directories stay owned by root. `apply.sh`
-  gives the sidecar exactly the files that the sidecar rewrites. observe
-  stays root, for the conntrack netlink dump. There is no console daemon. For
-  management, use `sudo pf tui`. This is a terminal program. Its only
+  gives the sidecar exactly the files that the sidecar rewrites
+  (`alert.offset`, `alert-notice.offset`, `alert.last`). `alert.service`
+  can write only these three files. observe stays root, for the conntrack
+  netlink dump. `observe.service` can write only
+  `/var/lib/pi-fortress/observe` (its ledger and checkpoints) and
+  `/var/log/pi-fortress`. The other state under `/var/lib/pi-fortress`,
+  `www/claims-redeemed` too, is read-only to both. There is no console
+  daemon. For management, use `sudo pf tui`. This is a terminal program. Its only
   privilege is the sudo of the operator.
-- www writes to exactly one directory: `/var/lib/pi-fortress/www/claims`
-  (`root:pf-fortress 2770`, `SupplementaryGroups=pf-fortress`,
-  `ReadWritePaths` for that path only). In this directory, www renames claim
-  files and appends to the ledger. `/etc/pi-fortress/broker` stays in
+- www writes to exactly one directory:
+  `/var/lib/pi-fortress/www/claims-redeemed` (`root:pf-fortress 2770`,
+  `SupplementaryGroups=pf-fortress`, `ReadWritePaths` for that path only).
+  In this directory, www makes a marker for each spent claim code and
+  appends to the ledger. It only reads the claims in
+  `/var/lib/pi-fortress/www/claims` (`root:pf-fortress 2750`), so it cannot
+  create or change a claim. `/etc/pi-fortress/broker` stays in
   `InaccessiblePaths`.
 - The broker serves one source prefix. The unit reads `AGENT_NET` from
   `net.env` for `-agent-net`. With this flag, the broker refuses with 403 a
@@ -116,7 +126,7 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   - `pf broker`: owns `secrets.env` `0600`.
 - There are three groups:
   - `pf-fortress` has all daemons, for the files that they share (logs,
-    state, the claims directory).
+    state, the claims directories).
   - `pf-fence` has the engine and the broker, and nobody else. It exists to
     gate the broker socket.
   - `pf-fakeip` has the broker only. It is the group of the fake-IP journal
@@ -145,7 +155,7 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   `/var/lib/pi-fortress/engine` (`pf-engine 0700`, `ca.pem` `0600`). Only
   `ca-cert.pem` is `0644`, and it is copied out for www.
 - The strip, unknown, and use logs are `pf-broker:pf-fortress 0640`.
-  `observe.json` and `observe.jsonl` are `root:pf-fortress 0640` (observe
+  `observe/observe.json` and `observe.jsonl` are `root:pf-fortress 0640` (observe
   runs `Group=pf-fortress`, `UMask=0027`).
 - Both units run with:
   - An empty capability set.
@@ -202,7 +212,7 @@ The security-critical path (inject/strip/harvest) has **zero networking**.
 | Unit | User | Binds | Reads |
 |---|---|---|---|
 | `pi-fortress-broker` | `pf broker` | `/run/pi-fortress/broker/broker.sock` | `/etc/pi-fortress/broker/secrets.env`, policy |
-| `pi-fortress-engine` | `pf engine` | `PI_IP:8080` (`net.env`) | CA pem, not secrets |
+| `pi-fortress-engine` | `pf engine` | `PI_IP:8080` (`net.env`) | CA pem, `key_prefixes.rules`, not secrets |
 
 The engine unit has `Wants=` for the broker, not `Requires=`. A broker
 bounce occurs at each harvest restart. During a bounce, the engine stays up

@@ -67,23 +67,20 @@ func (g *placeholderGuard) scan() {
 	// has. The guard treats it as a placeholder, and does not let the agent
 	// set the size of the broker buffer. Each span inside the settled prefix
 	// is a whole placeholder. A span that ends at the edge of the buffer is
-	// still in the hold, because the next byte can be lowercase and cancel
-	// it. The guard finds spans over the full buffer, never over the settled
-	// prefix only: a kind run cut at n would look complete without the byte
-	// after it.
+	// still in the hold, because the next byte can make the kind run
+	// longer. The guard finds spans over the full buffer, never over the
+	// settled prefix only: a kind run cut at n would look complete without
+	// the byte after it.
 	n -= hold
 	// Also, the cut must not fall immediately after a placeholder-shaped
-	// run whose lowercase byte that cancels it is in the hold. "pf_<16hex>_A"
-	// before "pf_..." is not a placeholder in the buffer. But if the stream
-	// stops at the cut, the far end has read a whole placeholder
-	// (FuzzPlaceholderGuard). The guard holds such a run with the rest, and
-	// never drops it. It does this in one backward pass over the run, for
-	// any length of the chain.
+	// run. If the stream stops at the cut, the far end has read a whole
+	// placeholder (FuzzPlaceholderGuard). The guard holds such a run with
+	// the rest, and never drops it.
 	if n < len(g.Buf) {
 		n = secrets.TrailingPlaceholders(g.Buf[:n])
 	}
-	// maxHold is the limit on the actual hold. Without it, a chain of such
-	// runs would grow the buffer without end.
+	// maxHold is the limit on the actual hold. Without it, a long kind run
+	// would grow the buffer without end.
 	hold = len(g.Buf) - n
 	// A whole placeholder in the settled prefix stops the copy. A hold past
 	// maxHold also stops it. The guard does not emit the bytes of this pass.

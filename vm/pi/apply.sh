@@ -267,6 +267,8 @@ fi
 source "${LIB_DIR}/netman.sh"
 # shellcheck source=lib/dhcp.sh
 source "${LIB_DIR}/dhcp.sh"
+# shellcheck source=lib/harden.sh
+source "${LIB_DIR}/harden.sh"
 # The location where seg_dhcp_sync (lib/dhcp.sh) keeps the dnsmasq conf,
 # leases, log and unit of each segment. They are here, not in the lib, so
 # that this file names all that apply writes.
@@ -274,9 +276,15 @@ DHCP_ETC=/etc/pi-fortress
 DHCP_STATE=/var/lib/pi-fortress
 DHCP_LOGS=/var/log/pi-fortress
 DHCP_UNITS=/etc/systemd/system
+# The same for the OS files of lib/harden.sh.
+HARDEN_SYSCTL_D=/etc/sysctl.d
+HARDEN_APT_D=/etc/apt/apt.conf.d
+HARDEN_SSHD_D=/etc/ssh/sshd_config.d
+HARDEN_HOME=/home
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "${WORKDIR}"' EXIT
+HARDEN_WORK="${WORKDIR}"
 
 # Each segment that the closing line claims must have its address. If
 # not, the line is false and the operator looks in the wrong place.
@@ -637,9 +645,159 @@ nft -f /etc/nftables.conf
   echo "pi-fortress: could not put the resolved addresses back; the sets are empty and a client that answers from its own DNS cache waits out that cache before the gate lets it through again" >&2
 rm -f "${RESOLVED_CARRY}"
 
+# An established flow goes through the conntrack accept and does not meet
+# the egress policy again. Thus a flow that the house or a plain segment
+# opened under the old policy keeps the old permission until it closes.
+# render gives a fingerprint of the egress policy of each segment
+# (HOUSE_EGRESS_FP, SEG_EGRESS_FP; render/egressfp.go). Apply keeps the
+# last values in EGRESS_STATE. When a value changes, or a segment is gone
+# from the policy, apply ends the open flows of that segment after the
+# new ruleset is loaded. Then each new flow meets the new policy. The
+# agent needs nothing: its raw chain checks each packet.
+#
+# A flow to or from an address of this box stays. Thus the SSH session of
+# the operator to the Pi, DNS and DHCP continue. A flow between the agent,
+# the house and the segments also stays: the isolation decides it, not
+# the egress policy (egress_cut). With no state file (a
+# lost file, or the first apply) each segment counts as changed. A
+# missing conntrack gives a warning, never a failed apply: the new policy
+# is loaded already.
+EGRESS_STATE=/var/lib/pi-fortress/egress.state
+
+# One line for each segment with an egress policy: key, fingerprint, subnet.
+egress_state() {
+  local i
+  if [[ -n "${HOUSE_EGRESS_FP:-}" ]]; then
+    printf 'house %s %s\n' "${HOUSE_EGRESS_FP}" "${HOUSE_NET}"
+  fi
+  for i in "${!SEG_NAME[@]}"; do
+    printf 'seg:%s %s %s\n' "${SEG_NAME[${i}]}" "${SEG_EGRESS_FP[${i}]}" "${SEG_NET[${i}]}"
+  done
+}
+
+# egress_cut NAME NET SELF INNER ends each tracked flow whose original
+# source or destination is in NET, except a flow to or from an address in
+# SELF, and a flow between two subnets in INNER (both space separated).
+# It deletes by the address pair of the original direction. All flows of
+# such a pair are flows of the segment.
+#
+# INNER is the agent subnet and the subnets of the new policy. A flow
+# between two of them does not go through an egress chain: the
+# isolation of forward decides it, and isolate_ct examines each of its
+# established packets with the holes of the new ruleset. Thus an admin
+# SSH session through a hole (HOUSE_SSH_TO, SSH_TO, SSH_FROM) continues
+# while its hole stays, and stops at its next packet when the hole is
+# gone. A subnet that is gone from the policy is not in INNER, so its
+# flows to the agent end here.
+egress_cut() {
+  local name="$1" net="$2" self="$3" inner="$4" pairs s d rc n=0 bad=0
+  pairs="$({
+    conntrack -L -s "${net}" 2>/dev/null || [[ $? -eq 1 ]] || bad=1
+    conntrack -L -d "${net}" 2>/dev/null || [[ $? -eq 1 ]] || bad=1
+    [[ "${bad}" -eq 0 ]] || echo "list-failed"
+  } | awk -v self=" ${self} " -v inner="${inner}" '
+    function num(a,   p) {
+      if (split(a, p, ".") != 4) return -1
+      return ((p[1] * 256 + p[2]) * 256 + p[3]) * 256 + p[4]
+    }
+    function in_inner(a,   i, c, b, x) {
+      x = num(a)
+      if (x < 0) return 0
+      for (i = 1; i <= ni; i++) {
+        if (split(nets[i], c, "/") != 2) c[2] = 32
+        b = 2 ^ (32 - c[2])
+        if (int(x / b) == int(num(c[1]) / b)) return 1
+      }
+      return 0
+    }
+    BEGIN { ni = split(inner, nets, " ") }
+    $1 == "list-failed" { print; next }
+    {
+      s = d = ""
+      for (i = 1; i <= NF; i++) {
+        if (s == "" && $i ~ /^src=/) s = substr($i, 5)
+        else if (d == "" && $i ~ /^dst=/) d = substr($i, 5)
+      }
+      if (s == "" || d == "" || index(self, " " s " ") || index(self, " " d " ")) next
+      if (in_inner(s) && in_inner(d)) next
+      print s, d
+    }' | sort -u)"
+  while read -r s d; do
+    [[ -n "${s}" ]] || continue
+    if [[ "${s}" == list-failed ]]; then
+      bad=1
+      continue
+    fi
+    rc=0
+    conntrack -D -s "${s}" -d "${d}" >/dev/null 2>&1 || rc=$?
+    # Exit 1 is no entry: the flow closed after the list.
+    if [[ "${rc}" -eq 0 ]]; then
+      n=$((n + 1))
+    elif [[ "${rc}" -ne 1 ]]; then
+      bad=1
+    fi
+  done <<<"${pairs}"
+  echo "pi-fortress: the egress policy of ${name} changed; ended the open flows of ${n} address pair(s) in ${net}"
+  if [[ "${bad}" -ne 0 ]]; then
+    echo "pi-fortress: WARN conntrack failed for ${name}; some open flows of ${net} keep the old egress policy until they close (sudo conntrack -L -s ${net})" >&2
+  fi
+}
+
+# egress_cuts STATE NEW compares NEW (the egress_state lines of this apply)
+# with STATE, ends the flows of each changed segment and of each segment
+# that is gone from NEW, then keeps NEW in STATE.
+egress_cuts() {
+  local state="$1" new="$2" key fp net old self inner c
+  local -a cut=()
+  if [[ -s "${state}" ]]; then
+    while read -r key fp net; do
+      old="$(awk -v k="${key}" '$1 == k { print $2; exit }' "${state}")"
+      if [[ -n "${old}" && "${old}" != "${fp}" ]]; then
+        cut+=("${key#seg:} ${net}")
+      fi
+    done <"${new}"
+    # A removed segment (or house) keeps its subnet in STATE only.
+    while read -r key fp net; do
+      [[ -n "${net}" ]] || continue
+      if ! awk -v k="${key}" '$1 == k { f = 1 } END { exit !f }' "${new}"; then
+        cut+=("${key#seg:} ${net}")
+      fi
+    done <"${state}"
+  else
+    # No record: the last policy is not known, so each segment counts as
+    # changed. Apply cannot tell a lost file from a new box. On a new box
+    # this ends nothing: forwarding stays off until the ruleset is loaded
+    # (below), so no segment has a forwarded flow yet.
+    while read -r key fp net; do
+      cut+=("${key#seg:} ${net}")
+    done <"${new}"
+  fi
+  if [[ "${#cut[@]}" -gt 0 ]]; then
+    if command -v conntrack >/dev/null 2>&1; then
+      self="$(ip -4 -o addr show 2>/dev/null | awk '{ sub(/\/.*/, "", $4); printf "%s ", $4 }')"
+      self+=" ${PI_IP:-} ${HOUSE_IP:-} ${SEG_IP[*]:-}"
+      inner="${AGENT_NET:-} $(awk '{ printf "%s ", $3 }' "${new}")"
+      for c in "${cut[@]}"; do
+        # shellcheck disable=SC2086 # c is "name net", two words by design
+        egress_cut ${c} "${self}" "${inner}"
+      done
+    else
+      for c in "${cut[@]}"; do
+        echo "pi-fortress: WARN conntrack is not installed; the open flows of ${c%% *} keep the old egress policy until they close (apt-get install -y conntrack)" >&2
+      done
+    fi
+  fi
+  install -d -m 0755 "$(dirname "${state}")"
+  install -m 0600 "${new}" "${state}"
+}
+
+egress_state >"${WORKDIR}/egress.state"
+egress_cuts "${EGRESS_STATE}" "${WORKDIR}/egress.state" ||
+  echo "pi-fortress: WARN could not record the egress policy in ${EGRESS_STATE}; the next apply compares with an older record" >&2
+
 # Forwarding depends on the ruleset. It is not a peer of the ruleset. So
 # apply enables it here and nowhere else: only after this line is there a
-# fence to forward through. /etc/sysctl.d ships ip_forward=0 (provision.sh).
+# fence to forward through. /etc/sysctl.d ships ip_forward=0 (lib/harden.sh).
 # Thus each path that does not get to this line (a render refusal, a failed
 # nft load, a box that did not complete provisioning) leaves a Pi that
 # routes nothing. It does not leave a Pi that routes everything.
@@ -755,6 +913,19 @@ if [[ -f "${PI_LIB}/ship-deadman.service" && -f "${PI_LIB}/ship-deadman.timer" ]
   systemctl enable --now pi-fortress-ship-deadman.timer >/dev/null 2>&1 \
     || echo "pi-fortress: pi-fortress-ship-deadman.timer did not start; an unconfirmed upgrade will not revert itself (journalctl -u pi-fortress-ship-deadman.timer)" >&2
 fi
+# A Go daemon reads the system CA roots one time, at start. The apt hook
+# runs ca-restart.sh after each dpkg run, and the script restarts the
+# daemons that verify TLS when the system CA bundle changed. Apply installs
+# it here, not only provision.sh, so a ship delivers it to a box
+# provisioned before it. --seed records the hash of the bundle now, so the
+# first change after this install is seen.
+if [[ -f "${PI_LIB}/ca-restart.sh" && -f "${PI_LIB}/60pi-fortress-ca" && -d /etc/apt/apt.conf.d ]]; then
+  install -d -m 0755 /usr/local/lib/pi-fortress
+  [[ "${PI_LIB}/ca-restart.sh" -ef /usr/local/lib/pi-fortress/ca-restart.sh ]] ||
+    install -m 0755 "${PI_LIB}/ca-restart.sh" /usr/local/lib/pi-fortress/ca-restart.sh
+  install -m 0644 "${PI_LIB}/60pi-fortress-ca" /etc/apt/apt.conf.d/60pi-fortress-ca
+  /usr/local/lib/pi-fortress/ca-restart.sh --seed || true
+fi
 # The budget goes in PF_BROKER_FLAGS, not in ${VAR} in the unit ExecStart.
 # A net.env from before these keys existed expands to a bare
 # "-slot-warn-requests=". The flag parser refuses it, and systemd then
@@ -851,29 +1022,34 @@ fi
 # success without them.
 # Without /vagrant, POLICY is /etc/pi-fortress, and a copy of a file onto
 # itself fails. set -e then stops apply.
-for _f in allow.domains key_prefixes.rules dns_types.allow; do
+for _f in allow.domains dns_types.allow; do
   if [[ -f "${POLICY}/${_f}" && ! "${POLICY}/${_f}" -ef "/etc/pi-fortress/${_f}" ]]; then
     install -m 0644 "${POLICY}/${_f}" "/etc/pi-fortress/${_f}"
   fi
 done
-# core.hosts ships, and each upgrade replaces it. core.hosts.local is the
-# file of the operator, and apply keeps it. The daemons read one file, so
-# the installed core.hosts is the shipped one with the local one below a
-# marker. Apply reads the shipped part up to that marker. Thus on a box
-# whose policy dir IS /etc/pi-fortress, the rewrite replaces the old local
-# part in place. It does not add a copy on each apply. A local file with
-# only comments adds nothing, and apply omits it. Thus the installed copy
-# stays the same as the shipped one, byte for byte.
-CORE_LOCAL_MARK='# ---- core.hosts.local (pf apply appends it here; edit that file, not this) ----'
-if [[ -f "${POLICY}/core.hosts" ]]; then
-  awk -v m="${CORE_LOCAL_MARK}" '$0 == m { exit } { print }' "${POLICY}/core.hosts" >"${WORKDIR}/core.hosts"
-  if [[ -f "${POLICY}/core.hosts.local" ]] && grep -qv '^[[:space:]]*\(#.*\)\{0,1\}$' "${POLICY}/core.hosts.local"; then
-    { printf '%s\n' "${CORE_LOCAL_MARK}"; awk '{ print }' "${POLICY}/core.hosts.local"; } >>"${WORKDIR}/core.hosts"
+# core.hosts and key_prefixes.rules ship, and each upgrade replaces them.
+# core.hosts.local and key_prefixes.rules.local are the files of the
+# operator, and apply keeps them. The daemons read one file, so the
+# installed file is the shipped one with the local one below a marker.
+# Apply reads the shipped part up to that marker. Thus on a box whose
+# policy dir IS /etc/pi-fortress, the rewrite replaces the old local part
+# in place. It does not add a copy on each apply. A local file with only
+# comments adds nothing, and apply omits it. Thus the installed copy
+# stays the same as the shipped one, byte for byte. pf compile above
+# already refused a bad line in each local file.
+install_with_local() {
+  local name=$1 mark="# ---- $1.local (pf apply appends it here; edit that file, not this) ----"
+  [[ -f "${POLICY}/${name}" ]] || return 0
+  awk -v m="${mark}" '$0 == m { exit } { print }' "${POLICY}/${name}" >"${WORKDIR}/${name}"
+  if [[ -f "${POLICY}/${name}.local" ]] && grep -qv '^[[:space:]]*\(#.*\)\{0,1\}$' "${POLICY}/${name}.local"; then
+    { printf '%s\n' "${mark}"; awk '{ print }' "${POLICY}/${name}.local"; } >>"${WORKDIR}/${name}"
   fi
-  if ! cmp -s "${WORKDIR}/core.hosts" /etc/pi-fortress/core.hosts; then
-    install -m 0644 "${WORKDIR}/core.hosts" /etc/pi-fortress/core.hosts
+  if ! cmp -s "${WORKDIR}/${name}" "/etc/pi-fortress/${name}"; then
+    install -m 0644 "${WORKDIR}/${name}" "/etc/pi-fortress/${name}"
   fi
-fi
+}
+install_with_local core.hosts
+install_with_local key_prefixes.rules
 # pf dns refuses a dns_types.allow that it is told about and cannot read.
 # So a box whose policy dir is older than the seed gets an empty one: no
 # overrides, which is also what the seed says. This is better than a
@@ -1775,9 +1951,30 @@ if [[ "${LOCAL_ONLY}" -eq 1 ]]; then
   exit "${_settled}"
 fi
 
+# observe keeps its ledger and its checkpoints in their own directory.
+# It is the one path under /var/lib/pi-fortress that observe.service can
+# write, and it must exist before the unit starts. An install from before
+# this kept them at the top. A file there is from an observe of that
+# version, so it is newer than a copy in the directory, and it replaces
+# that copy. Move them with the old observe stopped: if it stays up, it
+# writes them back under the old names.
+OBSERVE_STATE=/var/lib/pi-fortress/observe
+install -d -m 0755 "${OBSERVE_STATE}"
+_obs_old=()
+for _f in /var/lib/pi-fortress/observe.json /var/lib/pi-fortress/journal.cursor \
+  /var/lib/pi-fortress/strip.offset /var/lib/pi-fortress/dns.offset /var/lib/pi-fortress/dns-*.offset; do
+  if [[ -f "${_f}" && ! -L "${_f}" ]]; then
+    _obs_old+=("${_f}")
+  fi
+done
+if [[ "${#_obs_old[@]}" -gt 0 ]]; then
+  systemctl stop pi-fortress-observe.service >/dev/null 2>&1 || true
+  mv -f "${_obs_old[@]}" "${OBSERVE_STATE}/"
+  rm -f /var/lib/pi-fortress/observe.json.lock
+fi
 # observe runs as root:pf-fortress with umask 027, so observe.json and
 # observe.jsonl are 0640 for the group. Correct the files that exist.
-for _f in /var/lib/pi-fortress/observe.json /var/log/pi-fortress/observe.jsonl; do
+for _f in "${OBSERVE_STATE}/observe.json" /var/log/pi-fortress/observe.jsonl; do
   if [[ -f "${_f}" ]]; then
     chown root:pf-fortress "${_f}"
     chmod 0640 "${_f}"
@@ -1821,7 +2018,8 @@ if [[ -f "${PI_LIB}/fetch.service" && -f "${PI_LIB}/fetch.timer" ]]; then
 fi
 
 # alert runs as pf-sidecar. Root keeps ownership of the state directories.
-# The sidecar owns exactly the files that it rewrites.
+# The sidecar owns exactly the files that it rewrites. These three are
+# also the only paths that alert.service can write.
 for _f in /var/lib/pi-fortress/alert.offset /var/lib/pi-fortress/alert.last /var/lib/pi-fortress/alert-notice.offset; do
   touch "${_f}"
   chown pf-sidecar:pf-fortress "${_f}"
@@ -1982,11 +2180,22 @@ echo "pi-fortress: fence=split (engine+broker on ${PI_IP}:8080${INSPECT_DESC})"
 
 WWW=/var/lib/pi-fortress/www
 install -d -m 0755 "${WWW}"
-# Claim codes and the enrollment ledger: the TUI (root) writes, www
-# (DynamicUser in group pf-fortress) renames and appends. Nothing else.
+# Claim codes: only the TUI (root) writes claims/. www (DynamicUser in
+# group pf-fortress) reads it, and cannot create, change or remove a claim.
+# install -d also sets the mode of a claims/ that an earlier apply made
+# 2770. To spend a code, www makes a marker in claims-redeemed/, which also
+# holds the enrollment ledger. Root and www append to the ledger.
+install -d -m 2750 -o root -g pf-fortress "${WWW}/claims"
+install -d -m 2770 -o root -g pf-fortress "${WWW}/claims-redeemed"
+# The ledger was in claims/ before. Move it once, and never move a link.
+for _l in ledger.jsonl ledger.jsonl.1; do
+  if [[ -f "${WWW}/claims/${_l}" && ! -L "${WWW}/claims/${_l}" && ! -e "${WWW}/claims-redeemed/${_l}" ]]; then
+    mv "${WWW}/claims/${_l}" "${WWW}/claims-redeemed/${_l}"
+  fi
+done
 # apply makes the ledger through a descriptor, never by name: www can write
-# the directory, so the name can point to a different file.
-install -d -m 2770 -o root -g pf-fortress "${WWW}/claims"
+# claims-redeemed/, so the name can point to a different file. The same
+# call removes old claims and their markers: www cannot remove a claim.
 "${PF}" www -init-ledger -dir "${WWW}"
 if [[ -n "${ca_src}" ]]; then
   install -m 0644 "${ca_src}" "${WWW}/ca.pem"
@@ -2021,6 +2230,18 @@ systemctl disable --now pi-fortress-console pi-fortress-console-kiosk 2>/dev/nul
 rm -f /etc/systemd/system/pi-fortress-console.service /etc/systemd/system/pi-fortress-console-kiosk.service
 rm -rf /usr/local/lib/pi-fortress/console
 systemctl daemon-reload
+
+# The OS hardening of provision.sh (lib/harden.sh): the sysctl file, the
+# unattended-upgrades config and the key-only sshd drop-in. pf upgrade and
+# a ship run this apply, not provision.sh. Thus a box from an older
+# release gets the files of this release here, as a fresh install does.
+# Also, a box that had no login key at install time turns password login
+# off at the first apply after the operator adds a key. Only on a full
+# apply: a --local or --refresh run changes policy, not the OS.
+harden_sysctl_write
+harden_sysctl_load
+harden_apt
+harden_ssh
 
 # pf apply gets to this script through syscall.Exec, which replaces the
 # Go process. internal/admin records that an apply was requested, and can

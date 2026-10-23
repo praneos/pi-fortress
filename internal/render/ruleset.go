@@ -87,6 +87,11 @@ type fragments struct {
 	// DNSReplyOut (filter output) exclude UDP DNS to the Pi from the
 	// conntrack table (dnsNoTrack).
 	DNSNoTrack, DNSNoTrackOut, DNSReplyOut string
+	// IsolateCT is in forward, before the conntrack accept. It sends each
+	// established packet to IsolateCTChain, isolate_ct (isolateCT). ctHoles
+	// and ctDrops are its rules, which house and segments collect.
+	IsolateCT, IsolateCTChain string
+	ctHoles, ctDrops          []string
 }
 
 // Ruleset renders /etc/nftables.conf. Each fragment starts with a newline
@@ -105,6 +110,7 @@ func (c *Config) Ruleset(e Elements) string {
 	f.dnsNoTrack()
 	f.house()
 	f.segments()
+	f.isolateCT()
 	f.sshAllow()
 	f.uplink()
 	f.connLimits()
@@ -413,6 +419,13 @@ const houseSNIFlood = "\n\n  chain house_sni_flood {" +
 // house gave out.
 var houseTLSPorts = []string{"443", "465", "993", "5223", "5228", "8443"}
 
+// houseSTARTTLSPorts are the mail ports that strict egress lets out with no
+// name check: IMAP (143) and SMTP submission (587). These start in clear
+// text and change to TLS with STARTTLS. Thus the first packet is not a TLS
+// ClientHello and has no name to check. Do not put them in houseTLSPorts:
+// the name check would drop each flow.
+const houseSTARTTLSPorts = "143, 587"
+
 // houseCallUDP is the STUN/TURN and media of the call apps: 3478-3497 STUN
 // and TURN (Teams, WhatsApp, FaceTime), 8801-8810 Zoom, 16384-16403
 // FaceTime, 19302-19309 Google Meet. Without it, these apps relay over
@@ -429,6 +442,7 @@ func (f *fragments) houseEgress() string {
 	r := func(s string) string { return "\n    " + s }
 	body := r("tcp dport 80 return") +
 		r("tcp dport { "+strings.Join(houseTLSPorts, ", ")+" } return") +
+		r("tcp dport { "+houseSTARTTLSPorts+" } return") +
 		r("udp dport 123 return") +
 		r("icmp type echo-request limit rate 10/second burst 20 packets return")
 	if f.HouseAllowWiFiCalling == "on" {
@@ -693,6 +707,8 @@ func (f *fragments) house() {
 	}
 	f.HouseInput += in("limit rate 10/minute burst 20 packets log prefix \"pi-fortress house-drop: \" level warn") + in("counter drop")
 	f.HouseIsolate = "\n    iifname \"" + f.IntIF + "\" oifname \"" + h + "\" counter drop"
+	f.ctDrop(f.IntIF, h)
+	f.ctDrop(h, f.IntIF)
 	// HOUSE_SSH_TO widens the destination past the first agent, as
 	// AGENT_COUNT can put more than one VM on the agent segment. When unset,
 	// it uses AgentIP, so an existing house.env renders the same hole as
@@ -704,6 +720,7 @@ func (f *fragments) house() {
 	}
 	if f.HouseAdminIP != "" && sshTo != "" {
 		f.HouseIsolate += in("oifname \"" + f.IntIF + "\" ip saddr " + f.HouseAdminIP + " ip daddr " + sshTo + " tcp dport 22 ct state new accept")
+		f.ctHole("\""+h+"\"", "\""+f.IntIF+"\"", f.HouseAdminIP, sshTo)
 	}
 	f.HouseIsolate += in("oifname \"" + f.IntIF + "\" counter drop")
 	f.HouseForward = in("meta nfproto ipv6 counter drop") + in("udp dport 53 reject with icmp type port-unreachable") + in("tcp dport 53 reject with tcp reset")
@@ -925,17 +942,23 @@ func (f *fragments) segments() {
 		f.SegInput += pingMeter("\n    iifname \""+s.IF+"\" ", "seg_"+nftName(s.Name)) + in("icmp type echo-request accept") +
 			in("limit rate 10/minute burst 20 packets log prefix \"pi-fortress "+s.Name+"-drop: \" level warn") + in("counter drop")
 		f.SegIsolate += "\n    iifname \"" + f.IntIF + "\" oifname \"" + s.IF + "\" counter drop"
+		f.ctDrop(f.IntIF, s.IF)
 		if s.SSHTo != "" {
 			f.SegIsolate += in("oifname \"" + f.IntIF + "\" ip daddr " + s.SSHTo + " tcp dport 22 ct state new accept")
+			f.ctHole("\""+s.IF+"\"", "\""+f.IntIF+"\"", "", s.SSHTo)
 		}
 		f.SegIsolate += in("oifname \"" + f.IntIF + "\" counter drop")
+		f.ctDrop(s.IF, f.IntIF)
 		if f.HouseIF != "" {
 			f.SegIsolate += in("oifname \""+f.HouseIF+"\" counter drop") +
 				"\n    iifname \"" + f.HouseIF + "\" oifname \"" + s.IF + "\" counter drop"
+			f.ctDrop(s.IF, f.HouseIF)
+			f.ctDrop(f.HouseIF, s.IF)
 		}
 		for j, t := range f.Segments {
 			if j != i {
 				f.SegIsolate += in("oifname \"" + t.IF + "\" counter drop")
+				f.ctDrop(s.IF, t.IF)
 			}
 		}
 		// The gate above opens only addresses that this box resolved. Thus a
@@ -965,6 +988,7 @@ func (f *fragments) segments() {
 		if s.SSHFrom != "" {
 			if from := f.sshFromIFs(i); from != "" {
 				sshFrom += "\n    iifname " + from + " oifname \"" + s.IF + "\" ip saddr " + s.SSHFrom + " tcp dport 22 ct state new counter accept"
+				f.ctHole(from, "\""+s.IF+"\"", s.SSHFrom, "")
 			}
 		}
 	}
@@ -998,14 +1022,59 @@ func (f *fragments) sshFromIFs(i int) string {
 	return "{ " + strings.Join(ifs, ", ") + " }"
 }
 
+// isolateCT applies the segment isolation to flows that conntrack already
+// tracks. The conntrack accept is above the isolation drops, and an apply
+// does not flush conntrack. Thus, without this chain, a flow between two
+// segments continues after an apply that removes its SSH hole, until the
+// flow ends. isolate_ct has the same holes and drops as forward, and the
+// current policy decides each established packet again:
+//
+//   - A hole matches the original direction as forward does, and the reply
+//     direction with the addresses and the port reversed.
+//   - A packet that crosses no segment pair falls through to the
+//     conntrack accept, as before.
+//   - related (an ICMP error for a flow) carries no data and is not sent here.
+//
+// The agent needs no rule here. Its forward is SSH to ssh_allow.ips only,
+// and the raw chain checks each packet of that, new or not. A box with no
+// house and no segments renders nothing.
+func (f *fragments) isolateCT() {
+	if len(f.ctDrops) == 0 {
+		return
+	}
+	f.IsolateCT = "\n    ct state established jump isolate_ct"
+	f.IsolateCTChain = "\n\n  chain isolate_ct {" + strings.Join(f.ctHoles, "") + strings.Join(f.ctDrops, "") + "\n  }"
+}
+
+// ctHole adds an SSH hole of forward to isolate_ct, for the two directions
+// of the flow. iif and oif are nft operands (a quoted name or a set).
+// saddr and daddr are the addresses of the hole; empty is any address.
+func (f *fragments) ctHole(iif, oif, saddr, daddr string) {
+	ip := func(k, v string) string {
+		if v == "" {
+			return ""
+		}
+		return " ip " + k + " " + v
+	}
+	f.ctHoles = append(f.ctHoles,
+		"\n    iifname "+iif+" oifname "+oif+ip("saddr", saddr)+ip("daddr", daddr)+" tcp dport 22 ct direction original return",
+		"\n    iifname "+oif+" oifname "+iif+ip("saddr", daddr)+ip("daddr", saddr)+" tcp sport 22 ct direction reply return")
+}
+
+// ctDrop adds an isolation drop of forward, from iif to oif, to isolate_ct.
+func (f *fragments) ctDrop(iif, oif string) {
+	f.ctDrops = append(f.ctDrops, "\n    iifname \""+iif+"\" oifname \""+oif+"\" counter drop")
+}
+
 // segEgress is the port policy of a plain segment: the strict set of the
-// house (web, the TLS ports that mail and push use, time, ping) plus
-// ALLOW_PORTS. No WhatsApp, Wi-Fi calling or call-media switches: a desk
-// that needs one names the ports.
+// house (web, the mail and push ports, time, ping) plus ALLOW_PORTS. No
+// WhatsApp, Wi-Fi calling or call-media switches: a desk that needs one
+// names the ports.
 func segEgress(chain string, s Segment) string {
 	r := func(x string) string { return "\n    " + x }
 	body := r("tcp dport 80 return") +
 		r("tcp dport { "+strings.Join(houseTLSPorts, ", ")+" } return") +
+		r("tcp dport { "+houseSTARTTLSPorts+" } return") +
 		r("udp dport 123 return") +
 		r("icmp type echo-request limit rate 10/second burst 20 packets return")
 	if s.AllowTCP != "" {
@@ -1125,7 +1194,7 @@ table inet fortress {
   }
 
   chain forward {
-    type filter hook forward priority filter; policy drop;{{.TrunkDrop}}{{.ConnLimitFwd}}{{.HouseKill}}{{.HouseSNI}}
+    type filter hook forward priority filter; policy drop;{{.TrunkDrop}}{{.ConnLimitFwd}}{{.HouseKill}}{{.HouseSNI}}{{.IsolateCT}}
     ct state established,related accept
     ct state invalid drop{{.SSHPoolReject}}{{.HouseIsolate}}{{.SegIsolate}}
     iifname "{{.IntIF}}" meta nfproto ipv6 counter drop
@@ -1133,7 +1202,7 @@ table inet fortress {
     iifname "{{.IntIF}}" tcp dport 80 counter drop{{.SSHFwd}}
     iifname "{{.IntIF}}" tcp dport 22 counter drop
     iifname "{{.IntIF}}" counter drop{{.HouseForward}}{{.SegForward}}
-  }{{.HouseEgressChain}}{{.SegEgressChains}}{{.HouseSNIChain}}{{.ConnChains}}{{.SpoofChain}}
+  }{{.IsolateCTChain}}{{.HouseEgressChain}}{{.SegEgressChains}}{{.HouseSNIChain}}{{.ConnChains}}{{.SpoofChain}}
 
   chain postrouting {
     type nat hook postrouting priority srcnat; policy accept;

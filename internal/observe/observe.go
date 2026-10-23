@@ -324,6 +324,13 @@ type Observer struct {
 	savedID fileID
 }
 
+// StateDir holds each file that pf observe writes outside its logs: the
+// ledger, its lock and the checkpoints. observe.service can write only
+// this directory under /var/lib/pi-fortress. The ledger and the cursor are
+// replaced through a rename, so the daemon needs the directory, not only
+// the files. apply.sh makes it.
+const StateDir = "/var/lib/pi-fortress/observe"
+
 // Defaults is what `pf observe` runs with. PF_OBSERVE_FLUSH_BYTES and
 // PF_OBSERVE_FLUSH_INTERVAL (Go duration) override the write chunking,
 // from 10 MiB and 15m. PF_OBSERVE_VOLUME_MB overrides the outbound hour
@@ -334,18 +341,18 @@ type Observer struct {
 // those defaults.
 func Defaults() *Observer {
 	o := &Observer{
-		StatePath:       "/var/lib/pi-fortress/observe.json",
+		StatePath:       StateDir + "/observe.json",
 		JSONLPath:       "/var/log/pi-fortress/observe.jsonl",
 		NoticePath:      "/var/log/pi-fortress/notice.jsonl",
 		DNSLog:          "/var/log/pi-fortress/dns.jsonl",
-		OffsetPath:      "/var/lib/pi-fortress/dns.offset",
+		OffsetPath:      StateDir + "/dns.offset",
 		CTPath:          "/proc/net/nf_conntrack",
 		CTCmd:           []string{"conntrack", "-L", "-o", "extended"},
 		NetEnvPath:      base.NetEnvPaths(),
 		NetEnvLocal:     base.NetEnvLocal,
 		HouseEnvPath:    []string{"/etc/pi-fortress/house.env"},
 		HouseDNSLog:     "/var/log/pi-fortress/dns-house.jsonl",
-		HouseOffsetPath: "/var/lib/pi-fortress/dns-house.offset",
+		HouseOffsetPath: StateDir + "/dns-house.offset",
 		HouseLeases:     "/var/lib/pi-fortress/house.leases",
 		HouseHosts:      "/etc/pi-fortress/house.hosts",
 		SegmentsDir:     "/etc/pi-fortress/segments.d",
@@ -357,9 +364,9 @@ func Defaults() *Observer {
 		// Use _TRANSPORT=kernel, not -k: -k also matches the current boot,
 		// whose ID is in /proc/sys, which ProcSubset=pid hides.
 		JournalCmd:        []string{"journalctl", "_TRANSPORT=kernel", "-o", "json", "--no-pager", "-g", "pi-fortress "},
-		JournalCursorPath: "/var/lib/pi-fortress/journal.cursor",
+		JournalCursorPath: StateDir + "/journal.cursor",
 		StripLog:          "/var/log/pi-fortress/strip.jsonl",
-		StripOffsetPath:   "/var/lib/pi-fortress/strip.offset",
+		StripOffsetPath:   StateDir + "/strip.offset",
 		Interval:          10 * time.Second,
 		FlushBytes:        10 << 20,
 		FlushInterval:     15 * time.Minute,

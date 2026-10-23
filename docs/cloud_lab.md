@@ -368,6 +368,8 @@ In addition to the lab-only groups (`strip`, `secrets`, `setup`, `enroll`, `seg-
 | `vagrant up` fails on a network option | Run `vagrant plugin list` and make sure that `vagrant-libvirt` is installed. |
 | A client cannot reach the gateway, or `gw` has no internet | Run `sudo vm/cloudlab/lab.sh host` again. Some cloud networks block outbound DNS to public resolvers. |
 | Docker is installed on the host | `sudo iptables -S FORWARD \| grep pf` must show three ACCEPT rules. If not, run `sudo vm/cloudlab/lab.sh host` again. |
+| The host is a locked desk seat (`vm/desk/setup.sh lock`), and `apt` in `gw` times out | The desk lock drops all forwarded traffic, and the lab needs it. Use a different host, or let only the lab management bridge out while the lab runs: `sudo nft insert rule inet pf_desk_lock forward iifname "virbr1" oifname "<uplink>" accept` and `sudo nft insert rule inet pf_desk_lock forward iifname "<uplink>" oifname "virbr1" ct state established,related accept`. With ufw, also `sudo ufw allow in on virbr1` and `sudo ufw route allow in on virbr1 out on <uplink>`. After the lab, `sudo systemctl restart pf-desk-lock` and delete the two ufw rules. |
+| `provision.sh` says `SRC=/vagrant is not a pi-fortress checkout` | A first `up` failed before its rsync. `lab.sh up` now copies the tree and provisions `gw` again when `/vagrant` is missing. Run `lab.sh up` again. |
 | `lab.sh ssh agent` hangs | The gateway is down, or its last apply failed. Run `lab.sh ssh pi sudo pf doctor`. |
 | Vagrant cannot reach a client | Run `lab.sh uncut`, wait a minute, retry, then `lab.sh cut`. |
 | Wrong network interface selected, or the house VM never gets its address | The guest setup selects interfaces by MAC address. Compare with `ip -br link` inside the VM. |

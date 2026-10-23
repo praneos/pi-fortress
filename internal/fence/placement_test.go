@@ -118,10 +118,11 @@ func TestRefreshTokenPlacedOnlyAsTheRefreshField(t *testing.T) {
 		{"long-s key", post("/v1/oauth/token", "", `{"refreſh_token":"`+ortC+`","refresh_token":"`+ort+`"}`), "body"},
 		{"trailing bytes", post("/v1/oauth/token", "", `{"refresh_token":"`+ort+`"} {}`), "body"},
 		{"an array", post("/v1/oauth/token", "", `[{"refresh_token":"`+ort+`"}]`), "body"},
-		// A target that does not reduce to one path is not a refresh path.
-		// Thus the refresh token has no place to go, and the harvest is
-		// never armed.
-		{"unsettled target", post("/v1/oauth/%2525252574oken", "", `{"refresh_token":"`+ort+`"}`), "body"},
+		// A target that is not exactly the refresh path is not a refresh
+		// path. Thus the refresh token has no place to go, and the harvest
+		// is never armed.
+		{"encoded target", post("/v1/oauth/%2525252574oken", "", `{"refresh_token":"`+ort+`"}`), "body"},
+		{"slash runs", post("//v1//oauth/token", "", `{"refresh_token":"`+ort+`","client_id":"x"}`), "body"},
 	}
 	for _, tc := range refused {
 		t.Run(tc.name, func(t *testing.T) {
@@ -144,7 +145,7 @@ func TestRefreshTokenPlacedOnlyAsTheRefreshField(t *testing.T) {
 
 	for _, tc := range []struct{ name, raw string }{
 		{"spaced json", post("/v1/oauth/token", "", "{ \"grant_type\" : \"refresh_token\" ,\n \"refresh_token\" : \""+ort+"\" }")},
-		{"slash runs", post("//v1//oauth/token", "", `{"refresh_token":"`+ort+`","client_id":"x"}`)},
+		{"query", post("/v1/oauth/token?x=1", "", `{"refresh_token":"`+ort+`","client_id":"x"}`)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := parseReq(t, tc.raw)
@@ -173,6 +174,7 @@ func TestRefreshTokenField(t *testing.T) {
 	for _, body := range []string{
 		``, `null`, `{}`, `{"refresh_token":1}`, `{"refresh_token":"a\"b"}`, `{"refresh_token":"a\u0062"}`,
 		`{"refresh_token":"a","refresh_token":"a"}`, `{"Refresh_Token":"a"}`, `{"refresh_token":"a"}x`, `{"refresh_token":"a"`,
+		`{"refresh_token":null}`,
 	} {
 		if got, ok := RefreshTokenField([]byte(body)); ok {
 			t.Errorf("%s: read %q", body, got)
@@ -180,11 +182,30 @@ func TestRefreshTokenField(t *testing.T) {
 	}
 }
 
+// StrictFields reads a null value as an absent key. The null still counts
+// for the once-only rule, so a second key or a case variant next to it
+// fails the read.
+func TestStrictFieldsNull(t *testing.T) {
+	f, ok := StrictFields([]byte(`{"access_token":"abc","refresh_token":null}`), "access_token", "refresh_token")
+	if _, has := f["refresh_token"]; !ok || has || f["access_token"] != "abc" {
+		t.Fatalf("%v %v", f, ok)
+	}
+	for _, body := range []string{
+		`{"refresh_token":null,"refresh_token":"a"}`, `{"refresh_token":"a","refresh_token":null}`,
+		`{"refresh_token":null,"refresh_token":null}`, `{"refresh_token":null,"Refresh_Token":"a"}`,
+		`{"Refresh_Token":null}`, `{"refresh_token":"a\u0062"}`, `{"refresh_token":[null]}`,
+	} {
+		if got, ok := StrictFields([]byte(body), "access_token", "refresh_token"); ok {
+			t.Errorf("%s: read %v", body, got)
+		}
+	}
+}
+
 func TestIsOAuthPathSlashesAndSchemes(t *testing.T) {
 	for target, want := range map[string]bool{
-		"//v1/oauth/token":                    true,
-		"/v1//oauth///token":                  true,
-		"/v1/oauth/%2F/token":                 true,
+		"//v1/oauth/token":                    false,
+		"/v1//oauth///token":                  false,
+		"/v1/oauth/%2F/token":                 false,
 		"wss://api.anthropic.com/oauth/token": true,
 		"HTTPS://x/v1/oauth/token?y":          true,
 		"/v1/oauth/%2525252574oken":           false,

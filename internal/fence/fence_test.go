@@ -428,21 +428,19 @@ func TestStripCoreOffKinds(t *testing.T) {
 	}
 }
 
-// The fence recognises the refresh endpoint by a compare of the target
-// that the agent wrote against two literal strings. Thus each shape that
-// an origin accepts, but that the literal misses, is a path where the
-// broker substitutes a credential and does not arm the harvest. The reply
-// then carries a live pair that the scrub snapshot does not know.
+// The fence substitutes the refresh token and the broker arms the harvest
+// from the same test of the target. An absolute-form target names the
+// refresh endpoint, so it is a refresh path. A target that is not already
+// the exact path is not a refresh path. There the fence refuses the
+// refresh token, so no pair is minted that the scrub snapshot does not
+// know.
 func TestR02OAuthPathNoncanonicalForms(t *testing.T) {
 	for _, target := range []string{
 		"https://platform.claude.com/v1/oauth/token",
 		"http://api.anthropic.com/oauth/token?grant_type=refresh_token",
-		"/v1/oauth/%74oken",
-		"/v1/%6frg/../oauth/token",
-		"/v1/oauth/token#anchor",
 	} {
 		if !IsOAuthPath(target) {
-			t.Errorf("IsOAuthPath(%q) = false, an origin reads it as the refresh endpoint", target)
+			t.Errorf("IsOAuthPath(%q) = false, it is the refresh endpoint", target)
 		}
 	}
 	for _, target := range []string{
@@ -450,6 +448,9 @@ func TestR02OAuthPathNoncanonicalForms(t *testing.T) {
 		"/v1/oauth/tokens",
 		"https://platform.claude.com/v1/oauth/tokenize",
 		"/oauth",
+		"/v1/oauth/%74oken",
+		"/v1/%6frg/../oauth/token",
+		"/v1/oauth/token#anchor",
 	} {
 		if IsOAuthPath(target) {
 			t.Errorf("IsOAuthPath(%q) = true, it is not the refresh endpoint", target)

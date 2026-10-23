@@ -210,6 +210,7 @@ table inet fortress {
     iifname "eth2" ct mark and 0x00f00000 == 0x00300000 counter reject with tcp reset
     iifname "eth2" ct mark and 0x00f00000 == 0x00100000 meter house_sni_queue { ip saddr limit rate over 100/second burst 300 packets } jump house_sni_flood
     iifname "eth2" ct mark and 0x00f00000 == 0x00100000 counter queue num 1
+    ct state established jump isolate_ct
     ct state established,related accept
     ct state invalid drop
     iifname "eth0" ip daddr 198.18.0.0/16 tcp dport 22 counter reject with tcp reset
@@ -231,9 +232,17 @@ table inet fortress {
     iifname "eth2" counter drop
   }
 
+  chain isolate_ct {
+    iifname "eth2" oifname "eth0" ip saddr 10.78.0.20 ip daddr 10.77.0.10 tcp dport 22 ct direction original return
+    iifname "eth0" oifname "eth2" ip saddr 10.77.0.10 ip daddr 10.78.0.20 tcp sport 22 ct direction reply return
+    iifname "eth0" oifname "eth2" counter drop
+    iifname "eth2" oifname "eth0" counter drop
+  }
+
   chain house_egress {
     tcp dport 80 return
     tcp dport { 443, 465, 993, 5223, 5228, 8443 } return
+    tcp dport { 143, 587 } return
     udp dport 123 return
     icmp type echo-request limit rate 10/second burst 20 packets return
     tcp dport 5222 ip daddr @house_whatsapp_v4 return

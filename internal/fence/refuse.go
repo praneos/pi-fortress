@@ -65,6 +65,12 @@ const (
 	// already went out. Thus the copy stops there, and the request never
 	// completes. The fence logs it, and does not send a distinct response.
 	CausePlaceholderInStream RefusalCause = "placeholder_in_streamed_body"
+	// CausePlaceholderInWS is a placeholder in a websocket message, ping,
+	// pong or close reason from the agent. A frame is opaque application
+	// data, so the fence substitutes into no frame (NewScanner). Thus the
+	// broker does not forward the frame and closes the session. It is
+	// attempted egress, and it alerts like CauseOutsideHeader.
+	CausePlaceholderInWS RefusalCause = "placeholder_in_ws"
 	// CauseGitPushNotAllowed is a git smart-HTTP push to a repo that is
 	// not in git_push.allow, or a push-shaped target with no single repo to
 	// examine (docs/git_push.md). It is not an alert: the operator writes
@@ -90,6 +96,18 @@ const (
 	// because the name gives the field its meaning. Thus it refuses the
 	// request.
 	CauseKeyInHeaderName RefusalCause = "key_in_header_name"
+	// CauseKeyInMethod is a request method that holds a live value, a
+	// token-prefix match or a placeholder. A method is a token, as a field
+	// name is. The fence cannot rewrite a method, because the method gives
+	// the request its meaning. Thus it refuses the request.
+	CauseKeyInMethod RefusalCause = "key_in_method"
+	// CauseEncodedURLToken is a live value or a token-prefix match in the
+	// percent-decoded target that the raw target does not show: what a
+	// literal target strips. The raw bytes are different, so the fence
+	// cannot strip it in place. A target that does not decode to a stable
+	// form in a few rounds is also this cause, because the fence cannot see
+	// what the origin decodes. Thus the fence refuses the request.
+	CauseEncodedURLToken RefusalCause = "encoded_url_token"
 )
 
 type Refusal struct {
@@ -113,12 +131,15 @@ func (e *RefusedError) Error() string { return "fence: substitution refused" }
 // or records nothing when it can. note reads the kind from the placeholder,
 // not from the slot. Thus a placeholder that names a kind that this SNI
 // cannot carry gets a decision on that alone. It never needs a store lookup first.
+// A placeholder that is not exact (secrets.PlaceholderExact) has no slot:
+// the fence never substitutes it, and refuses it as slot_unknown.
 func (s *scanner) note(b []byte, span [2]int, where string) {
 	if s.quiet {
 		return
 	}
 	slot, kind := secrets.PlaceholderParts(b, span)
 	sl, ok := s.idx.ByDummy[secrets.Placeholder(slot, kind)]
+	ok = ok && secrets.PlaceholderExact(b, span)
 	switch {
 	case !s.inject || !corepolicy.KindAllowed(kind, s.kinds):
 		s.refuse(CauseKindNotAllowed, slot, kind, where)
@@ -177,6 +198,52 @@ func (s *scanner) noteNames(fields httpwire.Fields) {
 	}
 	if s.all.match(b) {
 		s.refuse(CauseKeyInHeaderName, "", "", "header_name")
+	}
+}
+
+// noteMethod refuses the request when the method holds a placeholder, a
+// live value or a token-prefix match. It does the same checks as
+// noteNames, on the method.
+func (s *scanner) noteMethod(method string) {
+	b := []byte(method)
+	for _, span := range secrets.FindPlaceholderSpans(b) {
+		slot, kind := secrets.PlaceholderParts(b, span)
+		s.refuse(CauseKeyInMethod, slot, kind, "method")
+	}
+	for _, sl := range s.idx.Lives {
+		if strings.Contains(method, sl.Live) {
+			s.refuse(CauseKeyInMethod, sl.ID, sl.Kind, "method")
+		}
+	}
+	if s.all.match(b) {
+		s.refuse(CauseKeyInMethod, "", "", "method")
+	}
+}
+
+// noteTarget scans the percent-decoded target, because the origin decodes
+// it. A placeholder there refuses the request as in the raw target. The
+// live value and token scans read the decoded form of the target after
+// the raw strip. Thus a literal match strips as before, and only an
+// encoded match refuses (CauseEncodedURLToken). A '+' stays a '+', as in
+// GitPushTarget.
+func (s *scanner) noteTarget(target string) {
+	if !strings.Contains(target, "%") {
+		return
+	}
+	dec, stable := unescapeAll(target)
+	if !stable {
+		s.refuse(CauseEncodedURLToken, "", "", "url")
+		return
+	}
+	s.noteAll([]byte(dec), "url")
+	b, _ := unescapeAll(string(s.strip([]byte(target))))
+	for _, sl := range s.idx.Lives {
+		if !s.keeps(sl) && strings.Contains(b, sl.Live) {
+			s.refuse(CauseEncodedURLToken, sl.ID, sl.Kind, "url")
+		}
+	}
+	if s.tokens.match([]byte(b)) {
+		s.refuse(CauseEncodedURLToken, "", "", "url")
 	}
 }
 

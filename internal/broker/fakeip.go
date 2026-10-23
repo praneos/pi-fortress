@@ -181,12 +181,43 @@ func addrLiteral(name string) bool {
 	return true
 }
 
+// CauseSNIKeyShape: the SNI of a connection to a real address carries a key
+// or a placeholder. This is the check that fakeAdmit runs on a pool
+// address. In forward mode, an agent can resolve a name that it controls,
+// then open TLS to that address with a key in the SNI. The dial puts the
+// SNI on the wire, and the origin of a wildcard zone logs it. Thus the
+// broker refuses the SNI before any dial, in both DNS modes.
+const CauseSNIKeyShape fence.RefusalCause = "sni_key_shape"
+
+// ErrSNIKeyShape is the refusal of a key-shaped SNI before a dial.
+var ErrSNIKeyShape = errors.New("broker: key-shaped sni refused")
+
+const sniKeyBody = "sni\n"
+
+// sniKeyRefused reports whether the SNI of p carries a key or a placeholder
+// (keyRule). If it does, it writes the strip row. As in fakeAdmit, the row
+// holds the zone and the rule, never the SNI, and it always alerts.
+func (b *Broker) sniKeyRefused(p *preamble.Preamble) bool {
+	rule := b.keyRule(p.SNI)
+	if rule == "" {
+		return false
+	}
+	_ = b.Logs.Refused(jsonl.Refused{
+		Host:     b.logZone(strings.TrimSuffix(p.SNI, ".")),
+		Where:    "preamble",
+		Cause:    string(CauseSNIKeyShape),
+		Kind:     rule,
+		ClientIP: clientIP(p),
+		Alert:    true,
+	})
+	return true
+}
+
 // keyRule names the rule for a key in an SNI, "placeholder" for a
 // placeholder of the gateway, or "" for neither. It is the check of pf dns
 // (keyshape.Match), with no prefilter. Thus the broker refuses each SNI
-// that pf dns refuses as a name. The name stays as sent, not lower-cased,
-// because the placeholder check is exact. A lowered pf_ spelling is not a
-// placeholder of the gateway.
+// that pf dns refuses as a name. The placeholder check folds case, as
+// the key rules do. Thus a lowered SNI still shows a placeholder.
 func (b *Broker) keyRule(name string) string {
 	re := b.TokenRE
 	if re == nil && b.Rules != nil {
@@ -197,8 +228,7 @@ func (b *Broker) keyRule(name string) string {
 
 // logZone is what a key-shape row can say about the name, as logName of pf
 // dns: the last two labels, the zone that an attacker had to register. If
-// the key is also in those labels, it says nothing. The check runs on the
-// name as sent, because the placeholder check is exact. The row keeps the
+// the key is also in those labels, it says nothing. The row keeps the
 // zone in lower case, as it keeps the SNI.
 func (b *Broker) logZone(name string) string {
 	zone := keyshape.Tail(name)

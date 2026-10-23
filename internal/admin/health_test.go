@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"pi-fortress/internal/www"
 )
 
 func unitsAsked(t *testing.T, c *Config) []string {
@@ -72,7 +74,7 @@ func TestUnitsHealthAsksAboutTheResolverThisBoxRuns(t *testing.T) {
 func TestEnrollStatsSaysWhenTheLedgerIsATail(t *testing.T) {
 	c := testConfig(t)
 	c.WWWDir = filepath.Join(t.TempDir(), "www")
-	if err := os.MkdirAll(c.claimsDir(), 0755); err != nil {
+	if err := os.MkdirAll(www.RedeemedDir(c.claimsDir()), 0755); err != nil {
 		t.Fatal(err)
 	}
 	st, err := c.EnrollStats()
@@ -84,7 +86,7 @@ func TestEnrollStatsSaysWhenTheLedgerIsATail(t *testing.T) {
 	}
 
 	// A previous generation is proof that the counts have lost rows.
-	if err := os.WriteFile(filepath.Join(c.claimsDir(), "ledger.jsonl.1"), []byte("{}\n"), 0644); err != nil {
+	if err := os.WriteFile(www.LedgerPath(c.claimsDir())+".1", []byte("{}\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	st, err = c.EnrollStats()

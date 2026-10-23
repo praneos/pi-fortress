@@ -568,6 +568,13 @@ func (r *Response) dropTE() {
 	r.Del("Transfer-Encoding")
 }
 
+// SetStatus replaces the code and reason ("200 OK"). The status line that
+// WriteTo and WriteHead write is then Proto and this text.
+func (r *Response) SetStatus(status string) {
+	r.Status = status
+	r.statusLine = r.Proto + " " + status
+}
+
 // WriteHead writes the status line and headers for a streamed body. It
 // replaces Content-Length and Transfer-Encoding with chunked framing (or
 // omits them when chunked is false: the body runs to close).

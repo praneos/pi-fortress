@@ -28,7 +28,7 @@ func TestKeyShapePinned(t *testing.T) {
 		{"x.AKIAQ7Q7Q7Q7Q7Q7Q7.7Q", "aws_akia", ""},
 		{"akiaaaaaaaaaaaaaaaaa.evil.example", "aws_akia", "evil.example"},
 		{"pf_0123456789abcdef_CLAUDE_OAT.evil.example", "placeholder", "evil.example"},
-		{"PF_0123456789ABCDEF_CLAUDE_OAT.evil.example", "", "evil.example"},
+		{"PF_0123456789ABCDEF_CLAUDE_OAT.evil.example", "placeholder", "evil.example"},
 		{"pf_0123456789abcdef._CLAUDE_OAT.com", "placeholder", "_CLAUDE_OAT.com"},
 		{"x.pf_0123456789abcdef._CLAUDE_OAT", "placeholder", ""},
 		{"ghp_AAAAAAAAAAAAAAAA.AAAAAAAAAAAAAAAAAAAA.x.y", "github_classic", "x.y"},

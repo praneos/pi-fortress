@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/fence"
 	"pi-fortress/internal/httpwire"
 	"pi-fortress/internal/jsonl"
@@ -30,6 +31,9 @@ var (
 	ErrWSExtension = errors.New("broker: origin accepted a websocket extension the fence did not offer")
 	ErrWSProtocol  = errors.New("broker: origin switched to a protocol the fence did not ask for")
 	ErrWSFragment  = errors.New("broker: websocket fragmentation is malformed")
+	// ErrWSPlaceholder: an agent frame carried a placeholder. The broker did
+	// not forward that frame.
+	ErrWSPlaceholder = errors.New("broker: websocket frame carries a placeholder")
 )
 
 // errWSDone: the connection stopped HTTP at the 101, and both legs are
@@ -93,6 +97,7 @@ const (
 
 	// RFC 6455 7.4.1 status codes the broker sends itself.
 	closeGoingAway = 1001
+	closePolicy    = 1008
 	closeTooBig    = 1009
 	// closeTryAgain is 1013 (IANA registry, "Try Again Later"). The message was
 	// in its own bound, but the byte budget of the broker (membudget.go) had no
@@ -274,9 +279,15 @@ func (b *Broker) serveWS(client net.Conn, cbr *bufio.Reader, up *upstream, ubr *
 	}
 	// Send the 101 verbatim, minus a live credential that the origin reflected
 	// into the handshake. That credential is the incident that docs/fence.md
-	// §5.2 describes. It is not a header that the client needs.
-	for _, key := range rewriteHeaders(resp, slots) {
+	// §5.2 describes. It is not a header that the client needs. A credential
+	// in a field name cannot be removed, so the switch does not occur.
+	hit, err := rewriteHeaders(resp, slots)
+	for _, key := range hit {
 		_ = b.logStrip(cp, clientIP(p), host, "response", "secret:"+key)
+	}
+	if err != nil {
+		_ = writeErr(client, 502, "502 Bad Gateway", "origin\n")
+		return err
 	}
 	if _, err := resp.WriteTo(client); err != nil {
 		return err
@@ -394,13 +405,18 @@ func agentCloseCode(err error) uint16 {
 		return closeTooBig
 	case errors.Is(err, ErrWSBusy):
 		return closeTryAgain
+	case errors.Is(err, ErrWSPlaceholder):
+		return closePolicy
 	}
 	return 0
 }
 
 func closeReason(code uint16) string {
-	if code == closeTryAgain {
+	switch code {
+	case closeTryAgain:
 		return "try again later"
+	case closePolicy:
+		return "policy violation"
 	}
 	return "message too big"
 }
@@ -487,6 +503,45 @@ func (b *Broker) logTooBig(ip, host, where string, size, limit int64) {
 	_ = b.Logs.Strip(jsonl.Strip{Host: host, Where: where, Rule: ruleTooBig, ClientIP: ip, Count: size, Limit: limit})
 }
 
+// wsPlaceholder reports the first placeholder in p. The fence substitutes
+// into no frame, so the broker cannot forward a placeholder in one. A
+// rewrite to a live value would give the agent a credential that it did
+// not have. If the placeholder goes out as written, the origin gets the
+// slot ID and the kind, and a placeholder put into a prompt comes back
+// transformed, past the literal scrub. Thus the only correct action is to
+// refuse the frame.
+func wsPlaceholder(p []byte) (slot, kind string, ok bool) {
+	sp := secrets.FindPlaceholderSpans(p)
+	if len(sp) == 0 {
+		return "", "", false
+	}
+	slot, kind = secrets.PlaceholderParts(p, sp[0])
+	return slot, kind, true
+}
+
+// logWSPlaceholder writes the refusal row for a frame that carried a
+// placeholder. Like logTooBig, it does not use the strip cap of the
+// request: the row ends the session, so there is only one.
+func (b *Broker) logWSPlaceholder(ip, host, slot, kind string) {
+	if b.Logs == nil {
+		return
+	}
+	canary := kind == corepolicy.KindCanary
+	row := jsonl.Refused{
+		Host:     host,
+		Where:    "ws",
+		Cause:    string(fence.CausePlaceholderInWS),
+		Slot:     slot,
+		Kind:     kind,
+		Alert:    canary || b.alertRefusal(fence.CausePlaceholderInWS),
+		ClientIP: ip,
+	}
+	if canary {
+		row.Threat = threatCanary
+	}
+	_ = b.Logs.Refused(row)
+}
+
 // wsToOrigin reassembles each client data message from its fragments. It
 // scans the full message for credentials one time, and forwards it as a
 // single frame. A per-frame scan would miss a token split across a fragment
@@ -498,6 +553,12 @@ func (b *Broker) logTooBig(ip, host, where string, size, limit int64) {
 // arrive between fragments. It also scrubs their payloads. A ping body or
 // a close reason is 125 bytes that the agent selects. That is space for any
 // token that this fence strips.
+//
+// A placeholder in a whole message or in a control payload ends the
+// session (wsPlaceholder). The broker does not forward that frame. The
+// origin gets a going-away close, and the agent gets 1008. The scan runs on
+// the reassembled message, so a placeholder split across fragments is also
+// found.
 func (b *Broker) wsToOrigin(src *bufio.Reader, dst io.Writer, sc *fence.Scanner, host, ip string, cp *stripCap, touch func()) (int64, error) {
 	limit := b.maxMessage()
 	var total int64
@@ -528,6 +589,18 @@ func (b *Broker) wsToOrigin(src *bufio.Reader, dst io.Writer, sc *fence.Scanner,
 		_, _ = writeMaskedFrame(dst, true, opClose, closePayload(closeGoingAway, ""))
 		return total, ErrWSBusy
 	}
+	// refuse ends the session for a placeholder, at a frame boundary on the
+	// origin leg, as tooBig does. The origin gets the same close as for size.
+	// Thus it cannot tell that the fence found a placeholder.
+	refuse := func(p []byte) error {
+		slot, kind, ok := wsPlaceholder(p)
+		if !ok {
+			return nil
+		}
+		b.logWSPlaceholder(ip, host, slot, kind)
+		_, _ = writeMaskedFrame(dst, true, opClose, closePayload(closeGoingAway, ""))
+		return ErrWSPlaceholder
+	}
 	for {
 		h, err := readWSHeader(src, limit)
 		if errors.Is(err, ErrWSTooBig) {
@@ -548,6 +621,9 @@ func (b *Broker) wsToOrigin(src *bufio.Reader, dst io.Writer, sc *fence.Scanner,
 				return total, err
 			}
 			wsMask(payload, h.key)
+			if err := refuse(payload); err != nil {
+				return total, err
+			}
 			out := b.scrubControl(sc, host, ip, cp, h.opcode, payload)
 			if len(out) > maxControlPayload {
 				return total, ErrWSControl
@@ -591,6 +667,9 @@ func (b *Broker) wsToOrigin(src *bufio.Reader, dst io.Writer, sc *fence.Scanner,
 		wsMask(msg[off:], h.key)
 		if !h.fin {
 			continue
+		}
+		if err := refuse(msg); err != nil {
+			return total, err
 		}
 		// The scrub copy, taken from the budget while the broker writes it.
 		scrubCost := int64(len(msg))

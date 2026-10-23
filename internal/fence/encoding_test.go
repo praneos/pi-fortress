@@ -206,3 +206,70 @@ func TestOversizedEncodedBodyRefused(t *testing.T) {
 		t.Fatalf("%+v", rs)
 	}
 }
+
+// gzipWithHeader is gzipBytes with the optional fields of the member header
+// set.
+func gzipWithHeader(t *testing.T, hdr gzip.Header, p []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	w.Header = hdr
+	if _, err := w.Write(p); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// The origin gets the gzip header with the body, so the scan reads its
+// optional fields too. A placeholder or a token there refuses the request
+// as one in the decoded body does. This holds for each member of the body.
+func TestGzipRequestHeaderFieldsScanned(t *testing.T) {
+	ph := "pf_a1b2c3d4e5f67890_GITHUB_TOKEN"
+	plain := []byte(`{"note":"nothing to see"}`)
+	for name, body := range map[string][]byte{
+		"name":           gzipWithHeader(t, gzip.Header{Name: ph}, plain),
+		"comment":        gzipWithHeader(t, gzip.Header{Comment: ph}, plain),
+		"extra":          gzipWithHeader(t, gzip.Header{Extra: []byte(ph)}, plain),
+		"second member":  append(gzipBytes(t, plain), gzipWithHeader(t, gzip.Header{Name: ph}, plain)...),
+		"behind deflate": zlibBytes(t, gzipWithHeader(t, gzip.Header{Comment: ph}, plain)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			enc := "gzip"
+			if name == "behind deflate" {
+				enc = "gzip, deflate"
+			}
+			req := parseReq(t, encodedPost("api.github.com", enc, body))
+			_, err := Decide(Ctx{SNI: "api.github.com", TokenRE: mustRE(t)}, req, loadPol(t), labSlots())
+			rs := refusalsOf(t, err)
+			if len(rs) != 1 || rs[0].Cause != CauseOutsideHeader || rs[0].Slot != "a1b2c3d4e5f67890" || rs[0].Kind != "GITHUB_TOKEN" || rs[0].Where != "body" {
+				t.Fatalf("%+v", rs)
+			}
+		})
+	}
+	t.Run("token in name", func(t *testing.T) {
+		tok := "ghp_" + strings.Repeat("C", 36)
+		req := parseReq(t, encodedPost("example.com", "gzip", gzipWithHeader(t, gzip.Header{Name: tok}, plain)))
+		_, err := Decide(Ctx{SNI: "example.com", TokenRE: mustRE(t)}, req, loadPol(t), labSlots())
+		rs := refusalsOf(t, err)
+		if len(rs) != 1 || rs[0].Cause != CauseEncodedBodyToken || rs[0].Where != "body" {
+			t.Fatalf("%+v", rs)
+		}
+	})
+	t.Run("clean name forwards unchanged", func(t *testing.T) {
+		raw := encodedPost("example.com", "gzip", gzipWithHeader(t, gzip.Header{Name: "upload.json", Comment: "batch 7"}, plain))
+		req := parseReq(t, raw)
+		if _, err := Decide(Ctx{SNI: "example.com", TokenRE: mustRE(t)}, req, loadPol(t), labSlots()); err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		if _, err := req.WriteTo(&out); err != nil {
+			t.Fatal(err)
+		}
+		if out.String() != raw {
+			t.Fatalf("body rewritten:\ngot  %q\nwant %q", out.String(), raw)
+		}
+	})
+}

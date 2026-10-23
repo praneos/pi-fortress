@@ -116,12 +116,15 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 	// Run returns a nil error when some feeds answered and some did not.
 	// Thus OK alone would audit a partial fetch as a clean one. The entry
 	// has the count, because nobody reads fetch.report without a prompt.
-	fails, stale := fetch.CountWarnings(report)
+	fails, stale, truncated := fetch.CountWarnings(report)
 	if fails > 0 {
 		fields["fails"] = strconv.Itoa(fails)
 	}
 	if stale > 0 {
 		fields["stale"] = strconv.Itoa(stale)
+	}
+	if truncated > 0 {
+		fields["truncated"] = strconv.Itoa(truncated)
 	}
 	logTool("fetch", fields, time.Since(start), err)
 	for _, line := range report {

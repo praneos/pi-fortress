@@ -54,9 +54,9 @@ if [[ "${role}" == ca ]]; then
 fi
 
 case "${role}" in
-  house) pkgs=(curl dnsutils netcat-openbsd) ;;
+  house) pkgs=(curl dnsutils netcat-openbsd ca-certificates) ;;
   desk)
-    pkgs=(network-manager nftables curl dnsutils netcat-openbsd python3)
+    pkgs=(network-manager nftables curl dnsutils netcat-openbsd python3 ca-certificates)
     install -d -m 0755 /etc/NetworkManager/conf.d
     printf '[main]\nno-auto-default=*\n' >/etc/NetworkManager/conf.d/80-pf-cloudlab.conf
     ;;

@@ -116,7 +116,7 @@ func headerPolicy(t *testing.T, body string) *corepolicy.Policy {
 // that host, and to no other: not toward host B, which binds the kind but
 // does not declare the header, and not for a different kind on host A.
 func TestDeclaredCredentialHeaderPerBinding(t *testing.T) {
-	pol := headerPolicy(t, "gitlab.com GITLAB_TOKEN:PRIVATE-TOKEN API_KEY\nb.example GITLAB_TOKEN\nc.example API_KEY:api-key,Cookie\n")
+	pol := headerPolicy(t, "gitlab.com GITLAB_TOKEN:PRIVATE-TOKEN API_KEY\nb.example GITLAB_TOKEN\nc.example API_KEY:api-key,X-Auth-Token\n")
 	phGL := secrets.Placeholder(kindSlot, "GITLAB_TOKEN")
 	phAK := secrets.Placeholder(kindSlot, "API_KEY")
 	run := func(sni, field, value string) (*httpwire.Request, error) {
@@ -130,7 +130,7 @@ func TestDeclaredCredentialHeaderPerBinding(t *testing.T) {
 		{"gitlab.com", "Authorization", "Bearer " + phGL, "Bearer glpat-live-gitlab"},
 		{"b.example", "Authorization", "Bearer " + phGL, "Bearer glpat-live-gitlab"},
 		{"c.example", "api-key", phAK, "live-api-key"},
-		{"c.example", "Cookie", "k=" + phAK, "k=live-api-key"},
+		{"c.example", "X-Auth-Token", "k=" + phAK, "k=live-api-key"},
 	} {
 		req, err := run(c.sni, c.field, c.value)
 		if err != nil {

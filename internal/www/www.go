@@ -122,7 +122,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := ClaimsDir(s.Dir)
-	Sweep(claims)
 	if code, ok := strings.CutPrefix(r.URL.Path, "/claim/"); ok {
 		s.serveClaim(w, r, claims, code)
 		return
@@ -226,19 +225,22 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, claims, code
 // maxConns bounds the number of connections that the server accepts at
 // once. Deadlines bound the work in one connection. They do not bound the
 // number of connections. The agent on the other side of this listener can
-// open connections faster than they expire. This server gives only a few
-// kilobytes to one box at its enrolment. So a low ceiling costs an honest
-// client nothing, and costs a flood everything.
-const maxConns = 64
+// open connections faster than they expire.
+//
+// The anti-spoof rule keeps a source inside AGENT_NET, but a root agent can
+// add an alias for each free address there. With a pool of 64, eight
+// aliases held all of it, and the accept loop then waited while every
+// other agent queued in the backlog. So the pool holds the share of each
+// address of a /24 at once, and no set of addresses inside such a segment
+// can fill it. That is 768 connections at most, inside LimitNOFILE and
+// MemoryMax of www.service.
+const maxConns = 256 * maxConnsPerSource
 
-// maxConnsPerSource is how many of the 64 one agent address can hold. The
-// global cap alone let one agent take all of them with 64 slowloris sockets,
-// opened again each ReadHeaderTimeout, about 13 a second. All other agents
-// lost access to setup and claim for as long as it continued. An honest
-// enrolment is setup.sh, ca.pem and a claim, in sequence, from one curl.
-// Eight is several times that, and still leaves the other 56 for the rest
-// of the segment.
-const maxConnsPerSource = 8
+// maxConnsPerSource is how many connections one agent address can hold. The
+// global cap alone let one agent take all of them with slowloris sockets,
+// opened again each ReadHeaderTimeout. An honest enrolment is setup.sh,
+// ca.pem and a claim, in sequence, from one curl: one connection at a time.
+const maxConnsPerSource = 3
 
 // This is the only listener that a hostile agent reaches without a
 // credential. It used to bound one thing: the time for the request headers.

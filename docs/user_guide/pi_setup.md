@@ -187,11 +187,11 @@ The two files are in `/opt/pi-fortress/vm/policy/`. `core.hosts.local` is your f
 
 ```
 echo 'gitlab.com GITLAB_TOKEN' | sudo tee -a /opt/pi-fortress/vm/policy/core.hosts.local
-sudo pf enroll mint --kind GITLAB_TOKEN --value '...' --header PRIVATE-TOKEN
+sudo pf enroll mint --kind GITLAB_TOKEN --stdin --header PRIVATE-TOKEN
 sudo pf apply
 ```
 
-Then mint adds `gitlab.com GITLAB_TOKEN:PRIVATE-TOKEN` to `core.hosts.local` for each host that has the kind. If no host has the kind yet, mint refuses. You can never name these headers: `User-Agent`, `Referer`, `Origin`, `Host`, `Via`, `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Content-*`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Upgrade`, `TE`, `Trailer` and `Proxy-*`. `pf apply` refuses a line that tries to name one.
+`--stdin` reads the token from standard input. Paste the token, push Enter, then push Ctrl-D. The token does not go into a shell argument or the shell history. `--value`, `--oat` and `--ort` still work, but mint then writes a warning. Then mint adds `gitlab.com GITLAB_TOKEN:PRIVATE-TOKEN` to `core.hosts.local` for each host that has the kind. If no host has the kind yet, mint refuses. You can never name these headers: `User-Agent`, `Referer`, `Origin`, `Cookie`, `Set-Cookie`, `Host`, `Via`, `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Content-*`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Upgrade`, `TE`, `Trailer` and `Proxy-*`. `pf apply` refuses a line that tries to name one.
 
 ## 5. Cable the agent
 
@@ -338,7 +338,7 @@ A plain segment is a separate network that the gateway serves, for example the d
 - It resolves names through the gateway, with the block lists of the agent network. The gateway refuses DNS to all other servers. It drops DNS over TLS, the known DNS-over-HTTPS servers, and QUIC.
 - A new connection on any port or protocol, or a ping, goes only to an address that the DNS of the segment gave recently.
 - No local addresses: the segment cannot reach the LAN of the uplink, the admin page of the router, or other private ranges, on all ports.
-- The ports are the strict set of the house (web, the encrypted mail and push ports, time, ping), unless `EGRESS` sets a different value. With `strict`, outgoing SSH goes only to the addresses in `ssh_allow.ips`.
+- The ports are the strict set of the house (web, the mail and push ports, time, ping), unless `EGRESS` sets a different value. With `strict`, outgoing SSH goes only to the addresses in `ssh_allow.ips`.
 - The shared IP blacklist applies. The segment is isolated from the agents, the house, and other segments.
 
 Without `INSPECT=on`, a plain segment does not get:
@@ -367,7 +367,7 @@ sudo nano /etc/pi-fortress/segments.d/<name>.env
 | `ADMIN` | no, default `no` | `yes` opens rate-limited SSH to the gateway from this segment. Apply refuses it on the cable of the house port (below) |
 | `SSH_TO` | no | An address or range in `AGENT_NET` that this segment can reach on TCP 22. Apply refuses it on the cable of the house port (below) |
 | `BLOCK_DIRECT_IP` | no, default `on` | `off` stops the drop of new connections to an address that the DNS of this segment did not give recently. Set it to `off` only for software that connects to addresses that it got from a different source. An example is the relays of a mesh VPN |
-| `EGRESS` | no, default `strict` | `strict` allows web, the encrypted mail and push ports, time, and ping. It drops other ports. `audit` logs what `strict` would drop, but lets it through. Use `audit` for one day first. `open` allows all ports |
+| `EGRESS` | no, default `strict` | `strict` allows web, the mail and push ports (also IMAP 143 and SMTP submission 587), time, and ping. It drops other ports. `audit` logs what `strict` would drop, but lets it through. Use `audit` for one day first. `open` allows all ports |
 | `ALLOW_PORTS` | no | More ports for `strict`, for example `"tcp:5000-5002 udp:3478"`. Use plain decimal. Apply refuses a leading zero or `+` |
 | `SSH_FROM` | no | One address that can open SSH into this segment, for example your admin laptop on the house network. The segment can never open a connection back to it. This SSH path is not reachable from the uplink or the agent network. Apply refuses the address of an agent. The SSH connection arrives only on the house interface or on the interface of a different plain segment. It never arrives on the WireGuard tunnel. When `WG_IF` is set, the house can still reach it |
 | `CONN_PER_IP`, `NEW_PER_IP`, `CONN_TOTAL`, `NEW_TOTAL` | no, default the `SEG_` values from step 4: `128`, `50/200`, `4096`, `300/600` | The connection limits of this network, one key at a time. `0` disables one limit |

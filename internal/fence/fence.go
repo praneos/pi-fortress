@@ -130,19 +130,19 @@ func (s *StreamStrips) Events() []StripEvent {
 
 // IsOAuthPath is the exact set of refresh endpoints that the fence
 // harvests from. A substring match would let any path that mentions oauth
-// rotate the slot. But the exact match is against a path that the origin
-// agrees with, not against the bytes that the agent wrote. This function
-// reads each of these as the endpoint that an origin routes it to: an
-// absolute-form target of any scheme, a percent-encoded letter, a dot
-// segment, and a run of slashes. The broker refuses all forms except
-// origin-form before the fence runs. This function strips the scheme
+// rotate the slot. The broker forwards the target as the agent wrote it.
+// Thus the path bytes must be exactly "/v1/oauth/token" or "/oauth/token".
+// A query after '?' is permitted. A fragment, a percent escape, a dot
+// segment, a run of slashes or a case variant in the path is not a refresh
+// path: an origin can route such a target to a different handler. The
+// broker refuses all forms except origin-form before the fence runs. This
+// function strips the scheme and authority of an absolute-form target
 // anyway, so the answer does not depend on that broker check.
 //
-// A target that does not reduce to one path is not a refresh path.
 // The fence substitutes the refresh token only on a refresh path
-// (scanner.at). Thus on such a target, the fence refuses a CLAUDE_ORT
-// placeholder and never arms the harvest: nothing ever asks for what the
-// origin could mint.
+// (scanner.at), and the harvest uses this same test. Thus on any other
+// target, the fence refuses a CLAUDE_ORT placeholder and never arms the
+// harvest: nothing ever asks for what the origin could mint.
 func IsOAuthPath(target string) bool {
 	p := target
 	if scheme, rest, ok := strings.Cut(p, "://"); ok && isScheme(scheme) {
@@ -153,22 +153,11 @@ func IsOAuthPath(target string) bool {
 			p = "/"
 		}
 	}
-	if i := strings.IndexAny(p, "?#"); i >= 0 {
-		p = p[:i]
-	}
-	dp, stable := unescapeAll(p)
-	if !stable {
+	if strings.Contains(p, "#") {
 		return false
 	}
-	dp = strings.ToLower(dp)
-	for strings.Contains(dp, "//") {
-		dp = strings.ReplaceAll(dp, "//", "/")
-	}
-	switch removeDotSegments(dp) {
-	case "/v1/oauth/token", "/oauth/token":
-		return true
-	}
-	return false
+	p, _, _ = strings.Cut(p, "?")
+	return p == "/v1/oauth/token" || p == "/oauth/token"
 }
 
 // isScheme is the RFC 3986 scheme grammar: a letter, then letters,
@@ -204,82 +193,95 @@ func RefreshTokenField(body []byte) (string, bool) {
 	return string(body[sp[0]:sp[1]]), true
 }
 
+// StrictFields reads the named members of body with the RefreshTokenField
+// rule, for each key: one top-level JSON object, each key spelled exactly
+// once and in no other case, each value a string with no escape in it. A key
+// that is absent has no entry. A key with the value null also has no entry,
+// but it still counts for the once-only rule. For all other input, ok ==
+// false. The broker reads a refresh response with it. A loose read there
+// stores one value and lets a different one through to the agent.
+func StrictFields(body []byte, keys ...string) (map[string]string, bool) {
+	spans, ok := fieldSpans(body, keys, true)
+	if !ok {
+		return nil, false
+	}
+	out := make(map[string]string, len(spans))
+	for k, sp := range spans {
+		out[k] = string(body[sp[0]:sp[1]])
+	}
+	return out, true
+}
+
 // refreshTokenSpan is the location of the RefreshTokenField value in body,
 // without the quotes.
 func refreshTokenSpan(body []byte) ([2]int, bool) {
+	spans, ok := fieldSpans(body, []string{"refresh_token"}, false)
+	sp, found := spans["refresh_token"]
+	return sp, ok && found
+}
+
+// fieldSpans is the location of each StrictFields value in body, without
+// the quotes. When nullAbsent is true, a null value gives no span. The
+// fence never reads a request body this way. There, a null refresh_token
+// fails the read, and the body binds nothing.
+func fieldSpans(body []byte, keys []string, nullAbsent bool) (map[string][2]int, bool) {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
-		return [2]int{}, false
+		return nil, false
 	}
-	var span [2]int
-	found := false
+	spans := map[string][2]int{}
+	seen := map[string]bool{}
 	for dec.More() {
 		t, err := dec.Token()
 		if err != nil {
-			return [2]int{}, false
+			return nil, false
 		}
 		key, _ := t.(string)
-		if !strings.EqualFold(key, "refresh_token") {
+		want := ""
+		for _, k := range keys {
+			if strings.EqualFold(key, k) {
+				want = k
+			}
+		}
+		if want == "" {
 			var skip json.RawMessage
 			if dec.Decode(&skip) != nil {
-				return [2]int{}, false
+				return nil, false
 			}
 			continue
 		}
-		if key != "refresh_token" || found {
-			return [2]int{}, false
+		if key != want || seen[want] {
+			return nil, false
 		}
-		found = true
+		seen[want] = true
 		from := int(dec.InputOffset())
 		if t, err = dec.Token(); err != nil {
-			return [2]int{}, false
+			return nil, false
+		}
+		if t == nil && nullAbsent {
+			continue
 		}
 		if _, ok := t.(string); !ok {
-			return [2]int{}, false
+			return nil, false
 		}
 		end := int(dec.InputOffset())
 		q := bytes.IndexByte(body[from:end], '"')
 		if q < 0 {
-			return [2]int{}, false
+			return nil, false
 		}
-		span = [2]int{from + q + 1, end - 1}
+		span := [2]int{from + q + 1, end - 1}
 		if span[0] > span[1] || bytes.IndexByte(body[span[0]:span[1]], '\\') >= 0 {
-			return [2]int{}, false
+			return nil, false
 		}
+		spans[want] = span
 	}
 	if t, err := dec.Token(); err != nil || t != json.Delim('}') {
-		return [2]int{}, false
+		return nil, false
 	}
 	if _, err := dec.Token(); err != io.EOF {
-		return [2]int{}, false
+		return nil, false
 	}
-	return span, found
-}
-
-// removeDotSegments resolves "." and ".." in the same way that RFC 3986
-// §5.2.4 tells an origin to resolve them before it routes. Thus this code
-// reads "/v1/x/../oauth/token" as the endpoint that the origin routes it
-// to. A trailing dot segment leaves the trailing slash, as the RFC says.
-func removeDotSegments(p string) string {
-	if !strings.Contains(p, ".") {
-		return p
-	}
-	segs := strings.Split(p, "/")
-	out := make([]string, 0, len(segs))
-	for i, s := range segs {
-		switch s {
-		case ".", "..":
-			if s == ".." && len(out) > 1 {
-				out = out[:len(out)-1]
-			}
-			if i == len(segs)-1 {
-				out = append(out, "")
-			}
-		default:
-			out = append(out, s)
-		}
-	}
-	return strings.Join(out, "/")
+	return spans, true
 }
 
 // framingHeader names the fields that the parser owns. Their values are
@@ -470,8 +472,11 @@ func (s *scanner) noInject() *scanner {
 }
 
 // injectable returns the live value for the placeholder at span, or nil
-// when it is unknown, empty, or not a kind this SNI may carry.
+// when it is not exact, unknown, empty, or not a kind this SNI may carry.
 func (s *scanner) injectable(b []byte, span [2]int) []byte {
+	if !secrets.PlaceholderExact(b, span) {
+		return nil
+	}
 	sl, ok := s.idx.ByDummy[secrets.PlaceholderKey(b, span)]
 	if !ok || sl.Live == "" || !s.allowed(sl.Kind) || !s.placeAllows(b, span, sl.Kind) {
 		return nil
@@ -664,6 +669,7 @@ func plan(s *scanner, req *httpwire.Request) PlanResult {
 	if IsOAuthPath(req.Target) || (!req.Chunked && req.ContentLength >= 0 && req.ContentLength <= maxBodyBuf) {
 		out.BodyMode = BodyBuffer
 	}
+	s.noteMethod(req.Method)
 	s.noteNames(req.Fields)
 	for i, f := range req.Fields {
 		if framingHeader(f.Name) {
@@ -690,6 +696,7 @@ func plan(s *scanner, req *httpwire.Request) PlanResult {
 	}
 	u := s.at("url")
 	u.noteAll([]byte(req.Target), "url")
+	u.noteTarget(req.Target)
 	out.Target = u.classify([]byte(req.Target))
 	return out
 }
@@ -782,27 +789,62 @@ const (
 // zlib-wrapped form that all libraries that send deflate write. It is not
 // raw RFC 1951, which the response path also never had to read. ok is
 // false for all other codings, for bytes that do not decode, and for a
-// decoded size past maxDecodedBody.
-func decodeLayer(coding string, b []byte) (decoded []byte, ok bool) {
-	var r io.ReadCloser
-	var err error
+// decoded size past maxDecodedBody. For gzip, fields are the optional
+// fields of the member headers (gunzipMembers).
+func decodeLayer(coding string, b []byte) (decoded []byte, fields [][]byte, ok bool) {
 	switch coding {
 	case "gzip", "x-gzip":
-		r, err = gzip.NewReader(bytes.NewReader(b))
+		return gunzipMembers(b)
 	case "deflate":
-		r, err = zlib.NewReader(bytes.NewReader(b))
-	default:
-		return nil, false
+		return inflate(b)
 	}
+	return nil, nil, false
+}
+
+// inflate undoes the deflate coding: the zlib-wrapped form.
+func inflate(b []byte) (decoded []byte, fields [][]byte, ok bool) {
+	r, err := zlib.NewReader(bytes.NewReader(b))
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
 	defer r.Close()
 	out, err := readBody(r, maxDecodedBody+1, -1, true)
 	if err != nil || int64(len(out)) > maxDecodedBody {
-		return nil, false
+		return nil, nil, false
 	}
-	return out, true
+	return out, nil, true
+}
+
+// gunzipMembers inflates a gzip body one member at a time. It also returns
+// the FEXTRA, FNAME and FCOMMENT fields of each member header. The fence
+// forwards the compressed bytes, so these fields reach the origin with the
+// body. The stdlib reader keeps only the header of the first member when
+// it reads all members in one pass. Thus this reads each member alone.
+func gunzipMembers(b []byte) (decoded []byte, fields [][]byte, ok bool) {
+	br := bytes.NewReader(b)
+	zr, err := gzip.NewReader(br)
+	if err != nil {
+		return nil, nil, false
+	}
+	defer zr.Close()
+	for {
+		zr.Multistream(false)
+		for _, f := range [][]byte{zr.Extra, []byte(zr.Name), []byte(zr.Comment)} {
+			if len(f) > 0 {
+				fields = append(fields, f)
+			}
+		}
+		out, err := readBody(zr, maxDecodedBody+1-int64(len(decoded)), -1, true)
+		decoded = append(decoded, out...)
+		if err != nil || int64(len(decoded)) > maxDecodedBody {
+			return nil, nil, false
+		}
+		if err = zr.Reset(br); err == io.EOF {
+			return decoded, fields, true
+		} else if err != nil {
+			return nil, nil, false
+		}
+	}
 }
 
 // decodeRequestBody undoes each coding in encs, the last-listed first,
@@ -810,18 +852,21 @@ func decodeLayer(coding string, b []byte) (decoded []byte, ok bool) {
 // sees what the origin will decode the body to. ok is false for more
 // layers than maxEncodingLayers, for an unsupported coding anywhere in the
 // stack, and for bytes that do not decode. This includes a decompression
-// bomb, because decodeLayer refuses it the same way.
-func decodeRequestBody(encs []string, body []byte) (decoded []byte, ok bool) {
+// bomb, because decodeLayer refuses it the same way. fields are the gzip
+// header fields of all layers.
+func decodeRequestBody(encs []string, body []byte) (decoded []byte, fields [][]byte, ok bool) {
 	if len(encs) > maxEncodingLayers {
-		return nil, false
+		return nil, nil, false
 	}
 	decoded = body
 	for i := len(encs) - 1; i >= 0; i-- {
-		if decoded, ok = decodeLayer(encs[i], decoded); !ok {
-			return nil, false
+		var fs [][]byte
+		if decoded, fs, ok = decodeLayer(encs[i], decoded); !ok {
+			return nil, nil, false
 		}
+		fields = append(fields, fs...)
 	}
-	return decoded, true
+	return decoded, fields, true
 }
 
 // noteEncodedBody scans a request body after the decode, for what the
@@ -975,8 +1020,13 @@ func (s *scanner) intakeBody(reserve func(n int64) bool, req *httpwire.Request, 
 	if len(encs) > 0 {
 		// The fence never rewrites it in either case (5.3b): a clean
 		// decode only proves that the compressed bytes can go out as they are.
-		if decoded, ok := decodeRequestBody(encs, body); ok {
+		// Each gzip header field gets the scan of the body, one field at a
+		// time. A hit there refuses the request in the same way.
+		if decoded, fields, ok := decodeRequestBody(encs, body); ok {
 			s.noteEncodedBody(decoded)
+			for _, f := range fields {
+				s.noteEncodedBody(f)
+			}
 		} else {
 			s.refuse(CauseEncodedBody, "", "", "body")
 		}
@@ -1029,6 +1079,8 @@ func (s *scanner) wrapStream(req *httpwire.Request) *StreamStrips {
 // fence owns. A placeholder rewritten into a live token there would give
 // the agent a credential that it did not have. The fence could not scrub
 // that credential out of the reply. Inside frames, the fence only strips.
+// The broker refuses a placeholder in a frame before this scan
+// (CausePlaceholderInWS).
 type Scanner struct{ s *scanner }
 
 func NewScanner(ctx Ctx, req *httpwire.Request, pol *corepolicy.Policy, slots map[string]secrets.Slot) *Scanner {

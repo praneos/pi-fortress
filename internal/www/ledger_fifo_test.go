@@ -8,12 +8,12 @@ import (
 	"time"
 )
 
-// The claims directory is group-writable, so a compromised www can replace
+// RedeemedDir is group-writable, so a compromised www can replace
 // ledger.jsonl with a FIFO. An open of a FIFO blocks until the other end
 // opens. This hung the TUI of root, pf claim and pf apply on a file that no
 // process would ever open. Now each opener refuses it immediately.
 func TestLedgerRefusesAFIFOWithoutBlocking(t *testing.T) {
-	dir := t.TempDir()
+	dir := newClaimsDir(t)
 	if err := syscall.Mkfifo(LedgerPath(dir), 0660); err != nil {
 		t.Skip("no mkfifo here:", err)
 	}
@@ -53,7 +53,7 @@ func TestLedgerRefusesAFIFOWithoutBlocking(t *testing.T) {
 // With O_NONBLOCK on the open, an ordinary ledger must still work: create,
 // append, and read back whole.
 func TestLedgerStillAppendsAndReadsARegularFile(t *testing.T) {
-	dir := t.TempDir()
+	dir := newClaimsDir(t)
 	if err := InitLedger(dir); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestLedgerStillAppendsAndReadsARegularFile(t *testing.T) {
 	if len(ev) != 3 || ev[2].Code != "CCCCCC" {
 		t.Fatalf("%+v", ev)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "ledger.jsonl")); err != nil {
+	if _, err := os.Stat(filepath.Join(RedeemedDir(dir), "ledger.jsonl")); err != nil {
 		t.Fatal(err)
 	}
 }

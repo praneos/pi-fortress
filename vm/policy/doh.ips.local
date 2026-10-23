@@ -1,0 +1,3 @@
+# Your own DoH and DoT resolver addresses. Upgrades replace doh.ips and
+# keep this file. pf apply drops these addresses from the agent NIC, the
+# same as the addresses in doh.ips. One IPv4 address or network a line.

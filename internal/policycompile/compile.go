@@ -4,6 +4,7 @@
 package policycompile
 
 import (
+	"errors"
 	"fmt"
 	"net/netip"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"pi-fortress/internal/base"
 
 	"pi-fortress/internal/corepolicy"
+	"pi-fortress/internal/fence"
 )
 
 var (
@@ -261,6 +263,33 @@ func IsNeverDomain(name string, never map[string]struct{}) bool {
 	return corepolicy.HostIn(name, never)
 }
 
+// BlocksCoreHost says if a block entry would block a host that core.hosts
+// binds credentials to: the entry is that host or a parent of it, or it is
+// under a "*." entry. never_block is a coarse shield on purpose
+// (docs/fence.md): a shield below a listed parent leaves the parent entry
+// in place. A core host is not a curation choice. A feed line for
+// anthropic.com blocked api.anthropic.com, and the agent lost the service
+// that holds its credentials. So for these hosts the parent entry goes.
+// An entry under an exact host stays: it does not block the host itself.
+func BlocksCoreHost(entry string, core *corepolicy.Policy) bool {
+	if core == nil {
+		return false
+	}
+	if corepolicy.HostIn(entry, core.Suffix) {
+		return true
+	}
+	if _, ok := core.Hosts[entry]; ok {
+		return true
+	}
+	under := "." + entry
+	for h := range core.Hosts {
+		if strings.HasSuffix(h, under) {
+			return true
+		}
+	}
+	return false
+}
+
 // set is the membership set of items.
 func set(items []string) map[string]struct{} {
 	m := make(map[string]struct{}, len(items))
@@ -401,6 +430,53 @@ func CoalesceIPv4(items []string) []string {
 func LoadTokens(path, kind string) ([]string, error) {
 	out, _, err := loadTokens(path, kind)
 	return out, err
+}
+
+// loadWithLocal is LoadTokens of path and then of path.local: the shipped
+// list plus the lines of the operator. An upgrade or a provision replaces
+// the shipped list and keeps the local one. A token in both files counts
+// one time.
+func loadWithLocal(path, kind string) ([]string, error) {
+	shipped, err := LoadTokens(path, kind)
+	if err != nil {
+		return nil, err
+	}
+	local, err := LoadTokens(path+".local", kind)
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]bool, len(shipped)+len(local))
+	out := make([]string, 0, len(shipped)+len(local))
+	for _, t := range append(shipped, local...) {
+		if !seen[t] {
+			seen[t] = true
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+// checkKeyRulesLocal loads key_prefixes.rules.local as the broker loads
+// its rules. apply appends this file to the shipped key_prefixes.rules,
+// and the broker, the engine, pf dns and pf observe read the result. Thus
+// a rule that does not compile, or that has no literal prefix, stops the
+// apply here, before anything installs. It does not stop the broker at
+// its start. A missing file, or a file with only comments, adds nothing.
+func checkKeyRulesLocal(path string) error {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	tr, err := fence.LoadTokenRules(path)
+	if errors.Is(err, fence.ErrNoRules) {
+		return nil
+	}
+	if err == nil {
+		err = tr.Streamable()
+	}
+	if err != nil {
+		return fmt.Errorf("%s: %w", filepath.Base(path), err)
+	}
+	return nil
 }
 
 // badLine is a line loadTokens skipped: its 1-based number and token.
@@ -704,11 +780,22 @@ func Compile(policyDir string, out Out) (Summary, error) {
 		}
 	}
 	neverDomains := set(neverDomainsList)
+	// core.hosts and core.hosts.local, which apply installs as one file, also
+	// compile to nothing. Their load here makes a header that can never carry
+	// a credential stop the apply, with the file and line, before anything
+	// installs. It does not stop the broker at its start. Its hosts also
+	// shield the domain list (BlocksCoreHost).
+	core, err := corepolicy.LoadFiles(filepath.Join(policyDir, "core.hosts"), filepath.Join(policyDir, "core.hosts.local"))
+	if err != nil {
+		return Summary{}, err
+	}
 
 	ipKept := keepNew(nil, ips, map[string]struct{}{}, func(ip string) bool { return IsNeverIP(ip, neverNets) })
 	ipFinal := CoalesceIPv4(ipKept)
 
-	domainFinal := keepNew(nil, domains, map[string]struct{}{}, func(d string) bool { return IsNeverDomain(d, neverDomains) })
+	domainFinal := keepNew(nil, domains, map[string]struct{}{}, func(d string) bool {
+		return IsNeverDomain(d, neverDomains) || BlocksCoreHost(d, core)
+	})
 
 	if err := writeFile(out.NFT, nftElements(ipFinal)); err != nil {
 		return Summary{}, err
@@ -726,12 +813,14 @@ func Compile(policyDir string, out Out) (Summary, error) {
 		return Summary{}, err
 	}
 
-	dohIPs, err := LoadTokens(filepath.Join(policyDir, "doh.ips"), "ips")
+	// doh.ips and doh.domains ship, and each upgrade replaces them. The
+	// operator adds resolvers in doh.ips.local and doh.domains.local.
+	dohIPs, err := loadWithLocal(filepath.Join(policyDir, "doh.ips"), "ips")
 	if err != nil {
 		return Summary{}, err
 	}
 	dohIPFinal := CoalesceIPv4(dohIPs)
-	dohDomains, err := LoadTokens(filepath.Join(policyDir, "doh.domains"), "domains")
+	dohDomains, err := loadWithLocal(filepath.Join(policyDir, "doh.domains"), "domains")
 	if err != nil {
 		return Summary{}, err
 	}
@@ -756,10 +845,7 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
-	// The same applies to core.hosts and core.hosts.local, which apply installs
-	// as one file. A header that can never carry a credential stops the apply
-	// here, with the file and line. It does not stop the broker at its start.
-	if _, err := corepolicy.LoadFiles(filepath.Join(policyDir, "core.hosts"), filepath.Join(policyDir, "core.hosts.local")); err != nil {
+	if err := checkKeyRulesLocal(filepath.Join(policyDir, "key_prefixes.rules.local")); err != nil {
 		return Summary{}, err
 	}
 

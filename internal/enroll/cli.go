@@ -194,6 +194,8 @@ func cmdMint(args []string, st *secrets.Store, stdin io.Reader, stdout, stderr i
 	if err := fs.Parse(args); err != nil {
 		return 2, nil
 	}
+	// Read before --stdin writes into the same variables.
+	argvTokens := argvTokenFlags(fs)
 	if strings.TrimSpace(*kind) == "" {
 		fmt.Fprintln(stderr, "usage: pf enroll mint --kind KIND [--oat ...] [--ort ...] [--value ...] [--stdin] [--out PATH] [--expires 90d|RFC3339|none] [--header H[,H...]]")
 		return 2, nil
@@ -240,6 +242,9 @@ func cmdMint(args []string, st *secrets.Store, stdin io.Reader, stdout, stderr i
 	if len(bad) > 0 {
 		fmt.Fprintln(stderr, strings.Join(bad, "\n"))
 		return 2, nil
+	}
+	if len(argvTokens) > 0 {
+		fmt.Fprintf(stderr, "warning: %s: a token in the command line shows in ps and in the shell history; use --stdin\n", strings.Join(argvTokens, ", "))
 	}
 	if hp != nil && hp.changed {
 		if err := hp.write(); err != nil {
@@ -346,6 +351,24 @@ func reportMint(slot string, kinds []string, expiresAt time.Time, out string, hp
 		fmt.Fprintln(stdout, "sudo pf apply makes it live")
 	}
 	return 0
+}
+
+// argvTokenFlags names each of --oat, --ort and --value that carries a
+// token on the command line. A command-line argument shows in ps, in the
+// shell history and in the journal, so cmdMint writes one warning for
+// them. The mint continues, so scripts do not break. The warning names
+// the flags only, never their values.
+func argvTokenFlags(fs *flag.FlagSet) []string {
+	var names []string
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "oat", "ort", "value":
+			if strings.TrimSpace(f.Value.String()) != "" {
+				names = append(names, "--"+f.Name)
+			}
+		}
+	})
+	return names
 }
 
 func headerFlagSet(fs *flag.FlagSet) bool {

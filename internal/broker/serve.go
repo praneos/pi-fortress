@@ -358,10 +358,10 @@ func (b *Broker) admit(c *call) (done bool, err error) {
 // origin-form and OPTIONS * ever leave. Any other form would let the agent
 // name a vhost that the fence never judged, with the credential injected
 // for the vhost that the fence judged. CONNECT is a tunnel that the fence
-// cannot read into. An HTTP/1.1 request without a Host field makes the
-// routing of the origin a guess. An empty Host stays: for it, the
-// decisions use the SNI instead (TestParanoidEmptyHostFallsBackToSNI), as
-// the decisions of an origin do.
+// cannot read into. An HTTP/1.1 request without a Host field, or with an
+// empty one, makes the routing of the origin a guess. Each origin can send
+// it to a different vhost than the one the SNI names. HTTP/1.0 has no
+// Host requirement, so there the decisions use the SNI.
 func targetRefusal(req *httpwire.Request) string {
 	switch {
 	case req.Method == "CONNECT":
@@ -373,7 +373,7 @@ func targetRefusal(req *httpwire.Request) string {
 	case !strings.HasPrefix(req.Target, "/"):
 		return "request_target"
 	}
-	if req.Proto != "HTTP/1.0" && len(req.Values("Host")) == 0 {
+	if req.Proto != "HTTP/1.0" && strings.Trim(req.Get("Host"), " \t") == "" {
 		return "no_host"
 	}
 	return ""
@@ -721,20 +721,39 @@ func (b *Broker) writeBuffered(c *call, resp *httpwire.Response, reencode bool) 
 	if c.harvestSlot != "" {
 		minted, err := b.harvest(c.harvestSlot, resp)
 		if err != nil {
+			if errors.Is(err, ErrHarvest) {
+				b.logHarvestRefused(c)
+			}
 			c.up.discard()
 			_ = writeErr(c.client, 502, "502 Bad Gateway", "harvest\n")
 			return err
 		}
 		c.slots = withMinted(c.slots, minted)
 	}
-	for _, key := range rewriteResponse(resp, c.slots) {
+	hit, err := rewriteResponse(resp, c.slots)
+	for _, key := range hit {
 		_ = b.logStrip(&c.strips, clientIP(c.p), c.host, "response", "secret:"+key)
+	}
+	if err != nil {
+		c.up.discard()
+		_ = writeErr(c.client, 502, "502 Bad Gateway", "origin\n")
+		return err
+	}
+	// The scrub replaces only the values that the broker holds. A token
+	// response that still has a token shape after it holds a value that the
+	// broker did not store: a shape that the harvest did not know, or a
+	// status that it does not harvest. The agent must not get it.
+	if c.harvestSlot != "" && b.residue(resp) {
+		b.logHarvestRefused(c)
+		c.up.discard()
+		_ = writeErr(c.client, 502, "502 Bad Gateway", "harvest\n")
+		return ErrResidue
 	}
 	if reencode {
 		resp.Body = gzipBytes(resp.Body)
 		resp.SetInPlace("Content-Encoding", "gzip")
 	}
-	_, err := resp.WriteTo(c.client)
+	_, err = resp.WriteTo(c.client)
 	// The broker read the body to its framed end. So the upstream may be
 	// reused, unless one of the two sides asked to close.
 	if err != nil || !reusableResp(c.req, resp) {
@@ -747,8 +766,14 @@ func (b *Broker) writeBuffered(c *call, resp *httpwire.Response, reencode bool) 
 // chunked for HTTP/1.1. For HTTP/1.0, which cannot read chunked, it writes
 // the body raw with a close.
 func (b *Broker) writeStreamed(c *call, resp *httpwire.Response, reencode, originCloseDelimited bool) error {
-	for _, key := range rewriteHeaders(resp, c.slots) {
+	hit, err := rewriteHeaders(resp, c.slots)
+	for _, key := range hit {
 		_ = b.logStrip(&c.strips, clientIP(c.p), c.host, "response", "secret:"+key)
+	}
+	if err != nil {
+		c.up.discard()
+		_ = writeErr(c.client, 502, "502 Bad Gateway", "origin\n")
+		return err
 	}
 	pairs, keys := scrubPairs(c.slots)
 	sc := httpwire.NewScrubber(resp.Stream, pairs)

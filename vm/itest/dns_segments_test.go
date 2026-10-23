@@ -556,7 +556,7 @@ type clientCounts struct {
 // (internal/observe/observe.go Show). A box that runs the itest sudo
 // allowlist has no rule for this path (vm/pi/sudoers.d/pf-itest). Thus
 // the read is refused there, and the caller skips, not fails. Add
-// `/usr/bin/cat /var/lib/pi-fortress/observe.json` to run it there.
+// `/usr/bin/cat /var/lib/pi-fortress/observe/observe.json` to run it there.
 // expiresIn is what nft says is left on addr in a `nft list set` listing,
 // or zero when the set does not have it. The listing is read with the
 // same parser that the carry of the apply uses. Thus a spelling that this
@@ -579,7 +579,7 @@ func observeCounts(t *testing.T, ip string) clientCounts {
 	var st struct {
 		Clients map[string]clientCounts `json:"clients"`
 	}
-	raw := pi(t, "sudo cat /var/lib/pi-fortress/observe.json")
+	raw := pi(t, "sudo cat /var/lib/pi-fortress/observe/observe.json")
 	if err := json.Unmarshal([]byte(raw), &st); err != nil {
 		t.Fatalf("observe.json is not the state pf tui reads: %v\n%s", err, raw)
 	}

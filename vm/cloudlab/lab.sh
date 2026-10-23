@@ -150,6 +150,15 @@ cmd_up() {
   done
   if [[ " ${want[*]} " == *" gw "* ]]; then
     vagrant up --provider=libvirt gw
+    # vagrant up skips the rsync and the provisioners of a gateway that
+    # already runs. A first up that failed before its rsync leaves a
+    # gateway with no /vagrant, and each later up keeps it so. Thus copy
+    # the tree and provision again when the checkout is not there.
+    if ! vagrant ssh gw -c 'test -d /vagrant/vm/pi && test -d /vagrant/vm/policy' >/dev/null 2>&1; then
+      echo "lab.sh: gw has no checkout at /vagrant; rsync and provision again"
+      vagrant rsync gw
+      vagrant provision gw
+    fi
   fi
   # Clients start in parallel. Each client waits for the gateway itself.
   ((${#rest[@]} == 0)) || vagrant up --provider=libvirt "${rest[@]}"

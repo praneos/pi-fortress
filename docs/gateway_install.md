@@ -84,7 +84,7 @@ All arguments go directly to `pf install`. `install.sh` does these steps:
 3. Deletes `/etc/pi-fortress/lab` if it is present, because a release install is never a lab box. Writes `/etc/pi-fortress/gateway.role`. `apply.sh` refuses a host that is not a Raspberry Pi, a lab VM or the appliance, unless that file is there. Thus, this file lets a Debian or Ubuntu amd64 gateway apply, the first time and each later time.
 4. Extracts the verified copy into a scratch tree under `/var/lib/pi-fortress/install-work/`. It uses `ship.Extract`: the same manifest and per-file check that `pf ship install` uses. The only purpose is to give `vm/pi/provision.sh` a real tree. provision.sh runs against this tree with `PF_ALLOW_ANY_HOST=1` and `PF_SHIP_APPLIES=1`. provision.sh handles these items:
    - the apt packages (`nftables dnsmasq wireguard wireguard-tools curl tcpdump iproute2 ca-certificates dnsutils conntrack usb-modeswitch logrotate rsync python3 chrony network-manager`)
-   - the policy defaults
+   - the policy defaults. A list that the operator owns (`PI_OWNED` in the `Makefile`, for example `allow.domains`, `dns_types.allow`, `git_push.allow`) is written to `/etc/pi-fortress` only when it is absent. Thus a second run of provision.sh keeps the edits of the operator. The shipped lists (`core.hosts`, `doh.ips`, `doh.domains`, `key_prefixes.rules`) are replaced, as a ship replaces them. The operator lines of each are in its `.local` file (`core.hosts.local`, `doh.ips.local`, `doh.domains.local`, `key_prefixes.rules.local`), which provision.sh does not write.
    - the `pfship` user plus the ship units. The `pfship` user gets a key only when `/etc/pi-fortress/pfship.pub` is present (`signed_ship.md` Setup).
 
    provision.sh already does all of this idempotently. Thus, `pf install` uses it again, and does not add a second apt-get line. `PF_SHIP_APPLIES=1` makes provision.sh skip its own `pf apply`. Reason: the scratch tree is not the tree that will be live. The first apply is the one that `pf ship install` runs in step 5. apply.sh makes the `pf-broker`/`pf-engine`/... users itself, so `pf install` does not. `pf install` discards the scratch tree after provision.sh runs.
@@ -109,9 +109,9 @@ A `pf install` box has no `/vagrant`. `apply.sh` compiles from the tree that it 
 
 `PI_FORTRESS_POLICY` overrides this selection.
 
-apply writes copies under `/etc/pi-fortress` (`core.hosts`, `allow.domains`, `git_push.allow`, ...). These copies are its output. They are not a place to edit. The installed `core.hosts` is the shipped one, with `core.hosts.local` appended under a marker line. The operator edits the local file.
+apply writes copies under `/etc/pi-fortress` (`core.hosts`, `allow.domains`, `git_push.allow`, ...). These copies are its output. They are not a place to edit. The installed `core.hosts` is the shipped one, with `core.hosts.local` appended under a marker line. The installed `key_prefixes.rules` is made in the same way from `key_prefixes.rules.local`. `pf compile` reads `doh.ips.local` and `doh.domains.local` next to the shipped DoH lists. The operator edits the local files.
 
-All bundles ship the operator-editable lists as seeds. These are the `PI_OWNED` lists of the Makefile: `blacklist.*`, `never_block.*`, `direct_ip.allow`, `house.domains`, the `house_*` lists, `ssh_allow.ips`, `allow.domains`, `git_push.allow`, `dns_types.allow`, `core.hosts.local`, `sources.json`. If the box has its own copy of a list, `pf ship install` (and thus `pf upgrade`) carries that copy over the shipped one. It merges new feeds into `sources.json` (`fetch.MergeSeed`). The cost: a seeded list never takes an upstream change on a box that already has that list. `make release` refuses to build without the seed list.
+All bundles ship the operator-editable lists as seeds. These are the `PI_OWNED` lists of the Makefile: `blacklist.*`, `never_block.*`, `direct_ip.allow`, `house.domains`, the `house_*` lists, `ssh_allow.ips`, `allow.domains`, `git_push.allow`, `dns_types.allow`, `core.hosts.local`, `key_prefixes.rules.local`, `doh.ips.local`, `doh.domains.local`, `sources.json`. If the box has its own copy of a list, `pf ship install` (and thus `pf upgrade`) carries that copy over the shipped one. It merges new feeds into `sources.json` (`fetch.MergeSeed`). The cost: a seeded list never takes an upstream change on a box that already has that list. `make release` refuses to build without the seed list.
 
 The lists stay across a rollback in the same way as across an upgrade. These operations copy the lists of the live tree over the lists of `.prev` before they swap `.prev` back:
 
@@ -157,6 +157,48 @@ Then it runs exactly `pf ship install -incoming <unique dir> -signers release-si
 No code of `pf upgrade` duplicates these items (`internal/install/upgrade.go`, `internal/ship/install.go`).
 
 There is no network wizard, and `provision.sh` does not run again. Reason: an upgrade changes code and policy defaults, not interfaces or apt packages. `-confirm` still execs `pf ship confirm`.
+
+The OS hardening files are not only in `provision.sh`. They are in `vm/pi/lib/harden.sh`, and each full `pf apply` writes them again. Thus an upgraded box gets the files of the new release, the same as a fresh install:
+
+- the sysctl file `/etc/sysctl.d/99-pi-fortress.conf`. apply sets its values at once, except `ip_forward`: apply enables forwarding only after it loads the ruleset.
+- the unattended-upgrades config `/etc/apt/apt.conf.d/20auto-upgrades` and `52-pi-fortress-upgrades`.
+- the key-only sshd drop-in `/etc/ssh/sshd_config.d/99-pi-fortress.conf` (`PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PermitRootLogin no`). apply writes it only when a user under `/home` has a usable login key: `~/.ssh/authorized_keys` holds a key that `ssh-keygen -l` reads and that has no forced command, and the home, `.ssh` and the file are not writable by group or other (sshd ignores the key if they are). apply checks the new file with `sshd -t` before it reloads sshd. If `sshd -t` fails, apply puts back the old file (or none) and warns. With no usable key, apply changes nothing and warns that password login is on. Thus a box that had no key at install time turns password login off at the first apply after the operator adds a key. If `sshd -T` still shows `passwordauthentication yes` (a file that sorts before ours sets it), apply warns.
+
+apply writes a file only when its content changes. apply installs no package. If `unattended-upgrades` is not installed, apply prints a warning. Install the package with `apt-get install unattended-upgrades`.
+
+`pf doctor` has an `ssh` rung. It reads `/etc/ssh/sshd_config` and the files that it includes, and warns while sshd takes passwords. The rung does not need root. It is a best-effort parse: if it cannot read a file, or a `Match` block turns passwords on for some logins, it says that the result is inconclusive. `sudo sshd -T` gives the exact value.
+
+### OS packages and reboots
+
+`pf upgrade` does not update the OS packages. On a fresh install, `provision.sh` enables `unattended-upgrades`. It installs updates each day and does not reboot (`Automatic-Reboot "false"`). Thus a kernel or core library fix is not active until you reboot the gateway.
+
+`pf doctor` shows this on rung `reboot`:
+
+- `warn`: `/var/run/reboot-required` is there. The rung shows its age and the packages from `/var/run/reboot-required.pkgs`. Each package that asks for a reboot writes the flag again, so the age is the time since the last request.
+- `warn`: the running kernel is no longer installed, or a newer kernel of the same flavor is installed. The rung compares `uname -r` with the directories in `/lib/modules`. A kernel that is installed again with the same release string does not show here; the flag shows it.
+- `FAIL`: the flag is older than 7 days.
+
+Plan the reboot: `sudo reboot`. The agents have no gateway while it starts.
+
+A Go daemon reads the system CA roots one time, when it starts. Thus `apply.sh` installs the apt hook `/etc/apt/apt.conf.d/60pi-fortress-ca`. After each dpkg run, it runs `/usr/local/lib/pi-fortress/ca-restart.sh`. When `/etc/ssl/certs/ca-certificates.crt` is different from the last run, the script restarts the running units of pf-broker, pf dns (`pi-fortress-dns-agent-go`, `pi-fortress-dns-stub@*`) and pf alert. The last hash is in `/var/lib/pi-fortress/ca-bundle.sha256` (mode 0600). The hook writes nothing to the terminal and never fails the apt run. The journal tag of a restart is `pi-fortress-ca`.
+
+A broker start locks a sealed credential store again. Thus with a sealed store (`#pf-sealed` header in `secrets.env`, or a store that the script cannot read), the hook does not restart pf-broker. It restarts pf dns and pf alert, and writes the time to `/var/lib/pi-fortress/ca-restart-pending` (mode 0600). While that file is there, `pf doctor` warns on rung `ca`. When you can unlock, run `sudo systemctl restart pi-fortress-broker.service`, then `sudo pf unlock`. Each broker start (also the restart of a `pf apply`) removes the file (`ExecStartPost` in `pf-broker.service`).
+
+## Install from source
+
+The README gives the commands. This flow uses the same `install.sh`, `pf install` and `pf upgrade -bundle` as a release. Only the signer is different: your own SSH key, given to `install.sh` as `PF_SIGNER_PUBKEY`. `pf install` keeps that key in `release-signers`. Thus each later `pf upgrade` accepts only bundles that your key signed.
+
+`make release RELEASE_UNSIGNED=1` does these steps:
+
+- It refuses a tree with uncommitted changes, and a Go that is not the `toolchain` of `go.mod` (`GOTOOLCHAIN=local`, so no download).
+- It builds the bundles for arm64 and amd64 from a `git archive` of HEAD, into `dist/<version>/`. `<version>` is the tag of HEAD, or `git describe` plus `-dev` (for example `v0.1.3-31-ga40f790bc164-dev`). `scripts/release.sh version` prints it. The directory must be empty. To build the same commit again, remove it first.
+- It writes `SHA256SUMS` and does not sign. `make release` signs only with the key that `install.sh` pins. Thus you sign with `ssh-keygen -Y sign -n pi-fortress-dist`, as the README shows. The principal is not in the signature. `install.sh` binds your key to `release@pi-fortress` when it writes the signer file.
+
+The version floor of a bundle is the commit time of HEAD. Thus `pf upgrade` refuses a commit that is older than the installed one.
+
+You can also run the same steps on the Pi itself, with Go 1.27.3 for arm64 installed there. Then there is no `scp`, and `PF_BUNDLE` is `dist/$V/pf-bundle-$V-arm64.tar`. The build is slower, and the signing key is on the box that it protects.
+
+A box that you installed from a release trusts only the release key. To also accept your bundles, add a second line to `/etc/pi-fortress/release-signers`: `release@pi-fortress namespaces="pi-fortress-dist" <your public key>`. `ssh-keygen -Y verify` accepts a signature from each line.
 
 ## Two signers, on purpose
 

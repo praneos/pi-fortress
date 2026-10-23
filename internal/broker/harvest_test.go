@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"pi-fortress/internal/httpwire"
+	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/preamble"
 	"pi-fortress/internal/secrets"
 )
@@ -309,5 +311,83 @@ func TestBindRefreshSlotStrict(t *testing.T) {
 		if got := bindRefreshSlot("", []byte(body), slots); got != want {
 			t.Errorf("%s: bound %q want %q", body, got, want)
 		}
+	}
+}
+
+// The broker refuses a refresh response that the harvest cannot read, and
+// one that keeps a token shape after the scrub. Each refusal writes one
+// strip row with the alert flag, so the operator sees it.
+func TestRefusedRefreshResponseAlerts(t *testing.T) {
+	newOAT := "sk-ant-oat01-" + strings.Repeat("N", 64)
+	for name, body := range map[string]string{
+		"unreadable": `{"access_token":"","token_type":"Bearer"}`,
+		"shape left": `{"access_token":"` + newOAT + `","note":"ghp_` + strings.Repeat("Q", 36) + `"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			b, _ := testBroker(t)
+			b.Logs = &jsonl.Writer{StripPath: filepath.Join(t.TempDir(), "strip.jsonl")}
+			fakeUpstream(t, b, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(body))
+			})
+			p := preamble.Preamble{SNI: "api.anthropic.com", OrigDst: netip.MustParseAddrPort("8.8.8.8:443")}
+			reqBody := `{"grant_type":"refresh_token","refresh_token":"pf_b0b1b2b3b4b5b6b7_CLAUDE_ORT"}`
+			raw := "POST /v1/oauth/token HTTP/1.1\r\nHost: api.anthropic.com\r\n" +
+				"Content-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(reqBody)) + "\r\n\r\n" + reqBody
+			got := roundtrip(t, b, p, raw)
+			if !strings.Contains(got, "harvest\n") {
+				t.Fatalf("response %q", got)
+			}
+			n := 0
+			for _, row := range strings.Split(stripRows(t, b.Logs.StripPath), "\n") {
+				if strings.Contains(row, `"cause":"harvest_leftover"`) {
+					if !strings.Contains(row, `"alert":true`) || !strings.Contains(row, `"slot":"b0b1b2b3b4b5b6b7"`) {
+						t.Fatalf("row %s", row)
+					}
+					n++
+				}
+			}
+			if n != 1 {
+				t.Fatalf("%d harvest_leftover rows:\n%s", n, stripRows(t, b.Logs.StripPath))
+			}
+		})
+	}
+}
+
+// Some servers send an empty or null refresh_token when they do not rotate
+// it. The broker stores the new access token only and keeps the old refresh
+// token. A refresh_token with a value that the store cannot keep still
+// refuses the response.
+func TestRefreshResponseEmptyRefreshToken(t *testing.T) {
+	newOAT := "sk-ant-oat01-" + strings.Repeat("N", 64)
+	oldORT := "b0b1b2b3b4b5b6b7_CLAUDE_ORT=sk-ant-ort01-" + strings.Repeat("B", 64)
+	for _, tc := range []struct {
+		ort    string
+		code   int
+		stored bool
+	}{
+		{`""`, 200, true},
+		{`null`, 200, true},
+		{`"bad#value"`, 502, false},
+	} {
+		t.Run(tc.ort, func(t *testing.T) {
+			b, path := testBroker(t)
+			fakeUpstream(t, b, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"access_token":"` + newOAT + `","refresh_token":` + tc.ort + `}`))
+			})
+			p := preamble.Preamble{SNI: "api.anthropic.com", OrigDst: netip.MustParseAddrPort("8.8.8.8:443")}
+			reqBody := `{"grant_type":"refresh_token","refresh_token":"pf_b0b1b2b3b4b5b6b7_CLAUDE_ORT"}`
+			raw := "POST /v1/oauth/token HTTP/1.1\r\nHost: api.anthropic.com\r\n" +
+				"Content-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(reqBody)) + "\r\n\r\n" + reqBody
+			resp, body := roundtripStream(t, b, p, raw)
+			if resp.Code != tc.code || strings.Contains(string(body), newOAT) {
+				t.Fatalf("code %d body %q", resp.Code, body)
+			}
+			env, _ := os.ReadFile(path)
+			if strings.Contains(string(env), "b0b1b2b3b4b5b6b7_CLAUDE_OAT="+newOAT) != tc.stored || !strings.Contains(string(env), oldORT) {
+				t.Fatalf("store:\n%s", env)
+			}
+		})
 	}
 }

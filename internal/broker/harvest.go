@@ -2,13 +2,13 @@ package broker
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"strings"
 
 	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/fence"
 	"pi-fortress/internal/httpwire"
+	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/secrets"
 )
 
@@ -48,17 +48,21 @@ func (b *Broker) harvest(slotID string, resp *httpwire.Response) ([]secrets.Slot
 		}
 		return nil, nil
 	}
-	var data struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-	}
-	if json.Unmarshal(resp.Body, &data) != nil {
-		if resp.Code == 200 {
+	// A 200 is the new pair. The broker must store each token in it, or
+	// refuse it. A value that it did not store is a value that it does not
+	// scrub. Thus a 200 with no access_token that it can read, or with a
+	// refresh_token that it cannot read, never reaches the agent. A 200
+	// without a refresh_token is valid: some servers do not rotate it. Some
+	// servers say the same with an empty string or null. These carry no
+	// value, so the broker stores the access token only.
+	f, ok := fence.StrictFields(resp.Body, "access_token", "refresh_token")
+	if resp.Code == 200 {
+		ort := f["refresh_token"]
+		if !ok || !secrets.ValidLive(f["access_token"]) || ort != "" && !secrets.ValidLive(ort) {
 			return nil, ErrHarvest
 		}
-		return nil, nil
 	}
-	oat, ort := data.AccessToken, data.RefreshToken
+	oat, ort := f["access_token"], f["refresh_token"]
 	if !secrets.ValidLive(oat) {
 		oat = ""
 	}
@@ -89,6 +93,46 @@ func (b *Broker) harvest(slotID string, resp *httpwire.Response) ([]secrets.Slot
 		return nil, err
 	}
 	return minted, nil
+}
+
+// residue reports a token shape (key_prefixes.rules) anywhere in a token
+// response after the scrub: the status reason, a field name or value, or
+// the body. The broker reads the body decoded, so the scan sees what the
+// agent would decode.
+func (b *Broker) residue(resp *httpwire.Response) bool {
+	if b.TokenRE == nil {
+		return false
+	}
+	if b.TokenRE.MatchString(resp.Status) || b.TokenRE.Match(resp.Body) {
+		return true
+	}
+	for _, f := range resp.Fields {
+		if b.TokenRE.MatchString(f.Name) || b.TokenRE.MatchString(f.Value) {
+			return true
+		}
+	}
+	return false
+}
+
+// CauseHarvestLeftover: the broker refused a refresh response. The harvest
+// could not read the new pair, or a token shape stayed in the response
+// after the scrub. The agent gets one 502. A provider format change looks
+// the same, so the operator must see each one.
+const CauseHarvestLeftover fence.RefusalCause = "harvest_leftover"
+
+// logHarvestRefused writes the alert row for a refused refresh response.
+// It names the slot that the refresh spent. It does not use the row cap of
+// the request: a call writes this row one time at most.
+func (b *Broker) logHarvestRefused(c *call) {
+	_ = b.Logs.Refused(jsonl.Refused{
+		Host:     c.host,
+		SNI:      c.p.SNI,
+		Where:    "response",
+		Cause:    string(CauseHarvestLeftover),
+		Slot:     c.harvestSlot,
+		ClientIP: clientIP(c.p),
+		Alert:    true,
+	})
 }
 
 // withMinted puts the values that a harvest just read on top of the slots

@@ -58,8 +58,6 @@ func TestPlaceholderGuardPassesDecoys(t *testing.T) {
 		"pf_zz",
 		"pf_b0b1b2b3b4b5b6b7",
 		"pf_b0b1b2b3b4b5b6b7_",
-		"pf_b0b1b2b3b4b5b6b7_Kind",
-		"pf_b0b1b2b3b4b5b6b7_KINDx",
 		"pf_p",
 		"pf_b0b1b2b3b4b5b6bX_KIND",
 	}
@@ -73,24 +71,27 @@ func TestPlaceholderGuardPassesDecoys(t *testing.T) {
 			}
 		}
 	}
-	// The buffered path reads this as a placeholder at the very end.
-	tail := []byte("payload " + secrets.Placeholder("b0b1b2b3b4b5b6b7", "CLAUDE_OAT"))
-	g := newPlaceholderGuard(&chunkReader{src: tail, sizes: []int{1}})
-	out, err := io.ReadAll(g)
-	if !errors.Is(err, ErrPlaceholderInStream) || bytes.Contains(out, []byte("pf_")) {
-		t.Fatalf("tail placeholder: %v %q", err, out)
+	// The buffered path reads each of these as a placeholder at the very end.
+	for _, ph := range []string{
+		secrets.Placeholder("b0b1b2b3b4b5b6b7", "CLAUDE_OAT"),
+		"pf_b0b1b2b3b4b5b6b7_Kind",
+		"pf_b0b1b2b3b4b5b6b7_KINDx",
+	} {
+		tail := []byte("payload " + ph)
+		g := newPlaceholderGuard(&chunkReader{src: tail, sizes: []int{1}})
+		out, err := io.ReadAll(g)
+		if !errors.Is(err, ErrPlaceholderInStream) || bytes.Contains(out, []byte("pf_")) {
+			t.Fatalf("tail placeholder %q: %v %q", ph, err, out)
+		}
 	}
 }
 
-// A run of placeholder-shaped decoys, each one cancelled by the "p" of the
-// next, stays in the hold. The guard does not cut after it, so a stop never
-// leaves a whole placeholder at the far end. In the hold, maxHold still limits it.
+// A chain of placeholder shapes is one kind run, and it stays in the hold.
+// The guard does not cut inside it, so a stop never leaves a whole
+// placeholder at the far end. In the hold, maxHold still limits it.
 func TestPlaceholderGuardHoldsAChainOfDecoysBounded(t *testing.T) {
 	decoy := "pf_0000000000000000_A"
 	body := []byte(strings.Repeat(decoy, maxHold/len(decoy)+2) + "x")
-	if spans := secrets.FindPlaceholderSpans(body); len(spans) != 0 {
-		t.Fatalf("the fixture has real placeholders: %v", spans)
-	}
 	sizes := make([]int, len(body)/7+1)
 	for i := range sizes {
 		sizes[i] = 7

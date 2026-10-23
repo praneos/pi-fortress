@@ -91,11 +91,11 @@ func TestBindingHeadersFollowTheEntry(t *testing.T) {
 			t.Fatalf("%s got %v", sni, got)
 		}
 	}
-	p, err = Load(writePolicy(t, "core.hosts", "echo.test *:Cookie\n"))
+	p, err = Load(writePolicy(t, "core.hosts", "echo.test *:PRIVATE-TOKEN\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := headersOf(p, "echo.test"); !reflect.DeepEqual(got, map[string][]string{"cookie": {AllKinds}}) {
+	if got := headersOf(p, "echo.test"); !reflect.DeepEqual(got, map[string][]string{"private-token": {AllKinds}}) {
 		t.Fatalf("* headers %v", got)
 	}
 }
@@ -105,6 +105,7 @@ func TestBindingHeaderDenyList(t *testing.T) {
 		"User-Agent", "referer", "Origin", "Host", "Via", "Forwarded", "X-Forwarded-For", "x-forwarded-host",
 		"X-Real-IP", "Content-Type", "content-length", "Transfer-Encoding", "Connection", "Keep-Alive",
 		"Upgrade", "TE", "Te", "Trailer", "Proxy-Authorization", "proxy-connection",
+		"Cookie", "cookie", "COOKIE", "Set-Cookie",
 	} {
 		path := writePolicy(t, "core.hosts", "github.com GITHUB_TOKEN\napi.github.com GITHUB_TOKEN:X-Ok,"+h+"\n")
 		_, err := Load(path)
@@ -115,7 +116,7 @@ func TestBindingHeaderDenyList(t *testing.T) {
 			t.Fatalf("ValidHeader(%q) passed", h)
 		}
 	}
-	for _, h := range []string{"Cookie", "PRIVATE-TOKEN", "api-key", "x-goog-api-key", "Authorization", "X-Api-Key", "X-Forwarded"} {
+	for _, h := range []string{"PRIVATE-TOKEN", "api-key", "x-goog-api-key", "Authorization", "X-Api-Key", "X-Forwarded"} {
 		if err := ValidHeader(h); err != nil {
 			t.Fatalf("ValidHeader(%q): %v", h, err)
 		}

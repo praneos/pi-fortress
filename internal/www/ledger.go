@@ -29,13 +29,18 @@ type Event struct {
 	Path string `json:"path,omitempty"`
 }
 
-func LedgerPath(claimsDir string) string { return filepath.Join(claimsDir, "ledger.jsonl") }
+// LedgerPath is in RedeemedDir, not in the claims directory. www appends to
+// the ledger and rotates it, and it can do neither in the claims directory.
+func LedgerPath(claimsDir string) string {
+	return filepath.Join(RedeemedDir(claimsDir), "ledger.jsonl")
+}
 
 // openLedger opens the ledger by name, and never follows what that name
-// points at. The claims directory is group-writable, so that www can rename
-// claim files in it (vm/pi/apply.sh installs it 2770 root:pf-fortress).
-// This also lets a compromised www unlink ledger.jsonl and put a symlink,
-// or a second hard link, in its place. Root issues claims through this same
+// points at. RedeemedDir is group-writable, so that www can make markers
+// and rotate the ledger in it (vm/pi/apply.sh installs it 2770
+// root:pf-fortress). This also lets a compromised www unlink ledger.jsonl
+// and put a symlink, or a second hard link, in its place. Root issues
+// claims through this same
 // path. Without O_NOFOLLOW and the checks below, one unprivileged unlink
 // turns `pf claim` into an append to any file on the gateway. A ledger that
 // the deployment created is a regular file with exactly one link. All else
@@ -66,19 +71,23 @@ func openLedger(path string, flag int) (*os.File, error) {
 }
 
 // InitLedger makes the ledger, or repairs it. The owner of the ledger is
-// the caller, the group is the group of the claims directory, and the mode
-// is 0660. Thus both appenders can write it. It
-// works through the descriptor that openLedger gives back. apply runs this
-// as root on each pass. A chown or chmod by name in a directory that www
-// can write would apply to whatever www left in the place of the name.
+// the caller, the group is the group of RedeemedDir, and the mode is 0660.
+// Thus both appenders can write it. It makes RedeemedDir when it is
+// missing. It works through the descriptor that openLedger gives back.
+// apply runs this as root on each pass. A chown or chmod by name in a
+// directory that www can write would apply to whatever www left in the
+// place of the name.
 func InitLedger(claimsDir string) error {
-	fi, err := os.Stat(claimsDir)
+	if err := makeRedeemedDir(claimsDir); err != nil {
+		return err
+	}
+	fi, err := os.Stat(RedeemedDir(claimsDir))
 	if err != nil {
 		return err
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
-		return errors.New("ledger: no owner for " + claimsDir)
+		return errors.New("ledger: no owner for " + RedeemedDir(claimsDir))
 	}
 	f, err := openLedger(LedgerPath(claimsDir), os.O_WRONLY|os.O_CREATE|os.O_APPEND)
 	if err != nil {
@@ -97,7 +106,7 @@ func InitLedger(claimsDir string) error {
 // rotate stops the ledger before it fills the partition that it shares
 // with the broker store and the audit log. Nothing else bounds it. The file
 // is under /var/lib, which the hourly logrotate run never reads. Sweep
-// does not remove it, because the name ends .jsonl, not .json. rotate keeps
+// does not remove it, because the name does not end .redeemed. rotate keeps
 // only one generation, which is one generation more than ReadLedger reads.
 // Two appenders can race here, and the rename of the loser drops a
 // generation early. The loss of old enrollment lines is the cheap outcome.
@@ -119,8 +128,7 @@ func rotate(path string, f *os.File) (*os.File, error) {
 	// removes the group write bit from 0660, and the two appenders are not the
 	// same principal. apply.sh makes the first ledger 0660 root:pf-fortress.
 	// But root or www makes this one: the one of the two that filled the last
-	// one. The group is already correct, because the claims directory is
-	// setgid. Without this, the other appender loses the file at the first
+	// one. The group is already correct, because RedeemedDir is setgid. Without this, the other appender loses the file at the first
 	// rotation, and the ledger quietly stops the record of enrolments.
 	if err := nf.Chmod(0660); err != nil {
 		nf.Close()

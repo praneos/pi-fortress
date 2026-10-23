@@ -29,7 +29,16 @@ in git). Each secret has a slot. `sudo pf enroll mint --kind CLAUDE ...`
 allots a new 16-hex slot. The oat and the ort share this slot. The fence does
 not substitute an unslotted `pf_CLAUDE_OAT`.
 
-Placeholders have the format `pf_<16hex>_<KIND>`.
+Placeholders have the format `pf_<16hex>_<KIND>`. The fence substitutes
+only this exact spelling (the hex can be in either case). The slot ID is the
+secret part, and an origin can change the letter case back or remove a
+letter. Thus the fence also finds a placeholder with the prefix or the kind in
+a different letter case (`PF_…`, `pf_<16hex>_claude_oat`), or with more
+letters, digits or `_` after the kind (`pf_<16hex>_CLAUDE_OATx`). It never
+substitutes such a variant. It refuses it in each location where it refuses a
+placeholder: a header value or name, the method, the URL, a buffered body
+(`slot_unknown` in a credential header) and a streamed body. `pf dns` and
+the SNI check refuse it in a name.
 
 `pf engine` terminates agent TLS on TCP 443 (nft redirect `:8080`). `pf
 broker` applies approved credentials and enforces redaction. The two must not
@@ -46,7 +55,8 @@ The SNI is mandatory and must be a valid host name. The Host must match that
 SNI, or be a subdomain of it. Thus Host `api.anthropic.com` with SNI
 `evil.example` does not inject. For an off-core host and for a kind mismatch,
 the fence refuses the request with one response that does not give the cause
-(§5.2b). The fence strips live-looking values.
+(§5.2b). The fence strips live-looking values in the bytes that it scans
+(see "What the fence scans" below).
 
 Substitution is **header-only**. The fence substitutes only into the
 credential headers of the kind:
@@ -62,14 +72,14 @@ Names are case-insensitive.
 A placeholder of an allowed kind in any other header refuses the whole
 request (`placeholder_outside_header`, with `where` naming the header). The
 fence writes nothing into the request. Examples are `User-Agent`, `Referer`,
-`Cookie` unless declared, and any `X-` header. Reason: these headers go into
-access logs and come back in audit APIs (the GitHub API returns
+`Cookie`, and any `X-` header that is not declared. Reason: these headers go
+into access logs and come back in audit APIs (the GitHub API returns
 `user_agent`). There, they get past the literal scrub.
 
 You can never declare these headers: `User-Agent`, `Referer`, `Origin`,
-`Host`, `Via`, `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Content-*`,
-`Transfer-Encoding`, `Connection`, `Keep-Alive`, `Upgrade`, `TE`, `Trailer`
-and `Proxy-*`. `pf apply` refuses such a line and names the file and the
+`Cookie`, `Set-Cookie`, `Host`, `Via`, `Forwarded`, `X-Forwarded-*`,
+`X-Real-IP`, `Content-*`, `Transfer-Encoding`, `Connection`, `Keep-Alive`,
+`Upgrade`, `TE`, `Trailer` and `Proxy-*`. `pf apply` refuses such a line and names the file and the
 line. `pf enroll mint --header` also refuses it.
 
 The lines for one host add up, for kinds and for headers. The operator puts
@@ -93,13 +103,31 @@ body. It never goes:
 - in a second or case-variant `refresh_token`, or
 - off the refresh path.
 
-A placeholder of an allowed kind in any other location refuses the request
-(`placeholder_outside_header`, an alert). Examples are the URL and any other
-buffered body. A placeholder in a streamed body stops the copy
-(`placeholder_in_streamed_body`, §5.2b). Data in a body or a URL can come back
-past the literal scrub. Examples are a model that is asked to print its prompt
-in reverse, a public gist, and an access log. Stripping does not change. It
-runs over the URL, every header, and the body.
+A placeholder of an allowed kind in any other location that the fence scans
+refuses the request (`placeholder_outside_header`, an alert). Examples are
+the URL and any other buffered body. A placeholder in a streamed body stops
+the copy (`placeholder_in_streamed_body`, §5.2b). Data in a body or a URL can
+come back past the literal scrub. Examples are a model that is asked to print
+its prompt in reverse, a public gist, and an access log. Stripping does not
+change. It runs over the URL, every header, and the body.
+
+What the fence scans:
+
+- The literal bytes of the method, the request target, each header name and
+  value, and the body.
+- A gzip or deflate body, after the decode, and the optional fields of each
+  gzip member header (§5.3b).
+- The decoded user:password of `Authorization: Basic`.
+- The request target after the fence decodes all percent escapes.
+
+A placeholder in a decoded form refuses the request, as in the literal
+bytes. A live value or a token-prefix match that only a decoded form shows
+also refuses the request (`encoded_body_token`, `encoded_url_token`),
+because the fence cannot strip it in place. The fence does not decode other
+encodings: base64 outside `Authorization: Basic`, JSON `\u` escapes, a
+custom encoding, or a value split across fields. A placeholder or a live
+value in such an encoding passes. `docs/risk_model.md` §2.1 gives this
+residual.
 
 A live-looking value matches a `vm/policy/key_prefixes.rules` shape. The
 match is the prefix, then the charset of the key, to at least the length of
@@ -124,7 +152,7 @@ blacklisted destinations in prerouting, *before* the redirect. Thus the
 canary `192.0.2.1` still times out.
 
 `CANARY` is the challenge kind (`docs/challenge_rules.md`). You mint it like
-any other kind: `pf enroll mint --kind CANARY --value ...`. A `*` line does
+any other kind: `pf enroll mint --kind CANARY --stdin`. A `*` line does
 not cover it, so the lab echo never reflects it. The shipped `core.hosts`
 binds it nowhere. Thus the fence refuses every use of the placeholder and
 strips every live value.
@@ -196,19 +224,19 @@ the core echo off the lab. The response is 501, or the 403 that the core echo
 already answers off the lab.
 
 Harvest runs on `/oauth/token` and `/v1/oauth/token`. It runs only when the
-SNI and the Host agree on a core host that has `CLAUDE_ORT`. The match uses
-the path that the origin server will route to, not the bytes that the agent
-wrote. To get this path:
+SNI and the Host agree on a core host that has `CLAUDE_ORT`. The broker
+forwards the target as the agent wrote it. Thus the match uses those bytes,
+and the path must be exactly one of the two paths:
 
 - The authority of an absolute-form target of any scheme is dropped. (The
   broker refuses such a target before the fence runs anyway.)
-- The query and the fragment are cut.
-- The rest is percent-decoded to a fixed point and lowercased.
-- Runs of `/` are collapsed, and its dot segments are resolved.
+- A query after `?` is permitted.
+- A fragment, a percent escape, a dot segment, a run of `/` or a case
+  variant in the path makes the target not a refresh path. An origin can
+  route such a target to a different handler.
 
-A target that does not settle under that decoding is not a refresh path. The
-refresh token is substituted only on a refresh path. Thus the same test
-decides both. The fence refuses a refresh token on an unsettled target. It
+The refresh token is substituted only on a refresh path. Thus the same test
+decides both. The fence refuses a refresh token on any other target. It
 never substitutes that token with the harvest disarmed. Thus no pair is
 minted that the response scrub has not heard of.
 
@@ -226,8 +254,14 @@ value, the refusal is the 403.
 The broker acquires that slot **before** the write to the origin server. It
 holds the slot until it has stored the rewritten response. A second refresh
 of the same slot in that window gets `429 refresh_busy`, not a race. The
-response must be JSON. If a 200 is not JSON, or does not parse, the agent
-gets a 502. The broker does not forward a live pair unread. Harvest refreshes
+response must be JSON. The broker reads a 200 strictly: one top-level
+object, `access_token` and `refresh_token` each spelled exactly once and in
+no other case, each value a string with no escape. A 200 must have a valid
+`access_token`. It may omit `refresh_token`, but a `refresh_token` that is
+present must be valid. For all other 200s, the agent gets a 502. After the
+scrub, the broker scans the token response (status reason, field names and
+values, body) with `key_prefixes.rules`. A match is a 502 for every status.
+The broker does not forward a live pair unread. Harvest refreshes
 only the rows of a slot that already exists (`upsert` never mints). If any
 other origin server returns `access_token`, it is data.
 
@@ -286,12 +320,16 @@ cap, the result is a 502, and the broker never forwards it. This is how git
 over HTTPS carries a placeholder: its credential helper sends
 `x-access-token:<placeholder>` as Basic.
 
-The broker scans origin responses for every live value, in headers and body.
-It buffers a response that has a `Content-Length` of 1 MiB or less. It streams
-all other responses (chunked to an HTTP/1.1 client). The broker rewrites a
-match to the placeholder and logs a strip event with `where=response`. This
-means that the origin server reflected a credential. Treat it as an incident,
-not a redaction. The lab echoes are not origin servers. The broker answers
+The broker scans origin responses for every live value: in the status reason,
+in header names and values, and in the body. It buffers a response that has a
+`Content-Length` of 1 MiB or less. It streams all other responses (chunked to
+an HTTP/1.1 client). The broker rewrites a match to the placeholder and logs a
+strip event with `where=response`. The broker cannot rewrite a header name,
+because the name gives the field its meaning. Thus a live value in a header
+name gets a 502 and the same strip event, and no byte of that response goes
+to the client. This also applies to the 101 of a WebSocket switch. A strip
+event means that the origin server reflected a credential. Treat it as an
+incident, not a redaction. The lab echoes are not origin servers. The broker answers
 them itself, and the core echo reflects the live token back by design (above).
 
 CA path: `generated/egress-ca.pem` in the policy directory
@@ -315,6 +353,20 @@ server, a client cannot name an unlisted host to reach a listed one. On a
 shared CDN edge that permits fronting, the `Host` check is the remaining
 line.
 
+**The key-shape check of `pf dns` also applies to the SNI.** The broker dials
+the origin with the SNI of the agent, and the origin can log it. A name that
+the agent resolves has passed `pf dns`. But the agent can open TLS to that
+address with any SNI. Thus, in both DNS modes and on all listeners:
+
+- The engine refuses an SNI with a `key_prefixes.rules` shape or a
+  placeholder before it mints a leaf. It logs `sni key_shape refused` with
+  the source and destination, not the SNI. The engine reads the rules from
+  `-rules` and refuses to start without them.
+- The broker refuses the same SNI before any dial, with a 403 and a
+  `sni_key_shape` strip event that is always marked `alert`. The row holds
+  the rule and the zone, not the SNI. For a fake-IP pool address, the cause
+  is `fakeip_key_shape` (Fake-IP, below).
+
 **A listed name blocks its whole subtree, and that is accepted.** The
 resolver, the engine, and the broker all match in the same way as the dnsmasq
 `address=/name/`: a listed name covers itself and every name under it. The
@@ -333,6 +385,13 @@ coarse as the hazard. To open `myapp.herokuapp.com` again under a listed
 shield below a listed parent leaves the entry of the parent in place. A
 shield on the parent also drops any entry that the feeds carried for a bad
 tenant under it.
+
+**core.hosts is a shield of its own, and it is not coarse.** An entry that
+would block a host that `core.hosts` or `core.hosts.local` binds
+credentials to does not compile: the host itself, a parent of it, or a name
+under a `*.` entry. A feed line for `anthropic.com` must not cut the agent
+off from the service that holds its credentials. An entry under an exact
+core host stays, because it does not block the host.
 
 Public Suffix List handling is not planned. It adds complexity for a corner
 case that curation and `never_block` already cover. Examine this again if a
@@ -473,6 +532,13 @@ Substitution can fail for these reasons:
 - A field name holds a placeholder, a live value, or a token-prefix match
   (`key_in_header_name`). The fence cannot rewrite a name, because the name
   gives the field its meaning.
+- The request method holds a placeholder, a live value, or a token-prefix
+  match (`key_in_method`). The fence cannot rewrite a method, because the
+  method gives the request its meaning.
+- The percent-decoded request target holds a live value or a token-prefix
+  match that the raw target does not show, or the target does not decode to
+  a stable form in a few rounds (`encoded_url_token`). The raw bytes are
+  different, so the fence cannot strip the value in place.
 
 For all of them, the agent gets one response, byte for byte: a 503 with
 `Retry-After: 60` and a body that names no cause. The broker refuses the
@@ -495,11 +561,16 @@ also give the slot ID and kind to a destination that the agent selected.
 The detail is not deleted. It only goes to a different place. The broker
 writes each cause to the strip log as `substitution_refused`, with the cause,
 slot, kind, and SNI. `kind_not_allowed_for_sni`,
-`placeholder_outside_header`, `encoded_body_token`, and `key_in_header_name`
-are always marked `alert`. Each other cause is marked `alert` one time for
-each broker start. These four are not an operational fault to fix. They show the fence
+`placeholder_outside_header`, `placeholder_in_ws` (5.3c),
+`encoded_body_token`, `key_in_header_name`, `key_in_method`, and
+`encoded_url_token` are always marked `alert`. Each other cause is marked
+`alert` one time for each broker start. These seven are not an operational
+fault to fix. They show the fence
 catching a credential aimed where it may not go. This is the signature of a
-compromised or badly broken agent.
+compromised or badly broken agent. A refresh response that the broker
+refuses (the harvest cannot read the new pair, or a token shape stays after
+the scrub) writes `harvest_leftover` with the slot. It is always marked
+`alert`.
 
 The broker does not read a streamed body (over 1 MiB, or chunked) before the
 head goes to the origin server. Thus the broker cannot refuse a placeholder
@@ -893,6 +964,11 @@ decode changes nothing: the original compressed bytes go out. A hit refuses
 the whole request. The broker does not edit compressed bytes in place,
 because nothing on this path is ever encoded again.
 
+The gzip header of each member goes to the origin with the body. Thus the
+optional header fields (FEXTRA, FNAME, FCOMMENT) get the same scan as the
+decoded bytes, one field at a time. A hit there refuses the request in the
+same way.
+
 These all refuse in the same way, `encoded_body_unscannable`:
 
 - More than two layers.
@@ -904,8 +980,8 @@ These all refuse in the same way, `encoded_body_unscannable`:
 
 A live value or token-prefix match found after the decode is
 `encoded_body_token`. `encoded_body_token` alerts every time, the same as
-`kind_not_allowed_for_sni`, `placeholder_outside_header`, and
-`key_in_header_name` (5.2b).
+`kind_not_allowed_for_sni`, `placeholder_outside_header`,
+`key_in_header_name`, `key_in_method`, and `encoded_url_token` (5.2b).
 `encoded_body_unscannable` alerts one time for each broker run, like a sealed
 store. Reason: the broker refuses every request of a harmless client that
 compresses its uploads with zstd. An alert on each one would fill the hourly
@@ -987,6 +1063,8 @@ These end the session:
 - Fragmented or oversized control frames (before or after the scrub).
 - Agent-to-origin messages past `Broker.MaxMessage` (5 MiB, fragments
   summed, 1009).
+- A placeholder in an agent-to-origin message, ping, pong or close reason
+  (1008). Refer to the end of this section.
 
 A message that would take the broker past its byte budget ends the session
 with 1013. The broker streams origin-to-agent messages, with a bound of
@@ -997,10 +1075,33 @@ one line each on `unknown.jsonl` (`where=ws_open` / `ws_close`). The
 `ws_close` line has the byte counts `ws_sent` and `ws_recv`. Reason: the strip
 log is the incident channel, and a websocket open is not an incident.
 
-Substitution does **not** occur inside frames. Only stripping occurs. A frame
-is opaque application data, with no field that the fence owns. A rewrite of a
-placeholder into a live token there would give the agent a credential that it
-never held. The fence could not scrub that credential back out of the reply.
+Substitution does **not** occur inside frames. A frame is opaque application
+data, with no field that the fence owns. A rewrite of a placeholder into a
+live token there would give the agent a credential that it never held. The
+fence could not scrub that credential back out of the reply.
+
+Thus the broker refuses a placeholder in a frame from the agent. It does not
+strip it. The scan runs on the reassembled message, so a placeholder split
+across fragments is also found. It also runs on each ping, pong and close
+payload. When the scan finds a placeholder:
+
+- The broker does not forward that frame.
+- The origin server gets a close with 1001, the same close as for size. Thus
+  the origin server cannot tell that the fence found a placeholder.
+- The agent gets a close with 1008 (policy violation).
+- The strip log gets a `substitution_refused` row with
+  `cause=placeholder_in_ws`, `where=ws`, the slot and the kind. It is always
+  marked `alert`, the same as `placeholder_outside_header` (5.2b).
+
+A placeholder that goes out as written gives the slot ID and the kind to the
+origin server. Data in a frame can also come back past the literal scrub, as
+data in a body can. Live values and token-prefix matches are still stripped,
+as before.
+
+This also applies to a placeholder that the agent got from the origin
+server. After a substitution, the broker writes a reflected live value back
+to the agent as its placeholder. If the agent then sends that text back in a
+frame, the broker closes the session.
 
 `Idle` becomes the gap between frames. Traffic in either direction resets it.
 The lifetime ceiling, not `Idle`, bounds a subscription that legitimately
@@ -1160,29 +1261,39 @@ ARP cannot swap any of the three. The script that comes back:
 
 Live values never leave `secrets.env`.
 
-Storage: `/var/lib/pi-fortress/www/claims/`, `root:pf-fortress 2770`. This
-directory is setgid. Thus a file that the root TUI writes there still goes
-into the group that www can rename and append to.
+Storage: two directories in `/var/lib/pi-fortress/www/`. Both are setgid.
+Thus a file that the root TUI writes there still goes into the group of www.
 
-The TUI writes `<CODE>.json` (0640). It has `code`, `slot`, `kinds`,
+- `claims/`, `root:pf-fortress 2750`. Only root writes it. www can read a
+  claim, but it cannot create, change, rename or remove one.
+- `claims-redeemed/`, `root:pf-fortress 2770`. www writes it: one marker
+  for each spent code, and the ledger.
+
+The TUI writes `claims/<CODE>.json` (0640). It has `code`, `slot`, `kinds`,
 `issued`, `expires`, `setup_sha256`, and `ca_sha256`, and `git_hosts` when
 the slot has `GITHUB_TOKEN`. www:
 
-- Redeems with one `os.Rename` to `<CODE>.redeemed`. This is what makes a
-  second redeem fail.
-- Refuses expired files.
-- Never serves a listing of the directory.
+- Redeems by making `claims-redeemed/<CODE>.redeemed` with `O_EXCL`. This
+  is what makes a second redeem fail. It makes the marker only for a claim
+  file that exists, and before it reads the claim. The marker is on disk,
+  so a spent code stays spent after a restart or a reboot. A claim that
+  was not redeemed stays valid until it expires.
+- Refuses expired claims, and a claim file that root does not own.
+- Never serves a listing of either directory.
 - Answers wrong, used, and expired codes with the same 404.
 - Allows ten attempts for each source address each minute.
 
-Every GET or HEAD that www serves, whatever the path, first sweeps the
-`.json` and `.redeemed` files with an mtime more than one hour old. The sweep
-never opens them. Thus it is a floor on the five-minute `expires`, and not
-the expiry check. The expiry check is in the redeem, on every redeem. www
-gets only `SupplementaryGroups=pf-fortress` and `ReadWritePaths` for that one
-directory. `secrets.env` stays inaccessible to www.
+Root sweeps: each claim issue and each `pf apply` (`pf www -init-ledger`)
+remove the claims with an mtime more than one hour old, and then the
+marker of each claim that is gone. A marker never goes before its claim.
+The sweep never opens a claim. Thus it is a floor on the five-minute
+`expires`, and not the expiry check. The expiry check is in the redeem, on
+every redeem. www gets only `SupplementaryGroups=pf-fortress` and
+`ReadWritePaths` for `claims-redeemed/`. `secrets.env` stays inaccessible to
+www.
 
-Ledger: `claims/ledger.jsonl` (0660, same group). It has these entries:
+Ledger: `claims-redeemed/ledger.jsonl` (0660, same group). It has these
+entries:
 
 - `issued {code, slot, uid}` from the TUI.
 - `redeemed {code, slot, ip}` from www, when a code is redeemed.

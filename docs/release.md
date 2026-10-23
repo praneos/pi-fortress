@@ -92,7 +92,7 @@ as an OVA pair. `pf ship bundle` writes each bundle tar in lexical order, with t
 - Toolchain: `toolchain` in `go.mod`, `GOTOOLCHAIN=local`. The build fails if `go env GOVERSION` is different.
 - Modules: `-mod=vendor`, `GOPROXY=off`, `GOWORK=off`. Not `-mod=readonly`: that mode resolves from the module cache and can fetch. The supply-chain rule of the Makefile forbids fetches.
 - Environment: `GOENV=off` (no user `go env -w`), `CGO_ENABLED=0`, `GOAMD64=v1`, `GOARM64=v8.0`, empty `GOEXPERIMENT`.
-- Flags: `-trimpath -buildvcs=true -ldflags "-s -w -buildid= -X …cli.Version"`. VCS stamping stays on. It records only commit, commit time and a clean flag. Backup manifests read the revision.
+- Flags: `-buildmode=pie -trimpath -buildvcs=true -ldflags "-s -w -buildid= -X …cli.Version"`. VCS stamping stays on. It records only commit, commit time and a clean flag. Backup manifests read the revision.
 - Source: a clean tree at one commit. If there are uncommitted or untracked files, the build refuses to run.
 
 To build a published release again and compare it:

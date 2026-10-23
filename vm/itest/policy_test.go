@@ -25,7 +25,7 @@ func policyTests(t *testing.T) {
 		// The listing is the 40 newest first-seen names. On a box with a
 		// real house behind it, example.com became old some hours ago. The
 		// ledger shows that it was seen.
-		out := pi(t, "sudo /usr/local/sbin/pf observe once >/dev/null; sudo grep -c '\"example.com\":' /var/lib/pi-fortress/observe.json")
+		out := pi(t, "sudo /usr/local/sbin/pf observe once >/dev/null; sudo grep -c '\"example.com\":' /var/lib/pi-fortress/observe/observe.json")
 		if n, err := strconv.Atoi(strings.TrimSpace(out)); err != nil || n == 0 {
 			t.Fatal(out)
 		}

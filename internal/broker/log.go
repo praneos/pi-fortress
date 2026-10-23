@@ -74,13 +74,14 @@ func canaryRule(rule string) bool {
 // process started. The operator must know one time that credentials
 // stopped working. The log still records each occurrence.
 func (b *Broker) alertRefusal(cause fence.RefusalCause) bool {
-	// A live value in a decoded body has the same signature as the other two:
+	// A live value in a decoded body or a decoded target has the same
+	// signature as the other two:
 	// a credential aimed where the plain scan would not see it. A body that
 	// the fence could not decode is different. An ordinary client that
 	// compresses its uploads with zstd gets a refusal on each request. A post
 	// for each would use all of the hourly cap of the webhook before a real
 	// strip arrives. It alerts one time, like the conditions below.
-	if cause == fence.CauseKindNotAllowed || cause == fence.CauseOutsideHeader || cause == fence.CauseEncodedBodyToken || cause == fence.CauseKeyInHeaderName {
+	if cause == fence.CauseKindNotAllowed || cause == fence.CauseOutsideHeader || cause == fence.CausePlaceholderInWS || cause == fence.CauseEncodedBodyToken || cause == fence.CauseKeyInHeaderName || cause == fence.CauseKeyInMethod || cause == fence.CauseEncodedURLToken {
 		return true
 	}
 	b.useMu.Lock()

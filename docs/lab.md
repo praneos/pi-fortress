@@ -134,10 +134,10 @@ You can mint from your workstation. Then the tokens do not go into a shell argum
 pbpaste | ssh <user>@<pi> sudo pf enroll mint --kind CLAUDE --stdin
 ```
 
-On the Pi:
+On the Pi, paste the two lines after the mint command, then push Ctrl-D:
 
 ```
-sudo pf enroll mint --kind CLAUDE --oat 'sk-ant-oat01-...' --ort 'sk-ant-ort01-...'
+sudo pf enroll mint --kind CLAUDE --stdin
 sudo pf enroll list
 sudo pf enroll peek --slot <slot>
 sudo pf enroll delete --slot <slot>
@@ -201,7 +201,7 @@ Both screens read `observe.json` again every 5 s. Thus, they are late by a maxim
 
 On the Pi the files are:
 
-- `/var/lib/pi-fortress/observe.json`
+- `/var/lib/pi-fortress/observe/observe.json`
 - `/var/log/pi-fortress/observe.jsonl`
 
 The gateway never terminates the traffic of a plain segment. Thus, observe keeps its first-seen destinations instead:
@@ -331,11 +331,13 @@ Edit, then apply. No VM rebuild is necessary:
 - `vm/policy/never_block.*`: never drop these entries from feeds (includes Mullvad), even if a feed contains them. Agent side only. The house list does not read it. Pi-owned
 - `vm/policy/house_default.domains`: shipped house-segment defaults (YouTube, chess.com, SoundCloud and their CDNs). Each ship overwrites it. You cannot edit it in the TUI. To unblock one, use `house_never_block.domains`
 - `vm/policy/house.domains` / `house_never_block.domains`: the house-segment sinkhole extras and exceptions of the operator. An exception can also disable a shipped default. The house list ignores `never_block.domains`. Pi-owned
-- `vm/policy/doh.ips` / `doh.domains`: public resolvers. They are for the DNS pin, so the agent cannot use DoH/DoT around the Pi. never_block cannot override them
+- `vm/policy/doh.ips` / `doh.domains`: public resolvers. They are for the DNS pin, so the agent cannot use DoH/DoT around the Pi. never_block cannot override them. Shipped. Each ship overwrites them
+- `vm/policy/doh.ips.local` / `doh.domains.local`: the resolvers of the operator, added to the shipped lists. Pi-owned
 - `vm/policy/core.hosts`: `host KIND[:Header,...]...`. The credential targets for each kind. Only those kinds apply on that name. A name matches exactly. `*.name` matches all subdomains. A placeholder goes only into `Authorization`, `X-Api-Key` and the headers that a line names after its kind (`docs/fence.md` §5.2). Shipped. Each ship overwrites it
 - `vm/policy/core.hosts.local`: the `core.hosts` lines of the operator, added to the shipped lines. apply installs both as `/etc/pi-fortress/core.hosts`. `pf enroll mint --header` writes here. Pi-owned
 - `vm/policy/allow.domains`: known dests. They are not logged to `unknown.jsonl`
-- `vm/policy/key_prefixes.rules`: `name regexp [KIND]`.
+- `vm/policy/key_prefixes.rules.local`: the rules of the operator, added to the shipped rules. apply installs both as `/etc/pi-fortress/key_prefixes.rules`. pf compile refuses a rule that does not compile or has no literal prefix. Pi-owned
+- `vm/policy/key_prefixes.rules`: `name regexp [KIND]`. Shipped. Each ship overwrites it.
   - Start each rule with a literal prefix (`ghp_`, `AKIA`). The broker does not start with a rule that has no prefix.
   - Write a body length as a minimum (`{36,}`), with no closing `\b`. Then a longer key is stripped whole.
   - A leading `\b` means "not after a word byte, unless it ends an escape such as `\n` or `%20`". Use it for prefixes that occur inside words.

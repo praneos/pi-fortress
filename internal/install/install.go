@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"pi-fortress/internal/render"
 	"pi-fortress/internal/ship"
 )
 
@@ -400,10 +401,17 @@ func (in *Installer) reapply(v int64) error {
 }
 
 // checkIfaces refuses an interface plan that cannot be a fence: no
-// uplink or agent NIC, or one port asked to be two segments.
+// uplink or agent NIC, a name that render refuses, or one port asked to
+// be two segments. apply reads these names before render examines them.
+// Thus the check occurs here, before the first write.
 func checkIfaces(wan, agent, house string) error {
 	if wan == "" || agent == "" {
 		return fmt.Errorf("pf install: need both an uplink and an agent interface (wan=%q agent=%q); pass -wan and -agent", wan, agent)
+	}
+	for _, x := range [][2]string{{"-wan", wan}, {"-agent", agent}, {"-house", house}} {
+		if x[1] != "" && !render.ValidIfaceName(x[1]) {
+			return fmt.Errorf("pf install: %s %q is not an interface name (a letter, then up to 14 letters, digits, '.', '_' or '-')", x[0], x[1])
+		}
 	}
 	if wan == agent {
 		return fmt.Errorf("pf install: the uplink and the agent segment are both %s; they must be two different interfaces (pass -wan and -agent)", wan)

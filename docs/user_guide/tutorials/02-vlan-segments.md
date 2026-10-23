@@ -44,7 +44,8 @@ Isolation is a set of nft rules in the **forward** chain. The position of these 
 
 ```
 forward:
-  ct state established,related accept     ← established flows pass first
+  ct state established jump isolate_ct    ← established flows: isolation again
+  ct state established,related accept     ← then established flows pass
   ct state invalid drop
   # from here on: NEW flows only
   iifname "eth0.20" oifname "eth0.79" drop     ← agent → desk
@@ -58,14 +59,20 @@ forward:
 ```mermaid
 flowchart TD
     A["New packet in forward chain"] --> B{"Established or related flow?"}
-    B -->|"Yes"| Z["Accept"]
+    B -->|"Yes"| I{"Crosses a segment pair outside an SSH hole?"}
+    I -->|"Yes"| X["Drop"]
+    I -->|"No"| Z["Accept"]
     B -->|"No, and invalid"| Y["Drop"]
     B -->|"No, but new"| C{"Crosses a segment pair (e.g. agent to desk)?"}
     C -->|"Yes"| E["Drop"]
     C -->|"No"| F["Continue: port policy, then policy drop"]
 ```
 
-The position after the conntrack accept is important. The rules control only **new flows**. Isolation comes before the agent block. Each pair has one `drop` for each direction, never `reject`. Thus a prober gets only silence.
+The position after the conntrack accept is important. These rules control only **new flows**. Isolation comes before the agent block.
+
+An apply does not flush conntrack. Thus `isolate_ct` holds the same pair drops and SSH holes for **established flows**. It matches each hole in the two directions of the flow. If an apply removes a hole, the flows that use it stop at their next packet. Flows that cross no pair go on to the conntrack accept. Each pair has one `drop` for each direction, never `reject`. Thus a prober gets only silence.
+
+An egress change of a segment is different: the egress policy does not examine established flows. Thus apply **ends the open flows** of each segment whose egress policy changed, and of each segment that you removed. For the house, the egress policy is `HOUSE_EGRESS`, the `HOUSE_ALLOW_*` switches, `HOUSE_ALLOW_PORTS`, `HOUSE_BLOCK_DIRECT_IP`, `HOUSE_BLOCK_HTTP`, `HOUSE_BLOCK_VPN` and `HOUSE_PRIVATE_DNS`. For a plain segment, it is `EGRESS`, `ALLOW_PORTS`, `BLOCK_DIRECT_IP` and `ssh_allow.ips`. A key that you set to its default value is not a change. After the new ruleset is loaded, apply deletes the conntrack entries whose source or destination is in the subnet of that segment, and logs one line for each segment. The devices open their connections again under the new policy. Flows to and from the addresses of the Pi stay, so an SSH session to the Pi continues. Flows between the agent segment, the house and the segments also stay, because the isolation and `isolate_ct` decide them, not the egress policy. Thus an admin SSH session through an SSH hole (`HOUSE_SSH_TO`, `SSH_TO`, `SSH_FROM`) continues while its hole stays. A removed segment is the exception: its flows to the agent end too. The flows of the other segments stay. A change of a different key ends no flows. Apply keeps the last policy in `/var/lib/pi-fortress/egress.state`. If this file is missing or empty, apply cannot know the last policy, so it ends the open flows of each segment. On a new box this ends nothing: forwarding is off until the first ruleset is loaded. If `conntrack` is not installed, apply gives a warning, and the open flows keep the old permission until they close.
 
 **Holes are named, not implicit.**
 

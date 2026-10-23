@@ -28,6 +28,7 @@ import (
 	"pi-fortress/internal/fakeip"
 	"pi-fortress/internal/fence"
 	"pi-fortress/internal/jsonl"
+	"pi-fortress/internal/keyshape"
 	"pi-fortress/internal/secrets"
 	"pi-fortress/internal/www"
 )
@@ -61,6 +62,7 @@ func runEngine(args []string, _, stderr io.Writer) int {
 	allowPath := fs.String("allow", "/etc/pi-fortress/allow.domains", "allow.domains path, with -paranoid")
 	corePath := fs.String("core-hosts", "/etc/pi-fortress/core.hosts", "core.hosts path, with -paranoid: the host column only, never the kinds")
 	labEcho := fs.Bool("lab-echo", false, "let pf-core-echo.test through the forward set (lab VM only)")
+	rules := fs.String("rules", "/etc/pi-fortress/key_prefixes.rules", "token prefix rules: mint no leaf for an SNI with a key or a placeholder")
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}
@@ -115,6 +117,16 @@ func runEngine(args []string, _, stderr io.Writer) int {
 		}
 		forward = f
 	}
+	// The broker refuses to start without the rules, and so does the engine.
+	// The engine keeps only the compiled shapes in a closure. The kind
+	// column of the file does not get to the engine (docs/privilege_split.md).
+	tr, err := fence.LoadTokenRules(*rules)
+	if err != nil {
+		return fail(stderr, fmt.Errorf("engine: -rules: %w", err))
+	}
+	all := tr.All()
+	heads, _ := keyshape.Heads(tr.Rules)
+	keyShape := func(name string) string { return keyshape.Match(all, heads, name) }
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
 		return fail(stderr, err)
@@ -136,6 +148,7 @@ func runEngine(args []string, _, stderr io.Writer) int {
 		CA:        store,
 		Blocked:   blocked,
 		Forward:   forward,
+		KeyShape:  keyShape,
 		LabEcho:   *labEcho,
 		Handshake: *handshake,
 		Idle:      *idle,
@@ -477,7 +490,7 @@ func runWWW(args []string, _, stderr io.Writer) int {
 	fs := newFlags("www", stderr)
 	listen := fs.String("listen", "", "ip:port (default PI_IP:80 from net.env)")
 	dir := fs.String("dir", "", "directory with setup.sh and ca.pem")
-	initLedger := fs.Bool("init-ledger", false, "make or repair claims/ledger.jsonl 0660 in the claims directory's group, then exit")
+	initLedger := fs.Bool("init-ledger", false, "sweep old claims, make or repair claims-redeemed/ledger.jsonl 0660 in that directory's group, then exit")
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}
@@ -487,6 +500,9 @@ func runWWW(args []string, _, stderr io.Writer) int {
 		if *dir != "" {
 			d = *dir
 		}
+		// Root runs this from apply. www cannot remove a claim, so the
+		// sweep is here and in IssueClaim.
+		www.Sweep(www.ClaimsDir(d))
 		if err := www.InitLedger(www.ClaimsDir(d)); err != nil {
 			return fail(stderr, err)
 		}
@@ -494,13 +510,13 @@ func runWWW(args []string, _, stderr io.Writer) int {
 	}
 	// On a Pi, this write is refused, and the redeem goes to the ledger
 	// only. vm/pi/www.service runs DynamicUser with ProtectSystem=strict
-	// and names one ReadWritePaths: the claims directory. Thus /var/log is
+	// and names one ReadWritePaths: claims-redeemed. Thus /var/log is
 	// read-only to it. This is on purpose: keep the audit log out of
 	// ReadWritePaths. This is the one listener that an agent reaches without
 	// a credential, so the file that records each admin action stays
-	// writable by root only. The redeem is in claims/ledger.jsonl. It goes
-	// in the audit log only where root runs www. audit.Log discards a
-	// write that it cannot make. It does not fail a handoff that the agent
+	// writable by root only. The redeem is in claims-redeemed/ledger.jsonl.
+	// It goes in the audit log only where root runs www. audit.Log discards
+	// a write that it cannot make. It does not fail a handoff that the agent
 	// waits for.
 	s.Audit = audit.Default()
 	if *dir != "" {

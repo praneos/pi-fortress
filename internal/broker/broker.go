@@ -34,9 +34,11 @@ var (
 	ErrSrc      = errors.New("broker: source outside the agent segment")
 	ErrVerify   = errors.New("broker: upstream tls verify failed")
 	ErrBusy     = errors.New("broker: refresh already in flight for this slot")
-	ErrHarvest  = errors.New("broker: token response is not json")
+	ErrHarvest  = errors.New("broker: token response is not strict json")
+	ErrResidue  = errors.New("broker: token response holds a token after the scrub")
 	ErrLeftover = errors.New("broker: origin sent bytes past the framed response")
 	ErrOpaque   = errors.New("broker: response to a substituted request in an encoding the scrub cannot read")
+	ErrLiveName = errors.New("broker: response field name holds a live value")
 )
 
 type DialTLSFunc func(ctx context.Context, dst netip.AddrPort, sni string) (net.Conn, error)
@@ -189,6 +191,11 @@ func (b *Broker) Handle(ctx context.Context, conn net.Conn) error {
 	if b.AgentNet.IsValid() && !b.serves(p.Src) {
 		_ = writeErr(conn, 403, "403 Forbidden", "src\n")
 		return ErrSrc
+	}
+	// fakeAdmit runs the same check on a pool address, with its own cause.
+	if !fake && b.sniKeyRefused(p) {
+		_ = writeErr(conn, 403, "403 Forbidden", sniKeyBody)
+		return fmt.Errorf("%w: %s", ErrSNIKeyShape, CauseSNIKeyShape)
 	}
 	up := &upstream{b: b, dst: p.OrigDst, sni: p.SNI}
 	if fake {
