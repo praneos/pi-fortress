@@ -119,14 +119,19 @@ What the fence scans:
   gzip member header (§5.3b).
 - The decoded user:password of `Authorization: Basic`.
 - The request target after the fence decodes all percent escapes.
+- Each JSON string (key or value) of a buffered JSON body that holds an
+  escape (`\uXXXX`, `\/`), after the unescape. A body is JSON when its
+  `Content-Type` names JSON or when it parses as JSON. A string that holds
+  JSON text with escapes gets the unescape again, up to four rounds.
 
 A placeholder in a decoded form refuses the request, as in the literal
 bytes. A live value or a token-prefix match that only a decoded form shows
 also refuses the request (`encoded_body_token`, `encoded_url_token`),
-because the fence cannot strip it in place. The fence does not decode other
-encodings: base64 outside `Authorization: Basic`, JSON `\u` escapes, a
-custom encoding, or a value split across fields. A placeholder or a live
-value in such an encoding passes. `docs/risk_model.md` §2.1 gives this
+because the fence cannot strip it in place. A literal match in a string
+that also holds an escape strips as before. The fence does not decode other
+encodings: base64 outside `Authorization: Basic`, a custom encoding, or a
+value split across fields. A placeholder or a live value in such an
+encoding passes. `docs/risk_model.md` §2.1 gives this
 residual.
 
 A live-looking value matches a `vm/policy/key_prefixes.rules` shape. The

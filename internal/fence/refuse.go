@@ -88,7 +88,10 @@ const (
 	// CauseEncodedBodyToken is a live value or a token-prefix match inside
 	// a request body that did decode: what a buffered plaintext body strips
 	// and forwards. The fence never rewrites a compressed body (docs/fence.md
-	// 5.3b). Thus the fence refuses all of this body instead.
+	// 5.3b). Thus the fence refuses all of this body instead. A match that
+	// shows only after the unescape of a JSON string in a buffered body is
+	// also this cause: the raw bytes are different, so the fence cannot
+	// strip it in place.
 	CauseEncodedBodyToken RefusalCause = "encoded_body_token"
 	// CauseKeyInHeaderName is a field name that holds a live value, a
 	// token-prefix match or a placeholder. A field name is a token, and

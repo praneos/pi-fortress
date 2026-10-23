@@ -1024,6 +1024,7 @@ func (s *scanner) intakeBody(reserve func(n int64) bool, req *httpwire.Request, 
 		// time. A hit there refuses the request in the same way.
 		if decoded, fields, ok := decodeRequestBody(encs, body); ok {
 			s.noteEncodedBody(decoded)
+			s.noteJSONBody(req, decoded)
 			for _, f := range fields {
 				s.noteEncodedBody(f)
 			}
@@ -1032,6 +1033,7 @@ func (s *scanner) intakeBody(reserve func(n int64) bool, req *httpwire.Request, 
 		}
 	} else {
 		s.at("body").noteAll(body, "body")
+		s.noteJSONBody(req, body)
 		plan.Body = s.at("body").classify(body)
 	}
 	return body, nil
