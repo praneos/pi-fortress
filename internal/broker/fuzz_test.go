@@ -46,7 +46,10 @@ func FuzzRewriteResponse(f *testing.F) {
 		resp.SetInPlace("Content-Type", h1)
 		resp.SetInPlace("Set-Cookie", "a="+h2)
 		resp.SetInPlace("Set-Cookie", "b="+h2)
-		hit := rewriteResponse(resp, slots)
+		hit, err := rewriteResponse(resp, slots)
+		if err != nil {
+			t.Fatal(err)
+		}
 		var out bytes.Buffer
 		if _, err := resp.WriteTo(&out); err != nil {
 			t.Fatal(err)

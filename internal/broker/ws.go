@@ -274,9 +274,15 @@ func (b *Broker) serveWS(client net.Conn, cbr *bufio.Reader, up *upstream, ubr *
 	}
 	// Send the 101 verbatim, minus a live credential that the origin reflected
 	// into the handshake. That credential is the incident that docs/fence.md
-	// §5.2 describes. It is not a header that the client needs.
-	for _, key := range rewriteHeaders(resp, slots) {
+	// §5.2 describes. It is not a header that the client needs. A credential
+	// in a field name cannot be removed, so the switch does not occur.
+	hit, err := rewriteHeaders(resp, slots)
+	for _, key := range hit {
 		_ = b.logStrip(cp, clientIP(p), host, "response", "secret:"+key)
+	}
+	if err != nil {
+		_ = writeErr(client, 502, "502 Bad Gateway", "origin\n")
+		return err
 	}
 	if _, err := resp.WriteTo(client); err != nil {
 		return err

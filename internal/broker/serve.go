@@ -727,8 +727,14 @@ func (b *Broker) writeBuffered(c *call, resp *httpwire.Response, reencode bool) 
 		}
 		c.slots = withMinted(c.slots, minted)
 	}
-	for _, key := range rewriteResponse(resp, c.slots) {
+	hit, err := rewriteResponse(resp, c.slots)
+	for _, key := range hit {
 		_ = b.logStrip(&c.strips, clientIP(c.p), c.host, "response", "secret:"+key)
+	}
+	if err != nil {
+		c.up.discard()
+		_ = writeErr(c.client, 502, "502 Bad Gateway", "origin\n")
+		return err
 	}
 	// The scrub replaces only the values that the broker holds. A token
 	// response that still has a token shape after it holds a value that the
@@ -743,7 +749,7 @@ func (b *Broker) writeBuffered(c *call, resp *httpwire.Response, reencode bool) 
 		resp.Body = gzipBytes(resp.Body)
 		resp.SetInPlace("Content-Encoding", "gzip")
 	}
-	_, err := resp.WriteTo(c.client)
+	_, err = resp.WriteTo(c.client)
 	// The broker read the body to its framed end. So the upstream may be
 	// reused, unless one of the two sides asked to close.
 	if err != nil || !reusableResp(c.req, resp) {
@@ -756,8 +762,14 @@ func (b *Broker) writeBuffered(c *call, resp *httpwire.Response, reencode bool) 
 // chunked for HTTP/1.1. For HTTP/1.0, which cannot read chunked, it writes
 // the body raw with a close.
 func (b *Broker) writeStreamed(c *call, resp *httpwire.Response, reencode, originCloseDelimited bool) error {
-	for _, key := range rewriteHeaders(resp, c.slots) {
+	hit, err := rewriteHeaders(resp, c.slots)
+	for _, key := range hit {
 		_ = b.logStrip(&c.strips, clientIP(c.p), c.host, "response", "secret:"+key)
+	}
+	if err != nil {
+		c.up.discard()
+		_ = writeErr(c.client, 502, "502 Bad Gateway", "origin\n")
+		return err
 	}
 	pairs, keys := scrubPairs(c.slots)
 	sc := httpwire.NewScrubber(resp.Stream, pairs)

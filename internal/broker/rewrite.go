@@ -1,6 +1,9 @@
 package broker
 
 import (
+	"bytes"
+	"strings"
+
 	"pi-fortress/internal/httpwire"
 	"pi-fortress/internal/secrets"
 )
@@ -18,39 +21,64 @@ func scrubPairs(slots map[string]secrets.Slot) ([][2][]byte, []string) {
 	return pairs, keys
 }
 
-// rewriteHeaders changes each live value in response headers to its
-// placeholder, one pass per header. It names the slots that it hit.
-func rewriteHeaders(resp *httpwire.Response, slots map[string]secrets.Slot) []string {
+// rewriteHeaders changes each live value in the reason phrase and in
+// response field values to its placeholder, one pass per header. It names
+// the slots that it hit. The broker cannot rewrite a field name, because
+// the name gives the field its meaning. Thus a live value in a name gives
+// ErrLiveName, and the caller refuses the response. The hit also names
+// that slot, so that the caller logs it.
+func rewriteHeaders(resp *httpwire.Response, slots map[string]secrets.Slot) ([]string, error) {
 	pairs, keys := scrubPairs(slots)
 	if len(pairs) == 0 {
-		return nil
+		return nil, nil
 	}
 	var hit []string
-	counts := make([]int, len(pairs))
-	for i, f := range resp.Fields {
-		for j := range counts {
-			counts[j] = 0
-		}
-		nv := httpwire.ReplaceAll(nil, []byte(f.Value), pairs, counts)
-		changed := false
-		for j, c := range counts {
-			if c > 0 {
-				changed = true
+	for _, f := range resp.Fields {
+		for j, p := range pairs {
+			if bytes.Contains([]byte(f.Name), p[0]) {
 				hit = append(hit, keys[j])
 			}
 		}
-		if changed {
+	}
+	if len(hit) > 0 {
+		return hit, ErrLiveName
+	}
+	counts := make([]int, len(pairs))
+	// changed adds each slot that the last pass hit and resets the counts.
+	changed := func() bool {
+		did := false
+		for j, c := range counts {
+			if c > 0 {
+				did = true
+				hit = append(hit, keys[j])
+				counts[j] = 0
+			}
+		}
+		return did
+	}
+	if code, reason, ok := strings.Cut(resp.Status, " "); ok {
+		nr := httpwire.ReplaceAll(nil, []byte(reason), pairs, counts)
+		if changed() {
+			resp.SetStatus(code + " " + string(nr))
+		}
+	}
+	for i, f := range resp.Fields {
+		nv := httpwire.ReplaceAll(nil, []byte(f.Value), pairs, counts)
+		if changed() {
 			resp.SetIndex(i, string(nv))
 		}
 	}
-	return hit
+	return hit, nil
 }
 
-func rewriteResponse(resp *httpwire.Response, slots map[string]secrets.Slot) []string {
-	hit := rewriteHeaders(resp, slots)
+func rewriteResponse(resp *httpwire.Response, slots map[string]secrets.Slot) ([]string, error) {
+	hit, err := rewriteHeaders(resp, slots)
+	if err != nil {
+		return hit, err
+	}
 	pairs, keys := scrubPairs(slots)
 	if len(pairs) == 0 || len(resp.Body) == 0 {
-		return hit
+		return hit, nil
 	}
 	counts := make([]int, len(pairs))
 	body := httpwire.ReplaceAll(make([]byte, 0, len(resp.Body)), resp.Body, pairs, counts)
@@ -60,5 +88,5 @@ func rewriteResponse(resp *httpwire.Response, slots map[string]secrets.Slot) []s
 		}
 	}
 	resp.Body = body
-	return hit
+	return hit, nil
 }
