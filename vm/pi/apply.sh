@@ -650,15 +650,16 @@ rm -f "${RESOLVED_CARRY}"
 # opened under the old policy keeps the old permission until it closes.
 # render gives a fingerprint of the egress policy of each segment
 # (HOUSE_EGRESS_FP, SEG_EGRESS_FP; render/egressfp.go). Apply keeps the
-# last values in EGRESS_STATE. When a value changes, apply ends the open
-# flows of that segment after the new ruleset is loaded. Then each new
-# flow meets the new policy. The agent needs nothing: its raw chain
-# checks each packet.
+# last values in EGRESS_STATE. When a value changes, or a segment is gone
+# from the policy, apply ends the open flows of that segment after the
+# new ruleset is loaded. Then each new flow meets the new policy. The
+# agent needs nothing: its raw chain checks each packet.
 #
 # A flow to or from an address of this box stays. Thus the SSH session of
-# the operator to the Pi, DNS and DHCP continue. The first apply (no
-# state file) only records the values. A missing conntrack gives a
-# warning, never a failed apply: the new policy is loaded already.
+# the operator to the Pi, DNS and DHCP continue. With no state file (a
+# lost file, or the first apply) each segment counts as changed. A
+# missing conntrack gives a warning, never a failed apply: the new policy
+# is loaded already.
 EGRESS_STATE=/var/lib/pi-fortress/egress.state
 
 # One line for each segment with an egress policy: key, fingerprint, subnet.
@@ -715,17 +716,32 @@ egress_cut() {
 }
 
 # egress_cuts STATE NEW compares NEW (the egress_state lines of this apply)
-# with STATE, ends the flows of each changed segment, then keeps NEW in
-# STATE.
+# with STATE, ends the flows of each changed segment and of each segment
+# that is gone from NEW, then keeps NEW in STATE.
 egress_cuts() {
   local state="$1" new="$2" key fp net old self c
   local -a cut=()
-  if [[ -f "${state}" ]]; then
+  if [[ -s "${state}" ]]; then
     while read -r key fp net; do
       old="$(awk -v k="${key}" '$1 == k { print $2; exit }' "${state}")"
       if [[ -n "${old}" && "${old}" != "${fp}" ]]; then
         cut+=("${key#seg:} ${net}")
       fi
+    done <"${new}"
+    # A removed segment (or house) keeps its subnet in STATE only.
+    while read -r key fp net; do
+      [[ -n "${net}" ]] || continue
+      if ! awk -v k="${key}" '$1 == k { f = 1 } END { exit !f }' "${new}"; then
+        cut+=("${key#seg:} ${net}")
+      fi
+    done <"${state}"
+  else
+    # No record: the last policy is not known, so each segment counts as
+    # changed. Apply cannot tell a lost file from a new box. On a new box
+    # this ends nothing: forwarding stays off until the ruleset is loaded
+    # (below), so no segment has a forwarded flow yet.
+    while read -r key fp net; do
+      cut+=("${key#seg:} ${net}")
     done <"${new}"
   fi
   if [[ "${#cut[@]}" -gt 0 ]]; then

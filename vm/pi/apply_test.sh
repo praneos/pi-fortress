@@ -2717,12 +2717,23 @@ EOF
   st="${ec}/state/egress.state"
   : >"${CT_LOG}"
 
-  # The first apply records the values and ends nothing.
+  # With no state file (a lost file, or the first apply), each segment
+  # counts as changed. An empty file is the same.
   egress_state >"${ec}/new"
+  mkdir -p "${ec}/state"
+  : >"${st}"
+  egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed on an empty state"
+  grep -c -- '^-L -s ' "${CT_LOG}" | grep -qx 3 || fail "an empty state did not end the flows of each segment: $(cat "${CT_LOG}")"
+  : >"${CT_LOG}"
+  mv "${st}" "${ec}/state.old"
   egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "the first egress_cuts failed"
-  [[ -s "${CT_LOG}" ]] && fail "the first apply called conntrack: $(cat "${CT_LOG}")"
+  for _n in 10.78.0.0/24 10.79.0.0/30 10.80.0.0/24; do
+    grep -qx -- "-L -s ${_n}" "${CT_LOG}" || fail "no state file did not end the flows of ${_n}: $(cat "${CT_LOG}")"
+  done
+  grep -q -- '-D -s 10.79.0.2 -d 10.79.0.1' "${CT_LOG}" && fail "no state file ended a flow of the Pi"
   [[ "$(stat -c %a "${st}")" == 600 ]] || fail "the egress state is not 0600"
   grep -qx 'seg:desk bbbb 10.79.0.0/30' "${st}" || fail "the egress state has no desk line: $(cat "${st}")"
+  : >"${CT_LOG}"
 
   # The same values end nothing.
   egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "an unchanged egress_cuts failed"
@@ -2765,6 +2776,25 @@ EOF
   grep -qx 'pi-fortress: WARN conntrack is not installed; the open flows of guest keep the old egress policy until they close (apt-get install -y conntrack)' "${ec}/out" ||
     fail "no warning without conntrack: $(cat "${ec}/out")"
   grep -qx 'seg:guest 9999 10.80.0.0/24' "${st}" || fail "the egress state did not take the value without conntrack"
+
+  # A segment removed from the policy ends its flows, from its old subnet.
+  # So does a removed house.
+  : >"${CT_LOG}"
+  SEG_NAME=(desk) SEG_NET=(10.79.0.0/30) SEG_IP=(10.79.0.1) SEG_EGRESS_FP=(dddd)
+  egress_state >"${ec}/new"
+  egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed on a removed segment"
+  grep -v -- '^-D ' "${CT_LOG}" | sort >"${ec}/ct.sorted"
+  printf '%s\n' '-L -d 10.80.0.0/24' '-L -s 10.80.0.0/24' >"${ec}/ct.want"
+  diff -u "${ec}/ct.want" "${ec}/ct.sorted" || fail "a removed segment did not end its flows, or ended others"
+  grep -q '^seg:guest ' "${st}" && fail "the egress state keeps the removed segment"
+  : >"${CT_LOG}"
+  HOUSE_EGRESS_FP=
+  egress_state >"${ec}/new"
+  egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed on a removed house"
+  grep -qx -- '-L -s 10.78.0.0/24' "${CT_LOG}" || fail "a removed house did not end its flows: $(cat "${CT_LOG}")"
+  grep -q -- '-L -s 10.79.0.0/30' "${CT_LOG}" && fail "a removed house ended the desk flows"
+  egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "a second egress_cuts failed after a removal"
+  grep -c -- '^-L -s ' "${CT_LOG}" | grep -qx 1 || fail "a removal ended flows again at the next apply: $(cat "${CT_LOG}")"
 )
 grep -qF 'egress_cuts "${EGRESS_STATE}"' "${apply}" || fail "apply no longer ends the flows of a changed egress policy"
 _load="$(grep -n '^nft -f /etc/nftables.conf$' "${apply}" | head -1 | cut -d: -f1 || true)"
