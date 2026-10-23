@@ -172,6 +172,8 @@ apply writes a file only when its content changes. apply installs no package. If
 
 `pf upgrade` does not update the OS packages. On a fresh install, `provision.sh` enables `unattended-upgrades`. It installs updates each day and does not reboot (`Automatic-Reboot "false"`). Thus a kernel or core library fix is not active until you reboot the gateway.
 
+To install the OS updates at once, run `sudo apt update && sudo apt full-upgrade` after `sudo pf upgrade -confirm`. If you do not, the daily `unattended-upgrades` run installs the security updates. In both cases, reboot when the `reboot` rung of `pf doctor` is `warn` or `FAIL`.
+
 `pf doctor` shows this on rung `reboot`:
 
 - `warn`: `/var/run/reboot-required` is there. The rung shows its age and the packages from `/var/run/reboot-required.pkgs`. Each package that asks for a reboot writes the flag again, so the age is the time since the last request.
