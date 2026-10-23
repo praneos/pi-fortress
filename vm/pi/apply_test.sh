@@ -2766,6 +2766,7 @@ _start="$(grep -nF 'systemctl restart pi-fortress-observe' "${here}/provision.sh
   ob="${tmp}/obsmove"
   lib="${ob}/var/lib/pi-fortress"
   mkdir -p "${lib}/observe"
+  # shellcheck disable=SC2329 # the eval of the apply step below calls it
   systemctl() { printf '%s\n' "$*" >>"${ob}/systemctl.log"; }
   for _f in observe.json observe.json.lock dns.offset dns-house.offset dns-desk.offset journal.cursor strip.offset \
     alert.offset alert.last house.leases; do
