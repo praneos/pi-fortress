@@ -291,8 +291,9 @@ The lab VM (`vm/agent/provision.sh`) also pins the CA:
 
 - Its first provisioning records the sha256 of the `ca.pem` that it fetches. It records it as `CA_SHA256` in `/etc/pi-fortress/agent.env`. Or it takes `PF_CA_SHA256=<CA_SHA>` from the environment.
 - `routes.sh` fetches `ca.pem` again at each boot. It refuses a `ca.pem` that does not match. It keeps the CA that is already trusted.
+- The exception is a rotation with `pf engine ca` ([fence.md](fence.md) §5.2f). `routes.sh` takes a set that the pinned CA signed, and pins that set.
 
-When the CA of the Pi really changes, do one of these:
+When the CA of the Pi changes without a rotation (for example, a new `pf engine -init-ca`), do one of these:
 
 - Set `CA_SHA256` in that file to the new hash.
 - Delete the line and provision again (`make agent-provision`). This records the CA that it then fetches.

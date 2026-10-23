@@ -339,7 +339,8 @@ them itself, and the core echo reflects the live token back by design (above).
 
 CA path: `generated/egress-ca.pem` in the policy directory
 (`vm/policy/generated/egress-ca.pem` in a source tree). It is installed only
-on the agent.
+on the agent. During a CA rotation it holds more than one certificate
+(§5.2f).
 
 **The domain block list is enforced twice.** dnsmasq sinkholes a listed name
 for any client that asks the Pi. A client that does not ask (`curl
@@ -886,6 +887,77 @@ with the `renew` command. A restart forgets which warnings went out. This
 costs a maximum of one repeated row. The broker writes an expired row only
 within a day of the deadline. Thus it does not announce again a slot that is
 already stale.
+
+### 5.2f Egress CA rotation
+
+The engine signs each leaf with one root, `/var/lib/pi-fortress/engine/ca.pem`.
+Agents trust the certificates in the `ca.pem` that www serves
+(`http://PI_IP/ca.pem`). `pf engine ca` changes the root in two steps with an
+overlap. Thus no agent loses HTTPS when the root changes.
+
+| Step | The engine signs with | The served `ca.pem` holds |
+|---|---|---|
+| before | the current root | the current root |
+| `sudo pf engine ca rotate` | the current root | current root, next root, link |
+| `sudo pf engine ca promote` | the next root, which is now current | current root, old root, link |
+| `sudo pf engine ca retire` | the current root | the current root |
+
+The link is a CA certificate with the key of the newest root, signed by the
+root before it. An agent adds a new root only through a link that a root it
+already trusts signed (see "The agent check" below).
+
+Each step holds the apply lock and writes the files beside `ca.pem`:
+`ca-next.pem` (cert and key, `0600`), `ca-link.pem`, `ca-old.pem`, and the
+trust set `ca-trust.pem`. Then it runs `pf apply`. apply copies the trust set
+to www, to `/etc/pi-fortress/egress-ca.pem` and to `generated/egress-ca.pem`,
+and restarts the engine. `-apply=false` does not run apply. Without a rotation,
+the trust set is the same bytes as `ca-cert.pem`. Thus a pin of the CA does not
+change when you upgrade.
+
+`sudo pf engine ca status` shows each root with its fingerprint and end date,
+the sha256 of the trust set, and the next step. The `ca root` rung of
+`sudo pf doctor` shows the same. It warns when the current root expires in
+less than 90 days.
+
+**Procedure.**
+
+1. Run `sudo pf engine ca rotate`.
+2. On each lab agent VM, run `sudo systemctl restart pi-fortress-agent-routes`,
+   or reboot the VM. `routes.sh` fetches the new set, checks it, puts each
+   certificate in the system store, and records the new pin. Its log says
+   `is a CA set that the pinned CA signed; taking it`. The VM must have the
+   `routes.sh` of this release and `openssl`.
+3. On each box that you enrolled with `setup.sh`, run `setup.sh` again with
+   the trust set sha256 from `pf engine ca status`. `setup.sh` does not fetch
+   the CA again by itself.
+4. Run `sudo pf engine ca promote`. The engine restarts and signs with the new
+   root.
+5. On each desk with `INSPECT=on`, copy `ca-cert.pem` again and run
+   `setup.sh ca` (pi_setup.md). The desk trusts one root. Thus HTTPS through
+   the desk fails from step 4 until this step.
+6. When no agent needs the old root, run `sudo pf engine ca retire`. An agent
+   removes the old root from its store at its next `routes.sh` run.
+
+`retire` before `promote` stops a rotation: it removes the next root and the
+link, and the engine continues with the current root.
+
+**The agent check.** A VM pins the sha256 of the set that it trusts
+(`CA_SHA256` in `agent.env`, lab.md). When the fetched set has a different
+hash, `routes.sh` (`ca_extends`) takes it only when each certificate in it is
+one of these:
+
+- A certificate in the pinned set.
+- A link: a CA certificate that a certificate in the pinned set signed.
+- A root with the key of such a link.
+
+Thus a device that answers for the Pi on the agent cable can copy the real set
+and add a root of its own, but the box refuses that set: no trusted root signed
+a link to that key. A set with fewer certificates is accepted, because it only
+removes trust. A VM that did not fetch between `rotate` and `retire` keeps the
+old root and refuses the new set. Set its pin again (lab.md).
+
+A root that has expired cannot sign a link that agents accept. Rotate before
+the end date. `pf doctor` warns 90 days before it.
 
 ### 5.3 Strip alerts
 
