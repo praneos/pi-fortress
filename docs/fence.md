@@ -152,7 +152,7 @@ blacklisted destinations in prerouting, *before* the redirect. Thus the
 canary `192.0.2.1` still times out.
 
 `CANARY` is the challenge kind (`docs/challenge_rules.md`). You mint it like
-any other kind: `pf enroll mint --kind CANARY --value ...`. A `*` line does
+any other kind: `pf enroll mint --kind CANARY --stdin`. A `*` line does
 not cover it, so the lab echo never reflects it. The shipped `core.hosts`
 binds it nowhere. Thus the fence refuses every use of the placeholder and
 strips every live value.
