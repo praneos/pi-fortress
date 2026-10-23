@@ -566,7 +566,10 @@ slot, kind, and SNI. `kind_not_allowed_for_sni`,
 `alert` one time for each broker start. These seven are not an operational
 fault to fix. They show the fence
 catching a credential aimed where it may not go. This is the signature of a
-compromised or badly broken agent.
+compromised or badly broken agent. A refresh response that the broker
+refuses (the harvest cannot read the new pair, or a token shape stays after
+the scrub) writes `harvest_leftover` with the slot. It is always marked
+`alert`.
 
 The broker does not read a streamed body (over 1 MiB, or chunked) before the
 head goes to the origin server. Thus the broker cannot refuse a placeholder

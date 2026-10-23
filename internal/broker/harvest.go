@@ -8,6 +8,7 @@ import (
 	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/fence"
 	"pi-fortress/internal/httpwire"
+	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/secrets"
 )
 
@@ -109,6 +110,27 @@ func (b *Broker) residue(resp *httpwire.Response) bool {
 		}
 	}
 	return false
+}
+
+// CauseHarvestLeftover: the broker refused a refresh response. The harvest
+// could not read the new pair, or a token shape stayed in the response
+// after the scrub. The agent gets one 502. A provider format change looks
+// the same, so the operator must see each one.
+const CauseHarvestLeftover fence.RefusalCause = "harvest_leftover"
+
+// logHarvestRefused writes the alert row for a refused refresh response.
+// It names the slot that the refresh spent. It does not use the row cap of
+// the request: a call writes this row one time at most.
+func (b *Broker) logHarvestRefused(c *call) {
+	_ = b.Logs.Refused(jsonl.Refused{
+		Host:     c.host,
+		SNI:      c.p.SNI,
+		Where:    "response",
+		Cause:    string(CauseHarvestLeftover),
+		Slot:     c.harvestSlot,
+		ClientIP: clientIP(c.p),
+		Alert:    true,
+	})
 }
 
 // withMinted puts the values that a harvest just read on top of the slots

@@ -721,6 +721,9 @@ func (b *Broker) writeBuffered(c *call, resp *httpwire.Response, reencode bool) 
 	if c.harvestSlot != "" {
 		minted, err := b.harvest(c.harvestSlot, resp)
 		if err != nil {
+			if errors.Is(err, ErrHarvest) {
+				b.logHarvestRefused(c)
+			}
 			c.up.discard()
 			_ = writeErr(c.client, 502, "502 Bad Gateway", "harvest\n")
 			return err
@@ -741,6 +744,7 @@ func (b *Broker) writeBuffered(c *call, resp *httpwire.Response, reencode bool) 
 	// broker did not store: a shape that the harvest did not know, or a
 	// status that it does not harvest. The agent must not get it.
 	if c.harvestSlot != "" && b.residue(resp) {
+		b.logHarvestRefused(c)
 		c.up.discard()
 		_ = writeErr(c.client, 502, "502 Bad Gateway", "harvest\n")
 		return ErrResidue
