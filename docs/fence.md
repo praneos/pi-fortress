@@ -529,9 +529,10 @@ also give the slot ID and kind to a destination that the agent selected.
 The detail is not deleted. It only goes to a different place. The broker
 writes each cause to the strip log as `substitution_refused`, with the cause,
 slot, kind, and SNI. `kind_not_allowed_for_sni`,
-`placeholder_outside_header`, `encoded_body_token`, `key_in_header_name`,
-and `key_in_method` are always marked `alert`. Each other cause is marked
-`alert` one time for each broker start. These five are not an operational fault to fix. They show the fence
+`placeholder_outside_header`, `placeholder_in_ws` (5.3c),
+`encoded_body_token`, `key_in_header_name`, and `key_in_method` are always
+marked `alert`. Each other cause is marked `alert` one time for each broker
+start. These six are not an operational fault to fix. They show the fence
 catching a credential aimed where it may not go. This is the signature of a
 compromised or badly broken agent.
 
@@ -1021,6 +1022,8 @@ These end the session:
 - Fragmented or oversized control frames (before or after the scrub).
 - Agent-to-origin messages past `Broker.MaxMessage` (5 MiB, fragments
   summed, 1009).
+- A placeholder in an agent-to-origin message, ping, pong or close reason
+  (1008). Refer to the end of this section.
 
 A message that would take the broker past its byte budget ends the session
 with 1013. The broker streams origin-to-agent messages, with a bound of
@@ -1031,10 +1034,33 @@ one line each on `unknown.jsonl` (`where=ws_open` / `ws_close`). The
 `ws_close` line has the byte counts `ws_sent` and `ws_recv`. Reason: the strip
 log is the incident channel, and a websocket open is not an incident.
 
-Substitution does **not** occur inside frames. Only stripping occurs. A frame
-is opaque application data, with no field that the fence owns. A rewrite of a
-placeholder into a live token there would give the agent a credential that it
-never held. The fence could not scrub that credential back out of the reply.
+Substitution does **not** occur inside frames. A frame is opaque application
+data, with no field that the fence owns. A rewrite of a placeholder into a
+live token there would give the agent a credential that it never held. The
+fence could not scrub that credential back out of the reply.
+
+Thus the broker refuses a placeholder in a frame from the agent. It does not
+strip it. The scan runs on the reassembled message, so a placeholder split
+across fragments is also found. It also runs on each ping, pong and close
+payload. When the scan finds a placeholder:
+
+- The broker does not forward that frame.
+- The origin server gets a close with 1001, the same close as for size. Thus
+  the origin server cannot tell that the fence found a placeholder.
+- The agent gets a close with 1008 (policy violation).
+- The strip log gets a `substitution_refused` row with
+  `cause=placeholder_in_ws`, `where=ws`, the slot and the kind. It is always
+  marked `alert`, the same as `placeholder_outside_header` (5.2b).
+
+A placeholder that goes out as written gives the slot ID and the kind to the
+origin server. Data in a frame can also come back past the literal scrub, as
+data in a body can. Live values and token-prefix matches are still stripped,
+as before.
+
+This also applies to a placeholder that the agent got from the origin
+server. After a substitution, the broker writes a reflected live value back
+to the agent as its placeholder. If the agent then sends that text back in a
+frame, the broker closes the session.
 
 `Idle` becomes the gap between frames. Traffic in either direction resets it.
 The lifetime ceiling, not `Idle`, bounds a subscription that legitimately

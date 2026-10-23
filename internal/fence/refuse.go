@@ -65,6 +65,12 @@ const (
 	// already went out. Thus the copy stops there, and the request never
 	// completes. The fence logs it, and does not send a distinct response.
 	CausePlaceholderInStream RefusalCause = "placeholder_in_streamed_body"
+	// CausePlaceholderInWS is a placeholder in a websocket message, ping,
+	// pong or close reason from the agent. A frame is opaque application
+	// data, so the fence substitutes into no frame (NewScanner). Thus the
+	// broker does not forward the frame and closes the session. It is
+	// attempted egress, and it alerts like CauseOutsideHeader.
+	CausePlaceholderInWS RefusalCause = "placeholder_in_ws"
 	// CauseGitPushNotAllowed is a git smart-HTTP push to a repo that is
 	// not in git_push.allow, or a push-shaped target with no single repo to
 	// examine (docs/git_push.md). It is not an alert: the operator writes

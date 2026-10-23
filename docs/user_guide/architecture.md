@@ -233,4 +233,4 @@ The broker refuses a placeholder in a location where its kind is not approved. T
     - If a streamed body has a placeholder, the gateway stops the connection to the origin server before the request completes. The log entry is `placeholder_in_streamed_body`.
 - **Foreign live tokens in a streamed body.** The detection rules are the same as for a buffered body. In the two cases, the broker finds a match only in a 4096-byte window.
 - **Responses with `br` (Brotli) or `zstd` compression.** The scrub cannot read these responses. If the request had no substituted credential, the broker sends the response without a change and logs it. If the request had a substituted credential, the gateway refuses the response with `502`. Reason: the response can contain a live value.
-- **WebSocket frames.** The broker scrubs frames for live tokens. It never replaces placeholders in frames.
+- **WebSocket frames.** The broker scrubs frames for live tokens. It never replaces placeholders in frames. If a frame from the agent has a placeholder, the broker does not forward that frame and closes the connection (code 1008). The log entry is `placeholder_in_ws`.

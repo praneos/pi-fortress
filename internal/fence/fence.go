@@ -1024,6 +1024,8 @@ func (s *scanner) wrapStream(req *httpwire.Request) *StreamStrips {
 // fence owns. A placeholder rewritten into a live token there would give
 // the agent a credential that it did not have. The fence could not scrub
 // that credential out of the reply. Inside frames, the fence only strips.
+// The broker refuses a placeholder in a frame before this scan
+// (CausePlaceholderInWS).
 type Scanner struct{ s *scanner }
 
 func NewScanner(ctx Ctx, req *httpwire.Request, pol *corepolicy.Policy, slots map[string]secrets.Slot) *Scanner {
