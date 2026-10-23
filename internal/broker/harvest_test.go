@@ -353,3 +353,41 @@ func TestRefusedRefreshResponseAlerts(t *testing.T) {
 		})
 	}
 }
+
+// Some servers send an empty or null refresh_token when they do not rotate
+// it. The broker stores the new access token only and keeps the old refresh
+// token. A refresh_token with a value that the store cannot keep still
+// refuses the response.
+func TestRefreshResponseEmptyRefreshToken(t *testing.T) {
+	newOAT := "sk-ant-oat01-" + strings.Repeat("N", 64)
+	oldORT := "b0b1b2b3b4b5b6b7_CLAUDE_ORT=sk-ant-ort01-" + strings.Repeat("B", 64)
+	for _, tc := range []struct {
+		ort    string
+		code   int
+		stored bool
+	}{
+		{`""`, 200, true},
+		{`null`, 200, true},
+		{`"bad#value"`, 502, false},
+	} {
+		t.Run(tc.ort, func(t *testing.T) {
+			b, path := testBroker(t)
+			fakeUpstream(t, b, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"access_token":"` + newOAT + `","refresh_token":` + tc.ort + `}`))
+			})
+			p := preamble.Preamble{SNI: "api.anthropic.com", OrigDst: netip.MustParseAddrPort("8.8.8.8:443")}
+			reqBody := `{"grant_type":"refresh_token","refresh_token":"pf_b0b1b2b3b4b5b6b7_CLAUDE_ORT"}`
+			raw := "POST /v1/oauth/token HTTP/1.1\r\nHost: api.anthropic.com\r\n" +
+				"Content-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(reqBody)) + "\r\n\r\n" + reqBody
+			resp, body := roundtripStream(t, b, p, raw)
+			if resp.Code != tc.code || strings.Contains(string(body), newOAT) {
+				t.Fatalf("code %d body %q", resp.Code, body)
+			}
+			env, _ := os.ReadFile(path)
+			if strings.Contains(string(env), "b0b1b2b3b4b5b6b7_CLAUDE_OAT="+newOAT) != tc.stored || !strings.Contains(string(env), oldORT) {
+				t.Fatalf("store:\n%s", env)
+			}
+		})
+	}
+}

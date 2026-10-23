@@ -52,11 +52,13 @@ func (b *Broker) harvest(slotID string, resp *httpwire.Response) ([]secrets.Slot
 	// refuse it. A value that it did not store is a value that it does not
 	// scrub. Thus a 200 with no access_token that it can read, or with a
 	// refresh_token that it cannot read, never reaches the agent. A 200
-	// without a refresh_token is valid: some servers do not rotate it.
+	// without a refresh_token is valid: some servers do not rotate it. Some
+	// servers say the same with an empty string or null. These carry no
+	// value, so the broker stores the access token only.
 	f, ok := fence.StrictFields(resp.Body, "access_token", "refresh_token")
 	if resp.Code == 200 {
-		ort, hasORT := f["refresh_token"]
-		if !ok || !secrets.ValidLive(f["access_token"]) || hasORT && !secrets.ValidLive(ort) {
+		ort := f["refresh_token"]
+		if !ok || !secrets.ValidLive(f["access_token"]) || ort != "" && !secrets.ValidLive(ort) {
 			return nil, ErrHarvest
 		}
 	}

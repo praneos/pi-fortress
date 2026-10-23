@@ -196,11 +196,12 @@ func RefreshTokenField(body []byte) (string, bool) {
 // StrictFields reads the named members of body with the RefreshTokenField
 // rule, for each key: one top-level JSON object, each key spelled exactly
 // once and in no other case, each value a string with no escape in it. A key
-// that is absent has no entry. For all other input, ok == false. The broker
-// reads a refresh response with it. A loose read there stores one value and
-// lets a different one through to the agent.
+// that is absent has no entry. A key with the value null also has no entry,
+// but it still counts for the once-only rule. For all other input, ok ==
+// false. The broker reads a refresh response with it. A loose read there
+// stores one value and lets a different one through to the agent.
 func StrictFields(body []byte, keys ...string) (map[string]string, bool) {
-	spans, ok := fieldSpans(body, keys)
+	spans, ok := fieldSpans(body, keys, true)
 	if !ok {
 		return nil, false
 	}
@@ -214,19 +215,22 @@ func StrictFields(body []byte, keys ...string) (map[string]string, bool) {
 // refreshTokenSpan is the location of the RefreshTokenField value in body,
 // without the quotes.
 func refreshTokenSpan(body []byte) ([2]int, bool) {
-	spans, ok := fieldSpans(body, []string{"refresh_token"})
+	spans, ok := fieldSpans(body, []string{"refresh_token"}, false)
 	sp, found := spans["refresh_token"]
 	return sp, ok && found
 }
 
 // fieldSpans is the location of each StrictFields value in body, without
-// the quotes.
-func fieldSpans(body []byte, keys []string) (map[string][2]int, bool) {
+// the quotes. When nullAbsent is true, a null value gives no span. The
+// fence never reads a request body this way. There, a null refresh_token
+// fails the read, and the body binds nothing.
+func fieldSpans(body []byte, keys []string, nullAbsent bool) (map[string][2]int, bool) {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
 		return nil, false
 	}
 	spans := map[string][2]int{}
+	seen := map[string]bool{}
 	for dec.More() {
 		t, err := dec.Token()
 		if err != nil {
@@ -246,12 +250,16 @@ func fieldSpans(body []byte, keys []string) (map[string][2]int, bool) {
 			}
 			continue
 		}
-		if _, dup := spans[want]; key != want || dup {
+		if key != want || seen[want] {
 			return nil, false
 		}
+		seen[want] = true
 		from := int(dec.InputOffset())
 		if t, err = dec.Token(); err != nil {
 			return nil, false
+		}
+		if t == nil && nullAbsent {
+			continue
 		}
 		if _, ok := t.(string); !ok {
 			return nil, false

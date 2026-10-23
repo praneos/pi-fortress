@@ -174,9 +174,29 @@ func TestRefreshTokenField(t *testing.T) {
 	for _, body := range []string{
 		``, `null`, `{}`, `{"refresh_token":1}`, `{"refresh_token":"a\"b"}`, `{"refresh_token":"a\u0062"}`,
 		`{"refresh_token":"a","refresh_token":"a"}`, `{"Refresh_Token":"a"}`, `{"refresh_token":"a"}x`, `{"refresh_token":"a"`,
+		`{"refresh_token":null}`,
 	} {
 		if got, ok := RefreshTokenField([]byte(body)); ok {
 			t.Errorf("%s: read %q", body, got)
+		}
+	}
+}
+
+// StrictFields reads a null value as an absent key. The null still counts
+// for the once-only rule, so a second key or a case variant next to it
+// fails the read.
+func TestStrictFieldsNull(t *testing.T) {
+	f, ok := StrictFields([]byte(`{"access_token":"abc","refresh_token":null}`), "access_token", "refresh_token")
+	if _, has := f["refresh_token"]; !ok || has || f["access_token"] != "abc" {
+		t.Fatalf("%v %v", f, ok)
+	}
+	for _, body := range []string{
+		`{"refresh_token":null,"refresh_token":"a"}`, `{"refresh_token":"a","refresh_token":null}`,
+		`{"refresh_token":null,"refresh_token":null}`, `{"refresh_token":null,"Refresh_Token":"a"}`,
+		`{"Refresh_Token":null}`, `{"refresh_token":"a\u0062"}`, `{"refresh_token":[null]}`,
+	} {
+		if got, ok := StrictFields([]byte(body), "access_token", "refresh_token"); ok {
+			t.Errorf("%s: read %v", body, got)
 		}
 	}
 }
