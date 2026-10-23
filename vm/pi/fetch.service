@@ -29,3 +29,53 @@ RestartSec=2min
 TimeoutStartSec=15min
 Nice=10
 IOSchedulingClass=idle
+# Root, with a sandbox. apply --refresh changes the box: it loads nft,
+# sets sysctls, adds the daemon accounts, writes /etc and restarts units.
+# Each of these needs root, so a User= here would stop the refresh. The
+# sandbox keeps the rest of the system out of reach.
+#
+# Resource caps (pf-broker.service explains the scheme). The run is pf
+# fetch, pf compile and nft with the full feed sets. Each feed body is
+# 8 MiB at most.
+MemoryHigh=768M
+MemoryMax=1G
+TasksMax=256
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
+ProtectSystem=strict
+# Not ProtectKernelTunables: apply writes net.ipv4.ip_forward and the
+# conntrack and ARP sysctls, and a failed ip_forward write stops it.
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+# Not RestrictSUIDSGID: apply makes setgid directories (the fake-IP
+# journal directory is 2750).
+# AF_NETLINK is for nft, ip, conntrack and ss. AF_INET and AF_INET6 are
+# for the feed download. AF_UNIX is for systemctl and nmcli.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# A call outside the set fails with EPERM. A kill would stop the script
+# between two steps of a change to the box, with no message.
+SystemCallErrorNumber=EPERM
+# NET_ADMIN: nft, ip, conntrack and the network sysctls. CHOWN, FOWNER,
+# FSETID, DAC_OVERRIDE and DAC_READ_SEARCH: the files of the daemon
+# accounts. LINUX_IMMUTABLE: chattr on /etc/resolv.conf. SYS_PTRACE: ss -p
+# reads the sshd sessions to keep the admin SSH link (ssh_local_addrs).
+# AUDIT_WRITE: useradd and groupadd.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_FOWNER CAP_FSETID CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_LINUX_IMMUTABLE CAP_SYS_PTRACE CAP_AUDIT_WRITE
+# All of /etc: useradd replaces /etc/passwd and /etc/group through a
+# rename, and apply writes nftables.conf, resolv.conf and files in many
+# directories under /etc. /usr/local: apply installs pf there. The tree:
+# pf fetch writes only generated/. A full apply makes generated/, and the
+# timer exists only after a full apply. /run/pi-fortress: the apply lock.
+# Each "-" path is optional, because a box has only one of the two trees.
+ReadWritePaths=/etc /usr/local /var/lib/pi-fortress /var/log/pi-fortress -/var/lib/systemd/timesync -/run/pi-fortress -/opt/pi-fortress/vm/policy/generated -/vagrant/vm/policy/generated
+# A --local apply does not use the secrets, the CA key or the claims. Only
+# a full apply does.
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www

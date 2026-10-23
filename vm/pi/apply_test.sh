@@ -2792,6 +2792,66 @@ _start="$(grep -nF 'systemctl restart pi-fortress-observe' "${here}/provision.sh
   fi
 )
 
+# The root oneshots run sandboxed. fetch runs apply --refresh, and ship and
+# ship-deadman run a full apply. All three stay root, because apply loads
+# nft, sets sysctls and adds accounts.
+for _u in fetch ship ship-deadman; do
+  for _l in NoNewPrivileges=yes PrivateTmp=yes ProtectSystem=strict ProtectKernelModules=yes ProtectKernelLogs=yes \
+    ProtectControlGroups=yes RestrictNamespaces=yes MemoryMax=1G TasksMax=256 SystemCallArchitectures=native \
+    SystemCallFilter=@system-service 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK'; do
+    grep -qxF "${_l}" "${here}/${_u}.service" || fail "${_u}.service has no '${_l}'"
+  done
+  grep -q '^User=' "${here}/${_u}.service" && fail "${_u}.service names a User=; apply needs root"
+  # apply writes sysctls, and makes setgid directories.
+  grep -qE '^(ProtectKernelTunables|RestrictSUIDSGID)=yes' "${here}/${_u}.service" &&
+    fail "${_u}.service blocks the sysctl writes or the setgid directories of apply"
+  # ss -p reads the sshd sessions of another uid only with SYS_PTRACE.
+  if grep -qF 'ss -Htnp' "${apply}"; then
+    grep '^CapabilityBoundingSet=' "${here}/${_u}.service" | grep -qw CAP_SYS_PTRACE ||
+      fail "${_u}.service takes SYS_PTRACE away, so apply cannot see the admin SSH sessions"
+  fi
+done
+[[ "$(grep '^ProtectHome=' "${here}/fetch.service")" == "ProtectHome=yes" ]] || fail "fetch.service can read /home"
+[[ "$(grep '^CapabilityBoundingSet=' "${here}/fetch.service")" == "CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_FOWNER CAP_FSETID CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_LINUX_IMMUTABLE CAP_SYS_PTRACE CAP_AUDIT_WRITE" ]] ||
+  fail "fetch.service has a different capability set"
+[[ "$(grep '^ReadWritePaths=' "${here}/fetch.service")" == "ReadWritePaths=/etc /usr/local /var/lib/pi-fortress /var/log/pi-fortress -/var/lib/systemd/timesync -/run/pi-fortress -/opt/pi-fortress/vm/policy/generated -/vagrant/vm/policy/generated" ]] ||
+  fail "fetch.service has a different set of writable paths"
+[[ "$(grep '^InaccessiblePaths=' "${here}/fetch.service")" == "InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www" ]] ||
+  fail "fetch.service can read the secrets, the CA key or the claims"
+# Those three are inaccessible to fetch. Thus the --local half of apply,
+# which fetch runs, must not use them.
+_local="$(sed -n '1,/^if \[\[ "${LOCAL_ONLY}" -eq 1 \]\]; then$/p' "${apply}")"
+grep -qE 'BROKER_DIR|ENGINE_DIR|/etc/pi-fortress/broker([/"[:space:]]|$)|/var/lib/pi-fortress/(engine|www)|[{]WWW[}]' <<<"${_local}" &&
+  fail "apply --local uses a path that fetch.service cannot read"
+# The swap renames below /opt. A home is read: harden_ssh counts the login keys.
+for _u in ship ship-deadman; do
+  [[ "$(grep '^ProtectHome=' "${here}/${_u}.service")" == "ProtectHome=read-only" ]] ||
+    fail "${_u}.service must read /home for the key check of harden_ssh, and not write it"
+  [[ "$(grep '^ReadWritePaths=' "${here}/${_u}.service")" == "ReadWritePaths=/etc /opt /usr/local /var/lib/pi-fortress /var/log/pi-fortress -/var/lib/systemd/timesync -/run/pi-fortress -/vagrant/vm/policy/generated" ]] ||
+    fail "${_u}.service has a different set of writable paths"
+done
+grep -qxF 'HARDEN_HOME=/home' "${apply}" || fail "harden_ssh no longer reads /home; ship.service can drop ProtectHome=read-only"
+# A revert is the same swap and apply as a ship, so the two sandboxes are the same.
+diff <(grep -E '^[A-Z][A-Za-z]+=' "${here}/ship.service" | grep -vE '^(Description|Documentation|After|ExecStart|TimeoutStartSec)=') \
+  <(grep -E '^[A-Z][A-Za-z]+=' "${here}/ship-deadman.service" | grep -vE '^(Description|Documentation|After|ExecStart|TimeoutStartSec)=') >/dev/null ||
+  fail "ship-deadman.service and ship.service have different sandboxes"
+# Each path without "-" exists before the unit can start. apply makes the
+# state and log directories before it enables the timers. provision.sh
+# makes them before it enables ship.path. apply makes the lock directory
+# and the tmpfiles line that makes it again at each boot.
+_mk="$(grep -nxF 'install -d -m 0755 /var/log/pi-fortress /var/lib/pi-fortress' "${apply}" | head -1 | cut -d: -f1 || true)"
+for _t in pi-fortress-ship-deadman.timer pi-fortress-fetch.timer; do
+  _start="$(grep -nF "systemctl enable --now ${_t}" "${apply}" | head -1 | cut -d: -f1 || true)"
+  [[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+    fail "apply does not make /var/lib/pi-fortress and /var/log/pi-fortress before it enables ${_t}"
+done
+_mk="$(grep -nxF 'install -d -m 0755 /var/lib/pi-fortress /var/log/pi-fortress' "${here}/provision.sh" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nxF 'systemctl enable --now pi-fortress-ship.path' "${here}/provision.sh" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "provision.sh does not make /var/lib/pi-fortress and /var/log/pi-fortress before it enables ship.path"
+grep -qF 'echo "d ${LOCK_DIR} 0750 root pf-fence -" >/etc/tmpfiles.d/pi-fortress.conf' "${apply}" ||
+  fail "apply no longer writes the tmpfiles line for /run/pi-fortress"
+
 # Each file that apply and provision write with > gets its mode from the
 # umask. Thus neither script may inherit the umask of the caller.
 for _s in apply.sh provision.sh; do

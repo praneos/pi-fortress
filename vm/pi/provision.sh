@@ -240,7 +240,9 @@ systemctl restart pi-fortress-www
 PF_INCOMING=/var/lib/pi-fortress/incoming
 PF_SHIP_HOME=/var/lib/pi-fortress/pfship
 PF_SHIP_PUBKEY="${PF_SHIP_PUBKEY:-/etc/pi-fortress/pfship.pub}"
-install -d -m 0755 /var/lib/pi-fortress
+# ship.service names both directories in ReadWritePaths, and does not
+# start without them. A ship can come before the first apply.
+install -d -m 0755 /var/lib/pi-fortress /var/log/pi-fortress
 if ! id -u pfship >/dev/null 2>&1; then
   useradd --system --user-group --no-create-home --home-dir "${PF_SHIP_HOME}" --shell /bin/sh pfship
 fi
