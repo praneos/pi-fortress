@@ -2675,7 +2675,8 @@ for _s in apply.sh provision.sh; do
 done
 
 # An egress change of a segment ends its open flows, except the flows of
-# the box itself. conntrack and ip are fakes: the test reads no real table.
+# the box itself and the flows between the agent, the house and the
+# segments. conntrack and ip are fakes: the test reads no real table.
 (
   # shellcheck source=/dev/null
   source <(sed -n -e '/^egress_state() {$/,/^}$/p' -e '/^egress_cut() {$/,/^}$/p' -e '/^egress_cuts() {$/,/^}$/p' "${apply}")
@@ -2698,8 +2699,14 @@ echo "5: eth0.79    inet 10.79.0.1/30 brd 10.79.0.3 scope global eth0.79"
 EOF
   chmod +x "${ec}/bin/conntrack" "${ec}/bin/ip"
   # The desk (10.79.0.2) to the web twice, to the Pi on the segment and
-  # uplink addresses, and UDP out. Into the desk: SSH_FROM, and the Pi.
+  # uplink addresses, UDP out, and SSH out through ssh_allow. Admin SSH
+  # to an agent (10.77.0.20) from the desk (SSH_TO), the house admin
+  # (HOUSE_SSH_TO) and a guest host. Into the desk: SSH_FROM, and the Pi.
   cat >"${ec}/list-src" <<'EOF'
+tcp      6 431999 ESTABLISHED src=10.79.0.2 dst=203.0.113.9 sport=50005 dport=22 src=203.0.113.9 dst=192.168.1.10 sport=22 dport=50005 [ASSURED] mark=0 use=1
+tcp      6 431999 ESTABLISHED src=10.79.0.2 dst=10.77.0.20 sport=50004 dport=22 src=10.77.0.20 dst=10.79.0.2 sport=22 dport=50004 [ASSURED] mark=0 use=1
+tcp      6 431999 ESTABLISHED src=10.78.0.20 dst=10.77.0.20 sport=40002 dport=22 src=10.77.0.20 dst=10.78.0.20 sport=22 dport=40002 [ASSURED] mark=0 use=1
+tcp      6 431999 ESTABLISHED src=10.80.0.5 dst=10.77.0.20 sport=40003 dport=22 src=10.77.0.20 dst=10.80.0.5 sport=22 dport=40003 [ASSURED] mark=0 use=1
 tcp      6 431999 ESTABLISHED src=10.79.0.2 dst=198.51.100.7 sport=50000 dport=443 src=198.51.100.7 dst=192.168.1.10 sport=443 dport=50000 [ASSURED] mark=0 use=1
 tcp      6 431999 ESTABLISHED src=10.79.0.2 dst=198.51.100.7 sport=50001 dport=443 src=198.51.100.7 dst=192.168.1.10 sport=443 dport=50001 [ASSURED] mark=0 use=1
 tcp      6 431999 ESTABLISHED src=10.79.0.2 dst=10.79.0.1 sport=50002 dport=22 src=10.79.0.1 dst=10.79.0.2 sport=22 dport=50002 [ASSURED] mark=0 use=1
@@ -2712,7 +2719,7 @@ icmp     1 29 src=10.79.0.1 dst=10.79.0.2 type=8 code=0 id=7 src=10.79.0.2 dst=1
 EOF
   export CT_LOG="${ec}/ct.log" CT_DIR="${ec}"
   PATH="${ec}/bin:${PATH}"
-  PI_IP=10.77.0.1 HOUSE_IP=10.78.0.1 HOUSE_NET=10.78.0.0/24 HOUSE_EGRESS_FP=aaaa
+  PI_IP=10.77.0.1 AGENT_NET=10.77.0.0/24 HOUSE_IP=10.78.0.1 HOUSE_NET=10.78.0.0/24 HOUSE_EGRESS_FP=aaaa
   SEG_NAME=(desk guest) SEG_NET=(10.79.0.0/30 10.80.0.0/24) SEG_IP=(10.79.0.1 10.80.0.1) SEG_EGRESS_FP=(bbbb cccc)
   st="${ec}/state/egress.state"
   : >"${CT_LOG}"
@@ -2731,6 +2738,7 @@ EOF
     grep -qx -- "-L -s ${_n}" "${CT_LOG}" || fail "no state file did not end the flows of ${_n}: $(cat "${CT_LOG}")"
   done
   grep -q -- '-D -s 10.79.0.2 -d 10.79.0.1' "${CT_LOG}" && fail "no state file ended a flow of the Pi"
+  grep -q -- '-D -s 10.78.0.20 -d 10.77.0.20' "${CT_LOG}" && fail "no state file ended the admin SSH from the house to an agent"
   [[ "$(stat -c %a "${st}")" == 600 ]] || fail "the egress state is not 0600"
   grep -qx 'seg:desk bbbb 10.79.0.0/30' "${st}" || fail "the egress state has no desk line: $(cat "${st}")"
   : >"${CT_LOG}"
@@ -2739,14 +2747,16 @@ EOF
   egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "an unchanged egress_cuts failed"
   [[ -s "${CT_LOG}" ]] && fail "an unchanged policy called conntrack"
 
-  # A new desk value ends the desk flows, and only those.
+  # A new desk value ends the desk flows to the outside, and only those.
+  # The SSH sessions between the agent, the house and the segments stay:
+  # isolate_ct decides them.
   SEG_EGRESS_FP=(dddd cccc)
   egress_state >"${ec}/new"
   egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed on a changed desk"
   sort "${CT_LOG}" >"${ec}/ct.sorted"
-  printf '%s\n' '-D -s 10.78.0.20 -d 10.79.0.2' '-D -s 10.79.0.2 -d 192.0.2.1' '-D -s 10.79.0.2 -d 198.51.100.7' \
+  printf '%s\n' '-D -s 10.79.0.2 -d 192.0.2.1' '-D -s 10.79.0.2 -d 198.51.100.7' '-D -s 10.79.0.2 -d 203.0.113.9' \
     '-L -d 10.79.0.0/30' '-L -s 10.79.0.0/30' >"${ec}/ct.want"
-  diff -u "${ec}/ct.want" "${ec}/ct.sorted" || fail "the desk cut deleted the wrong flows (a flow of the Pi, or the guest)"
+  diff -u "${ec}/ct.want" "${ec}/ct.sorted" || fail "the desk cut deleted the wrong flows (a flow of the Pi, an admin SSH, or the guest)"
   grep -qx 'pi-fortress: the egress policy of desk changed; ended the open flows of 3 address pair(s) in 10.79.0.0/30' "${ec}/out" ||
     fail "no cut line for the desk: $(cat "${ec}/out")"
   grep -qx 'seg:desk dddd 10.79.0.0/30' "${st}" || fail "the egress state did not take the new desk value"
@@ -2787,12 +2797,15 @@ EOF
   printf '%s\n' '-L -d 10.80.0.0/24' '-L -s 10.80.0.0/24' >"${ec}/ct.want"
   diff -u "${ec}/ct.want" "${ec}/ct.sorted" || fail "a removed segment did not end its flows, or ended others"
   grep -q '^seg:guest ' "${st}" && fail "the egress state keeps the removed segment"
+  grep -qx -- '-D -s 10.80.0.5 -d 10.77.0.20' "${CT_LOG}" || fail "a removed segment kept its SSH to an agent"
+  grep -q -- '-D -s 10.79.0.2 -d 10.77.0.20' "${CT_LOG}" && fail "a removed segment ended the SSH of the desk to an agent"
   : >"${CT_LOG}"
   HOUSE_EGRESS_FP=
   egress_state >"${ec}/new"
   egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "egress_cuts failed on a removed house"
   grep -qx -- '-L -s 10.78.0.0/24' "${CT_LOG}" || fail "a removed house did not end its flows: $(cat "${CT_LOG}")"
   grep -q -- '-L -s 10.79.0.0/30' "${CT_LOG}" && fail "a removed house ended the desk flows"
+  grep -qx -- '-D -s 10.78.0.20 -d 10.77.0.20' "${CT_LOG}" || fail "a removed house kept its SSH to an agent"
   egress_cuts "${st}" "${ec}/new" >"${ec}/out" 2>&1 || fail "a second egress_cuts failed after a removal"
   grep -c -- '^-L -s ' "${CT_LOG}" | grep -qx 1 || fail "a removal ended flows again at the next apply: $(cat "${CT_LOG}")"
 )

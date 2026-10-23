@@ -656,7 +656,9 @@ rm -f "${RESOLVED_CARRY}"
 # agent needs nothing: its raw chain checks each packet.
 #
 # A flow to or from an address of this box stays. Thus the SSH session of
-# the operator to the Pi, DNS and DHCP continue. With no state file (a
+# the operator to the Pi, DNS and DHCP continue. A flow between the agent,
+# the house and the segments also stays: the isolation decides it, not
+# the egress policy (egress_cut). With no state file (a
 # lost file, or the first apply) each segment counts as changed. A
 # missing conntrack gives a warning, never a failed apply: the new policy
 # is loaded already.
@@ -673,17 +675,42 @@ egress_state() {
   done
 }
 
-# egress_cut NAME NET SELF ends each tracked flow whose original source
-# or destination is in NET, except a flow to or from an address in SELF
-# (space separated). It deletes by the address pair of the original
-# direction. All flows of such a pair are flows of the segment.
+# egress_cut NAME NET SELF INNER ends each tracked flow whose original
+# source or destination is in NET, except a flow to or from an address in
+# SELF, and a flow between two subnets in INNER (both space separated).
+# It deletes by the address pair of the original direction. All flows of
+# such a pair are flows of the segment.
+#
+# INNER is the agent subnet and the subnets of the new policy. A flow
+# between two of them does not go through an egress chain: the
+# isolation of forward decides it, and isolate_ct examines each of its
+# established packets with the holes of the new ruleset. Thus an admin
+# SSH session through a hole (HOUSE_SSH_TO, SSH_TO, SSH_FROM) continues
+# while its hole stays, and stops at its next packet when the hole is
+# gone. A subnet that is gone from the policy is not in INNER, so its
+# flows to the agent end here.
 egress_cut() {
-  local name="$1" net="$2" self="$3" pairs s d rc n=0 bad=0
+  local name="$1" net="$2" self="$3" inner="$4" pairs s d rc n=0 bad=0
   pairs="$({
     conntrack -L -s "${net}" 2>/dev/null || [[ $? -eq 1 ]] || bad=1
     conntrack -L -d "${net}" 2>/dev/null || [[ $? -eq 1 ]] || bad=1
     [[ "${bad}" -eq 0 ]] || echo "list-failed"
-  } | awk -v self=" ${self} " '
+  } | awk -v self=" ${self} " -v inner="${inner}" '
+    function num(a,   p) {
+      if (split(a, p, ".") != 4) return -1
+      return ((p[1] * 256 + p[2]) * 256 + p[3]) * 256 + p[4]
+    }
+    function in_inner(a,   i, c, b, x) {
+      x = num(a)
+      if (x < 0) return 0
+      for (i = 1; i <= ni; i++) {
+        if (split(nets[i], c, "/") != 2) c[2] = 32
+        b = 2 ^ (32 - c[2])
+        if (int(x / b) == int(num(c[1]) / b)) return 1
+      }
+      return 0
+    }
+    BEGIN { ni = split(inner, nets, " ") }
     $1 == "list-failed" { print; next }
     {
       s = d = ""
@@ -692,6 +719,7 @@ egress_cut() {
         else if (d == "" && $i ~ /^dst=/) d = substr($i, 5)
       }
       if (s == "" || d == "" || index(self, " " s " ") || index(self, " " d " ")) next
+      if (in_inner(s) && in_inner(d)) next
       print s, d
     }' | sort -u)"
   while read -r s d; do
@@ -719,7 +747,7 @@ egress_cut() {
 # with STATE, ends the flows of each changed segment and of each segment
 # that is gone from NEW, then keeps NEW in STATE.
 egress_cuts() {
-  local state="$1" new="$2" key fp net old self c
+  local state="$1" new="$2" key fp net old self inner c
   local -a cut=()
   if [[ -s "${state}" ]]; then
     while read -r key fp net; do
@@ -748,9 +776,10 @@ egress_cuts() {
     if command -v conntrack >/dev/null 2>&1; then
       self="$(ip -4 -o addr show 2>/dev/null | awk '{ sub(/\/.*/, "", $4); printf "%s ", $4 }')"
       self+=" ${PI_IP:-} ${HOUSE_IP:-} ${SEG_IP[*]:-}"
+      inner="${AGENT_NET:-} $(awk '{ printf "%s ", $3 }' "${new}")"
       for c in "${cut[@]}"; do
         # shellcheck disable=SC2086 # c is "name net", two words by design
-        egress_cut ${c} "${self}"
+        egress_cut ${c} "${self}" "${inner}"
       done
     else
       for c in "${cut[@]}"; do
