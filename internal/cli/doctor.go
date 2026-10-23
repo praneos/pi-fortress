@@ -27,6 +27,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	probe := fs.String("probe", "", "name to resolve through each segment (default: ALLOW_DOMAIN)")
 	sock := fs.String("broker-admin", secrets.AdminSock, "broker admin socket, for the credential store rung")
 	etc := fs.String("etc", "/etc", "directory holding sudoers and sudoers.d, for the sudo rung")
+	sshdConfig := fs.String("sshd-config", "/etc/ssh/sshd_config", "sshd_config path, for the ssh rung")
 	shipLog := fs.String("ship-log", ship.Defaults().Log, "signed ship log, for the ship rung")
 	postUpgrade := fs.Bool("post-upgrade", false, "after a ship install: required units, sinkhole + public resolve per segment, broker + engine sockets, uplink; exit 0/1, none of the other rungs")
 	unitsFile := fs.String("units-file", "/var/lib/pi-fortress/units.required", "unit list apply.sh wrote, for -post-upgrade")
@@ -72,6 +73,9 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		rs = append(rs, r)
 	}
 	if r, ok := doctor.SudoRung(doctor.SudoersFiles(*etc)); ok {
+		rs = append(rs, r)
+	}
+	if r, ok := doctor.SSHPasswordRung(*sshdConfig); ok {
 		rs = append(rs, r)
 	}
 	if r, ok := doctor.ShipRung(jsonl.LastShip(*shipLog)); ok {

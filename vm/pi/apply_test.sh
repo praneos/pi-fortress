@@ -1477,7 +1477,9 @@ prov="${here}/provision.sh"
 # stub sysctl and systemctl. provision.sh writes them on a fresh box and
 # apply.sh on each full apply, so an upgraded box has the same files.
 hroot="${tmp}/hardenroot"
-mkdir -p "${hroot}/bin" "${hroot}/work"
+mkdir -p "${hroot}/bin" "${hroot}/uubin" "${hroot}/work"
+printf '#!/bin/sh\n' >"${hroot}/uubin/unattended-upgrade"
+chmod +x "${hroot}/uubin/unattended-upgrade"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"%s"\n[[ "$3" == *.live ]] && cp "$3" "%s"\nexit 0\n' "${hroot}/sysctl.log" "${hroot}/live" >"${hroot}/bin/sysctl"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"%s"\n' "${hroot}/systemctl.log" >"${hroot}/bin/systemctl"
 chmod +x "${hroot}/bin"/*
@@ -1493,13 +1495,10 @@ harden_run() {
     # shellcheck source=lib/harden.sh
     source "${here}/lib/harden.sh"
     HARDEN_SYSCTL_D="${hroot}/sysctl.d" HARDEN_APT_D="${hroot}/apt.conf.d" HARDEN_WORK="${hroot}/work"
-    if [[ "${1:-}" == uu ]]; then
-      printf '#!/bin/sh\n' >"${hroot}/bin/unattended-upgrade"
-      chmod +x "${hroot}/bin/unattended-upgrade"
-    else
-      rm -f "${hroot}/bin/unattended-upgrade"
-    fi
     PATH="${hroot}/bin"
+    if [[ "${1:-}" == uu ]]; then
+      PATH="${PATH}:${hroot}/uubin"
+    fi
     harden_sysctl_write
     harden_sysctl_load
     harden_apt
@@ -1538,6 +1537,71 @@ grep -qx 'net.ipv4.ip_forward=0' "${tmp}/sysctl.conf" ||
   fail "lib/harden.sh does not ship net.ipv4.ip_forward=0 in /etc/sysctl.d/99-pi-fortress.conf"
 grep -qx 'net.ipv4.ip_forward=1' "${tmp}/sysctl.conf" &&
   fail "lib/harden.sh persists ip_forward=1 again; a boot without a good ruleset would route"
+
+# Key-only SSH (harden_ssh). The sshd stub passes -t unless sshd.bad
+# exists, and prints sshd.T for -T. The ssh-keygen stub takes a file
+# that holds an ed25519 key line, as ssh-keygen -l does.
+printf '#!/bin/bash\nif [[ "$1" == -t ]]; then [[ ! -e "%s" ]]; exit; fi\ncat "%s" 2>/dev/null\n' "${hroot}/sshd.bad" "${hroot}/sshd.T" >"${hroot}/bin/sshd"
+printf '#!/bin/bash\n[[ "$1" == -l && "$2" == -f ]] && grep -qE "(^|[ ])ssh-ed25519 AAAA" "$3"\n' >"${hroot}/bin/ssh-keygen"
+chmod +x "${hroot}/bin/sshd" "${hroot}/bin/ssh-keygen"
+hhome="${hroot}/home"
+hconf="${hroot}/sshd_config.d/99-pi-fortress.conf"
+mkdir -p "${hhome}/op/.ssh"
+chmod 0755 "${hhome}/op"
+chmod 0700 "${hhome}/op/.ssh"
+: >"${hhome}/op/.ssh/authorized_keys"
+chmod 0600 "${hhome}/op/.ssh/authorized_keys"
+ssh_run() {
+  (
+    # shellcheck source=lib/harden.sh
+    source "${here}/lib/harden.sh"
+    HARDEN_SSHD_D="${hroot}/sshd_config.d" HARDEN_HOME="${hhome}" HARDEN_WORK="${hroot}/work"
+    PATH="${hroot}/bin"
+    harden_ssh
+  ) >"${hroot}/ssh.out" 2>"${hroot}/ssh.err" || fail "harden_ssh failed: $(cat "${hroot}/ssh.err")"
+}
+: >"${hroot}/systemctl.log"
+# No key, only a key with a forced command, a key that sshd ignores
+# (group-writable file): password login stays on, with a warning.
+for _keys in '' 'command="/bin/true" ssh-ed25519 AAAAC3Nza op' 'ssh-ed25519 AAAAC3Nza op'; do
+  printf '%s\n' "${_keys}" >"${hhome}/op/.ssh/authorized_keys"
+  if [[ -n "${_keys}" && "${_keys}" != command=* ]]; then
+    chmod 0620 "${hhome}/op/.ssh/authorized_keys"
+  fi
+  ssh_run
+  [[ ! -e "${hconf}" ]] || fail "harden_ssh turned off passwords with no usable key ('${_keys}')"
+  grep -q 'password login stays on' "${hroot}/ssh.err" || fail "harden_ssh did not warn that password login is on ('${_keys}')"
+  chmod 0600 "${hhome}/op/.ssh/authorized_keys"
+done
+grep -q reload "${hroot}/systemctl.log" && fail "harden_ssh reloaded sshd with no usable key"
+# sshd -t refuses the drop-in: it does not stay.
+touch "${hroot}/sshd.bad"
+ssh_run
+[[ ! -e "${hconf}" ]] || fail "harden_ssh kept a drop-in that sshd -t refused"
+grep -q 'sshd rejected' "${hroot}/ssh.err" || fail "harden_ssh did not warn when sshd -t failed"
+grep -q reload "${hroot}/systemctl.log" && fail "harden_ssh reloaded sshd after sshd -t failed"
+# A usable key: key-only, one reload, and no second reload on the next run.
+mv "${hroot}/sshd.bad" "${hroot}/sshd.ok"
+ssh_run
+grep -qx 'PasswordAuthentication no' "${hconf}" || fail "harden_ssh did not write the key-only drop-in"
+grep -qx 'KbdInteractiveAuthentication no' "${hconf}" || fail "the key-only drop-in leaves keyboard-interactive on"
+grep -q 'login keys for: op' "${hroot}/ssh.out" || fail "harden_ssh did not name the users with a key"
+[[ "$(grep -c '^reload ssh' "${hroot}/systemctl.log")" == 1 ]] || fail "harden_ssh did not reload sshd once"
+ssh_run
+[[ "$(grep -c '^reload ssh' "${hroot}/systemctl.log")" == 1 ]] || fail "harden_ssh reloaded sshd with no change"
+# A changed drop-in that sshd refuses: the old one comes back.
+echo 'PasswordAuthentication no' >"${hconf}"
+mv "${hroot}/sshd.ok" "${hroot}/sshd.bad"
+ssh_run
+[[ "$(cat "${hconf}")" == 'PasswordAuthentication no' ]] || fail "harden_ssh did not put back the drop-in that sshd accepted"
+mv "${hroot}/sshd.bad" "${hroot}/sshd.ok"
+# An earlier file keeps passwords on: the effective value says so.
+echo 'passwordauthentication yes' >"${hroot}/sshd.T"
+ssh_run
+grep -q 'sshd still takes passwords' "${hroot}/ssh.err" || fail "harden_ssh did not warn that sshd -T still shows passwords"
+for _f in "${apply}" "${prov}"; do
+  grep -q '^harden_ssh$' "${_f}" || fail "${_f##*/} does not run harden_ssh"
+done
 _nft_line="$(grep -n '^nft -f /etc/nftables.conf$' "${apply}" | head -1 | cut -d: -f1)"
 _fwd_line="$(grep -n '^sysctl -w net.ipv4.ip_forward=1' "${apply}" | head -1 | cut -d: -f1)"
 [[ -n "${_nft_line}" ]] || fail "apply.sh no longer loads /etc/nftables.conf"

@@ -162,8 +162,11 @@ The OS hardening files are not only in `provision.sh`. They are in `vm/pi/lib/ha
 
 - the sysctl file `/etc/sysctl.d/99-pi-fortress.conf`. apply sets its values at once, except `ip_forward`: apply enables forwarding only after it loads the ruleset.
 - the unattended-upgrades config `/etc/apt/apt.conf.d/20auto-upgrades` and `52-pi-fortress-upgrades`.
+- the key-only sshd drop-in `/etc/ssh/sshd_config.d/99-pi-fortress.conf` (`PasswordAuthentication no`, `KbdInteractiveAuthentication no`, `PermitRootLogin no`). apply writes it only when a user under `/home` has a usable login key: `~/.ssh/authorized_keys` holds a key that `ssh-keygen -l` reads and that has no forced command, and the home, `.ssh` and the file are not writable by group or other (sshd ignores the key if they are). apply checks the new file with `sshd -t` before it reloads sshd. If `sshd -t` fails, apply puts back the old file (or none) and warns. With no usable key, apply changes nothing and warns that password login is on. Thus a box that had no key at install time turns password login off at the first apply after the operator adds a key. If `sshd -T` still shows `passwordauthentication yes` (a file that sorts before ours sets it), apply warns.
 
 apply writes a file only when its content changes. apply installs no package. If `unattended-upgrades` is not installed, apply prints a warning. Install the package with `apt-get install unattended-upgrades`.
+
+`pf doctor` has an `ssh` rung. It reads `/etc/ssh/sshd_config` and the files that it includes, and warns while sshd takes passwords. The rung does not need root. It is a best-effort parse: if it cannot read a file, or a `Match` block turns passwords on for some logins, it says that the result is inconclusive. `sudo sshd -T` gives the exact value.
 
 ### OS packages and reboots
 

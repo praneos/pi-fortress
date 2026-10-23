@@ -279,6 +279,8 @@ DHCP_UNITS=/etc/systemd/system
 # The same for the OS files of lib/harden.sh.
 HARDEN_SYSCTL_D=/etc/sysctl.d
 HARDEN_APT_D=/etc/apt/apt.conf.d
+HARDEN_SSHD_D=/etc/ssh/sshd_config.d
+HARDEN_HOME=/home
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "${WORKDIR}"' EXIT
@@ -2041,14 +2043,17 @@ rm -f /etc/systemd/system/pi-fortress-console.service /etc/systemd/system/pi-for
 rm -rf /usr/local/lib/pi-fortress/console
 systemctl daemon-reload
 
-# The OS hardening of provision.sh (lib/harden.sh): the sysctl file and
-# the unattended-upgrades config. pf upgrade and a ship run this apply,
-# not provision.sh. Thus a box from an older release gets the files of
-# this release here, as a fresh install does. Only on a full apply: a
-# --local or --refresh run changes policy, not the OS.
+# The OS hardening of provision.sh (lib/harden.sh): the sysctl file, the
+# unattended-upgrades config and the key-only sshd drop-in. pf upgrade and
+# a ship run this apply, not provision.sh. Thus a box from an older
+# release gets the files of this release here, as a fresh install does.
+# Also, a box that had no login key at install time turns password login
+# off at the first apply after the operator adds a key. Only on a full
+# apply: a --local or --refresh run changes policy, not the OS.
 harden_sysctl_write
 harden_sysctl_load
 harden_apt
+harden_ssh
 
 # pf apply gets to this script through syscall.Exec, which replaces the
 # Go process. internal/admin records that an apply was requested, and can

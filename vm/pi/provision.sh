@@ -160,12 +160,15 @@ if [[ ! -x /usr/local/sbin/pf ]]; then
 fi
 ln -sfn pf /usr/local/sbin/pi-fortress
 
-# The sysctl file, the unattended-upgrades config: lib/harden.sh. apply.sh
-# writes the same files on each apply, so an upgraded box keeps them in
-# step with this release. Here, sysctl --system also sets ip_forward=0
-# now; the first apply enables it after it loads the ruleset.
+# The sysctl file, the unattended-upgrades config and the key-only sshd
+# drop-in: lib/harden.sh. apply.sh writes the same files on each apply, so
+# an upgraded box keeps them in step with this release. Here, sysctl
+# --system also sets ip_forward=0 now; the first apply enables it after it
+# loads the ruleset.
 HARDEN_SYSCTL_D=/etc/sysctl.d
 HARDEN_APT_D=/etc/apt/apt.conf.d
+HARDEN_SSHD_D=/etc/ssh/sshd_config.d
+HARDEN_HOME=/home
 HARDEN_WORK="$(mktemp -d)"
 trap 'rm -rf "${HARDEN_WORK}"' EXIT
 # shellcheck source=lib/harden.sh
@@ -173,24 +176,8 @@ source "${SRC}/vm/pi/lib/harden.sh"
 harden_sysctl_write
 sysctl -e --system >/dev/null
 
-# Key-only SSH, but only after a key is installed: to enforce it on a
-# box with no authorized_keys is a lockout, not a hardening.
-if compgen -G "/home/*/.ssh/authorized_keys" >/dev/null && [[ -n "$(cat /home/*/.ssh/authorized_keys 2>/dev/null)" ]]; then
-  install -d -m 0755 /etc/ssh/sshd_config.d
-  cat >/etc/ssh/sshd_config.d/99-pi-fortress.conf <<'EOF'
-PasswordAuthentication no
-KbdInteractiveAuthentication no
-PermitRootLogin no
-EOF
-  if sshd -t 2>/dev/null; then
-    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
-  else
-    rm -f /etc/ssh/sshd_config.d/99-pi-fortress.conf
-    echo "pi-fortress: sshd rejected the key-only drop-in; password auth left as is" >&2
-  fi
-else
-  echo "pi-fortress: no authorized_keys under /home; sshd password auth left as is" >&2
-fi
+# Key-only SSH, but only after a usable key is installed (lib/harden.sh).
+harden_ssh
 
 # Raspberry Pi OS ships avahi enabled. The gateway must not announce itself
 # on the segments that it fences. Also, its own multicast loops back in on

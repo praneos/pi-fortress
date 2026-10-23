@@ -3,14 +3,14 @@
 # apply.sh and provision.sh source this file. It is not a program. It
 # shares the globals and the set -euo of the script that sources it.
 # The OS hardening that needs no network and no package install: the
-# sysctl file and the unattended-upgrades config. provision.sh runs it on
-# a fresh box. apply.sh runs it on each full apply. Thus a box that pf
-# upgrade or a ship updates gets the same files as a fresh install of the
-# same release. Each step is idempotent, and writes a file only when its
-# content changes.
+# sysctl file, the unattended-upgrades config and the key-only sshd
+# drop-in. provision.sh runs it on a fresh box. apply.sh runs it on each
+# full apply. Thus a box that pf upgrade or a ship updates gets the same
+# files as a fresh install of the same release. Each step is idempotent,
+# and writes a file only when its content changes.
 #
-# The paths come from the caller, as HARDEN_SYSCTL_D, HARDEN_APT_D and
-# HARDEN_WORK (a scratch directory). Thus
+# The paths come from the caller, as HARDEN_SYSCTL_D, HARDEN_APT_D,
+# HARDEN_SSHD_D, HARDEN_HOME and HARDEN_WORK (a scratch directory). Thus
 # the path rewrite of apply.sh in the appliance test also reaches them.
 # The package installs stay in provision.sh. apply.sh only tells the
 # operator when a package that a step needs is missing.
@@ -104,5 +104,83 @@ EOF
     systemctl enable unattended-upgrades >/dev/null 2>&1 || true
   else
     echo "pi-fortress: unattended-upgrades is not installed, so the box gets no automatic security updates; run apt-get install unattended-upgrades (or vm/pi/provision.sh)" >&2
+  fi
+}
+
+# harden_ssh_key_users prints each user under HARDEN_HOME whose
+# authorized_keys sshd can use for a login: at least one key that
+# ssh-keygen reads, not counting a key with a forced command, and a
+# home, .ssh and file that sshd accepts (StrictModes): owned by the user
+# or by root, and not writable by group or other. A key that sshd
+# ignores is not a key here. To count it would lock the operator out.
+harden_ssh_key_users() {
+  local f dir home owner p st ok
+  for f in "${HARDEN_HOME}"/*/.ssh/authorized_keys; do
+    [[ -f "${f}" ]] || continue
+    dir="${f%/*}"
+    home="${dir%/*}"
+    owner="$(stat -c %u -- "${home}" 2>/dev/null)" || continue
+    ok=1
+    for p in "${home}" "${dir}" "${f}"; do
+      st="$(stat -c '%u %a' -- "${p}" 2>/dev/null)" || { ok=0; break; }
+      if [[ "${st%% *}" != "${owner}" && "${st%% *}" != 0 ]] || (( 8#${st##* } & 8#022 )); then
+        ok=0
+        break
+      fi
+    done
+    [[ "${ok}" == 1 ]] || continue
+    grep -vE '^[[:space:]]*(#|$)' -- "${f}" 2>/dev/null | grep -v 'command=' >"${HARDEN_WORK}/keys" || true
+    if [[ -s "${HARDEN_WORK}/keys" ]] && ssh-keygen -l -f "${HARDEN_WORK}/keys" >/dev/null 2>&1; then
+      printf '%s\n' "${home##*/}"
+    fi
+  done
+}
+
+# Key-only SSH, but only after a key is installed: to enforce it on a
+# box with no usable authorized_keys is a lockout, not a hardening. sshd
+# -t checks the new file before the reload. If sshd refuses it, the old
+# file comes back (or none), so sshd always stays as it was.
+harden_ssh() {
+  local conf="${HARDEN_SSHD_D}/99-pi-fortress.conf" users had=0 eff=""
+  command -v sshd >/dev/null 2>&1 || return 0
+  if ! command -v ssh-keygen >/dev/null 2>&1; then
+    echo "pi-fortress: ssh-keygen is missing, so the login keys cannot be checked; sshd is left as is" >&2
+    return 0
+  fi
+  users="$(harden_ssh_key_users | sort -u | tr '\n' ' ')"
+  users="${users% }"
+  if [[ -z "${users}" ]]; then
+    if [[ ! -f "${conf}" ]]; then
+      echo "pi-fortress: no usable login key in ${HARDEN_HOME}/*/.ssh/authorized_keys; sshd password login stays on. Add a key (ssh-copy-id) and apply again" >&2
+    fi
+    return 0
+  fi
+  printf '%s\n' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' 'PermitRootLogin no' >"${HARDEN_WORK}/sshd.conf"
+  if ! cmp -s "${HARDEN_WORK}/sshd.conf" "${conf}"; then
+    if [[ -f "${conf}" ]]; then
+      cp -p "${conf}" "${HARDEN_WORK}/sshd.prev"
+      had=1
+    fi
+    install -d -m 0755 "${HARDEN_SSHD_D}"
+    install -m 0644 "${HARDEN_WORK}/sshd.conf" "${conf}"
+    if ! sshd -t >/dev/null 2>&1; then
+      if [[ "${had}" == 1 ]]; then
+        cp -p "${HARDEN_WORK}/sshd.prev" "${conf}"
+      else
+        rm -f "${conf}"
+      fi
+      echo "pi-fortress: sshd rejected the key-only drop-in; password auth left as is (sshd -t)" >&2
+      return 0
+    fi
+    systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || true
+    echo "pi-fortress: sshd now takes keys only (login keys for: ${users})"
+  fi
+  # sshd uses the first value that it reads. A file that sorts before
+  # ours in sshd_config.d (a cloud image ships one) can keep passwords on.
+  # The output goes to a variable first: with pipefail, grep -q that stops
+  # early can make sshd fail on a closed pipe, and hide the match.
+  eff="$(sshd -T 2>/dev/null)" || eff=""
+  if grep -qix 'passwordauthentication yes' <<<"${eff}"; then
+    echo "pi-fortress: sshd still takes passwords: a line that sshd reads before ${conf} sets PasswordAuthentication yes (sudo sshd -T; ls ${HARDEN_SSHD_D})" >&2
   fi
 }
