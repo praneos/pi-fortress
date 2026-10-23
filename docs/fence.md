@@ -325,6 +325,20 @@ server, a client cannot name an unlisted host to reach a listed one. On a
 shared CDN edge that permits fronting, the `Host` check is the remaining
 line.
 
+**The key-shape check of `pf dns` also applies to the SNI.** The broker dials
+the origin with the SNI of the agent, and the origin can log it. A name that
+the agent resolves has passed `pf dns`. But the agent can open TLS to that
+address with any SNI. Thus, in both DNS modes and on all listeners:
+
+- The engine refuses an SNI with a `key_prefixes.rules` shape or a
+  placeholder before it mints a leaf. It logs `sni key_shape refused` with
+  the source and destination, not the SNI. The engine reads the rules from
+  `-rules` and refuses to start without them.
+- The broker refuses the same SNI before any dial, with a 403 and a
+  `sni_key_shape` strip event that is always marked `alert`. The row holds
+  the rule and the zone, not the SNI. For a fake-IP pool address, the cause
+  is `fakeip_key_shape` (Fake-IP, below).
+
 **A listed name blocks its whole subtree, and that is accepted.** The
 resolver, the engine, and the broker all match in the same way as the dnsmasq
 `address=/name/`: a listed name covers itself and every name under it. The

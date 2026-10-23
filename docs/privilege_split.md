@@ -85,7 +85,9 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
 
 ## 2. Locks
 
-- Do not put `core.hosts`, kinds, or `secrets.env` in the engine.
+- Do not put `core.hosts`, kinds, or `secrets.env` in the engine. The
+  engine reads `key_prefixes.rules` for the SNI key-shape check. It keeps
+  only the compiled shapes, not the kind column.
 - Do not dial the origin server from the engine.
 - If the broker socket is absent or refuses the connection, **close** the
   agent connection after the handshake. Never pass through. Never buffer and
@@ -202,7 +204,7 @@ The security-critical path (inject/strip/harvest) has **zero networking**.
 | Unit | User | Binds | Reads |
 |---|---|---|---|
 | `pi-fortress-broker` | `pf broker` | `/run/pi-fortress/broker/broker.sock` | `/etc/pi-fortress/broker/secrets.env`, policy |
-| `pi-fortress-engine` | `pf engine` | `PI_IP:8080` (`net.env`) | CA pem, not secrets |
+| `pi-fortress-engine` | `pf engine` | `PI_IP:8080` (`net.env`) | CA pem, `key_prefixes.rules`, not secrets |
 
 The engine unit has `Wants=` for the broker, not `Requires=`. A broker
 bounce occurs at each harvest restart. During a bounce, the engine stays up

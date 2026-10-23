@@ -41,6 +41,12 @@ type Engine struct {
 	// agent network, so it does not apply on the inspect listeners. A
 	// segment has its own PARANOID, in its resolver.
 	Forward Forward
+	// KeyShape, when set, names the rule for a key or a placeholder in an
+	// SNI, or returns "" for neither. It is the check of pf dns
+	// (internal/keyshape). An SNI that it flags gets no leaf, on all
+	// listeners and in both DNS modes. It is a function, not the rules: as
+	// with Forward, the engine never sees the kind column of the rules.
+	KeyShape func(name string) string
 	// LabEcho lets pf-core-echo.test through the oracle. Lab VM only.
 	LabEcho   bool
 	Handshake time.Duration
@@ -122,6 +128,13 @@ type Forward interface {
 }
 
 var errCertMismatch = errors.New("engine: tls server name does not match the parsed hello")
+
+var errSNIKeyShape = errors.New("engine: tls server name has a key shape")
+
+// keyShaped reports whether KeyShape flags name.
+func (e *Engine) keyShaped(name string) bool {
+	return e.KeyShape != nil && e.KeyShape(name) != ""
+}
 
 // testHookLeaf, when set, gets the name of each leaf that the engine asks
 // the CA for. So a test can prove that a refused name never got a leaf. The
@@ -266,6 +279,14 @@ func (e *Engine) handle(ctx context.Context, c net.Conn, accepted time.Time, ins
 		e.logf("hello src=%s dst=%s err=%v", c.RemoteAddr(), dst, err)
 		return
 	}
+	// A key in the SNI goes to the origin when the broker dials it. This
+	// check runs before all lines that log the SNI. Thus the key also stays
+	// out of the log. The hello is in lower case, and the placeholder check
+	// is exact. Thus GetCertificate runs the check again on the name as sent.
+	if e.keyShaped(h.SNI) {
+		e.logf("sni key_shape refused src=%s dst=%s", c.RemoteAddr(), dst)
+		return
+	}
 	if h.H2Only {
 		e.logf("alpn_h2_only refused: engine speaks http/1.1 only sni=%s src=%s", h.SNI, c.RemoteAddr())
 	}
@@ -286,6 +307,9 @@ func (e *Engine) handle(ctx context.Context, c net.Conn, accepted time.Time, ins
 			if chi.ServerName == "" || !hello.ValidHostName(chi.ServerName) || !strings.EqualFold(chi.ServerName, h.SNI) {
 				return nil, errCertMismatch
 			}
+			if e.keyShaped(chi.ServerName) {
+				return nil, errSNIKeyShape
+			}
 			if hook := testHookLeaf.Load(); hook != nil {
 				(*hook)(chi.ServerName)
 			}
@@ -297,6 +321,10 @@ func (e *Engine) handle(ctx context.Context, c net.Conn, accepted time.Time, ins
 	}
 	tc := tls.Server(pc, cfg)
 	if err := tc.HandshakeContext(ctx); err != nil {
+		if errors.Is(err, errSNIKeyShape) {
+			e.logf("sni key_shape refused src=%s dst=%s", c.RemoteAddr(), dst)
+			return
+		}
 		e.logf("handshake sni=%s dst=%s err=%v", h.SNI, dst, err)
 		return
 	}

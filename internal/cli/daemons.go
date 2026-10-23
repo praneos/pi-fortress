@@ -28,6 +28,7 @@ import (
 	"pi-fortress/internal/fakeip"
 	"pi-fortress/internal/fence"
 	"pi-fortress/internal/jsonl"
+	"pi-fortress/internal/keyshape"
 	"pi-fortress/internal/secrets"
 	"pi-fortress/internal/www"
 )
@@ -61,6 +62,7 @@ func runEngine(args []string, _, stderr io.Writer) int {
 	allowPath := fs.String("allow", "/etc/pi-fortress/allow.domains", "allow.domains path, with -paranoid")
 	corePath := fs.String("core-hosts", "/etc/pi-fortress/core.hosts", "core.hosts path, with -paranoid: the host column only, never the kinds")
 	labEcho := fs.Bool("lab-echo", false, "let pf-core-echo.test through the forward set (lab VM only)")
+	rules := fs.String("rules", "/etc/pi-fortress/key_prefixes.rules", "token prefix rules: mint no leaf for an SNI with a key or a placeholder")
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}
@@ -115,6 +117,16 @@ func runEngine(args []string, _, stderr io.Writer) int {
 		}
 		forward = f
 	}
+	// The broker refuses to start without the rules, and so does the engine.
+	// The engine keeps only the compiled shapes in a closure. The kind
+	// column of the file does not get to the engine (docs/privilege_split.md).
+	tr, err := fence.LoadTokenRules(*rules)
+	if err != nil {
+		return fail(stderr, fmt.Errorf("engine: -rules: %w", err))
+	}
+	all := tr.All()
+	heads, _ := keyshape.Heads(tr.Rules)
+	keyShape := func(name string) string { return keyshape.Match(all, heads, name) }
 	ln, err := net.Listen("tcp", *listen)
 	if err != nil {
 		return fail(stderr, err)
@@ -136,6 +148,7 @@ func runEngine(args []string, _, stderr io.Writer) int {
 		CA:        store,
 		Blocked:   blocked,
 		Forward:   forward,
+		KeyShape:  keyShape,
 		LabEcho:   *labEcho,
 		Handshake: *handshake,
 		Idle:      *idle,

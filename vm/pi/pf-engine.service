@@ -63,7 +63,7 @@ EnvironmentFile=/etc/pi-fortress/net.env
 # the new ruleset from apply sends nothing. Optional: most boxes have
 # no overlay, and a required EnvironmentFile that is absent fails the unit.
 EnvironmentFile=-/etc/pi-fortress/net.env.local
-ExecStart=/usr/local/sbin/pf engine -listen ${PI_IP}:8080 -sock /run/pi-fortress/broker/broker.sock -ca /var/lib/pi-fortress/engine/ca.pem -blocked /etc/pi-fortress/blocked-domains.conf $PF_PARANOID_ENGINE_FLAGS $PF_ENGINE_FLAGS
+ExecStart=/usr/local/sbin/pf engine -listen ${PI_IP}:8080 -sock /run/pi-fortress/broker/broker.sock -ca /var/lib/pi-fortress/engine/ca.pem -blocked /etc/pi-fortress/blocked-domains.conf -rules /etc/pi-fortress/key_prefixes.rules $PF_PARANOID_ENGINE_FLAGS $PF_ENGINE_FLAGS
 
 [Install]
 WantedBy=multi-user.target

@@ -192,6 +192,11 @@ func (b *Broker) Handle(ctx context.Context, conn net.Conn) error {
 		_ = writeErr(conn, 403, "403 Forbidden", "src\n")
 		return ErrSrc
 	}
+	// fakeAdmit runs the same check on a pool address, with its own cause.
+	if !fake && b.sniKeyRefused(p) {
+		_ = writeErr(conn, 403, "403 Forbidden", sniKeyBody)
+		return fmt.Errorf("%w: %s", ErrSNIKeyShape, CauseSNIKeyShape)
+	}
 	up := &upstream{b: b, dst: p.OrigDst, sni: p.SNI}
 	if fake {
 		// This is after the source check, so a connection from outside the

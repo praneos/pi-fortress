@@ -1,7 +1,8 @@
 // Package keyshape finds a key or a placeholder of the gateway in a DNS
 // name. pf dns refuses such a name before it forwards it. pf observe runs
-// the same check on the rows of a plain segment and alerts. The broker
-// uses Match and Tail on the SNI of a fake-IP connection. One copy of the
+// the same check on the rows of a plain segment and alerts. The engine and
+// the broker use Match on the SNI of each connection, and the broker uses
+// Tail for its log row. One copy of the
 // code makes sure that each of them sees the same names.
 package keyshape
 
