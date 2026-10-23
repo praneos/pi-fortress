@@ -8,13 +8,13 @@ import (
 	"testing"
 )
 
-// The claims directory is 2770 root:pf-fortress (vm/pi/apply.sh). So www
+// RedeemedDir is 2770 root:pf-fortress (vm/pi/apply.sh). So www
 // can unlink ledger.jsonl and put its own symlink at that name. The TUI
 // then issues a claim as root and appends through the same name. If the
 // append follows the link, a compromised www has made a root process into
 // a writer of any path on the gateway.
 func TestAppendRefusesASymlinkedLedger(t *testing.T) {
-	claims := t.TempDir()
+	claims := newClaimsDir(t)
 	target := filepath.Join(t.TempDir(), "authorized_keys")
 	if err := os.WriteFile(target, []byte("original\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -41,7 +41,7 @@ func TestAppendRefusesASymlinkedLedger(t *testing.T) {
 // ledger name at any file that it can write itself, and the append of root
 // goes there. A ledger that the deployment created has one link only.
 func TestAppendRefusesAHardLinkedLedger(t *testing.T) {
-	claims := t.TempDir()
+	claims := newClaimsDir(t)
 	target := filepath.Join(claims, "decoy")
 	if err := os.WriteFile(target, []byte("original\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -63,18 +63,18 @@ func TestAppendRefusesAHardLinkedLedger(t *testing.T) {
 
 // Nothing rotates this file. It is in /var/lib, not /var/log, so the hourly
 // logrotate run (vm/pi/logrotate.conf) never sees it. Sweep keeps it,
-// because it matches neither .json nor .redeemed. So appends must bound
+// because its name does not end .redeemed. So appends must bound
 // themselves. If not, a public fetch loop fills the partition that the
 // broker and the audit log also write to.
 func TestLedgerStaysBounded(t *testing.T) {
-	claims := t.TempDir()
+	claims := newClaimsDir(t)
 	pad := strings.Repeat("a", 4096)
 	for range 4 * ledgerCap / 4096 {
 		if err := AppendEvent(claims, Event{Ev: "setup", IP: "10.77.0.2", Path: "/" + pad}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	entries, err := os.ReadDir(claims)
+	entries, err := os.ReadDir(RedeemedDir(claims))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestLedgerStaysBounded(t *testing.T) {
 func TestRepeatedSetupFetchesCollapse(t *testing.T) {
 	s, ts := testServer(t)
 	claims := ClaimsDir(s.Dir)
-	if err := os.MkdirAll(claims, 0770); err != nil {
+	if err := os.MkdirAll(RedeemedDir(claims), 0770); err != nil {
 		t.Fatal(err)
 	}
 	for range 200 {
@@ -133,7 +133,7 @@ func TestRepeatedSetupFetchesCollapse(t *testing.T) {
 // of root to the file that the link points at. A ledger made or found with
 // the group write bit off must come out 0660. If not, one appender loses it.
 func TestInitLedgerWorksThroughTheDescriptor(t *testing.T) {
-	claims := t.TempDir()
+	claims := newClaimsDir(t)
 	target := filepath.Join(t.TempDir(), "shadow")
 	if err := os.WriteFile(target, []byte("original\n"), 0600); err != nil {
 		t.Fatal(err)
@@ -149,7 +149,7 @@ func TestInitLedgerWorksThroughTheDescriptor(t *testing.T) {
 	}
 
 	for _, existing := range []bool{false, true} {
-		claims := t.TempDir()
+		claims := newClaimsDir(t)
 		if existing {
 			if err := os.WriteFile(LedgerPath(claims), []byte("{}\n"), 0600); err != nil {
 				t.Fatal(err)

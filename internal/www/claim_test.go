@@ -45,7 +45,11 @@ func TestClaimFlow(t *testing.T) {
 	if code2, again := get(t, ts.URL+"/claim/"+c.Code); code2 != 404 || again != notFound {
 		t.Fatalf("second redeem: %d %q vs %q", code2, again, notFound)
 	}
-	if _, err := os.Stat(filepath.Join(claims, c.Code+".redeemed")); err != nil {
+	// The redeem made a marker and left the claim of root as it was.
+	if _, err := os.Stat(filepath.Join(RedeemedDir(claims), c.Code+".redeemed")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(claims, c.Code+".json")); err != nil {
 		t.Fatal(err)
 	}
 	old, _ := IssueClaim(claims, "a1b2c3d4e5f67890", []string{"GITHUB_TOKEN"})
@@ -78,19 +82,31 @@ func TestClaimLimiterAndSweep(t *testing.T) {
 	if last != 429 {
 		t.Fatal(last)
 	}
-	stale := filepath.Join(claims, "STALE1.redeemed")
+	_ = os.MkdirAll(RedeemedDir(claims), 0770)
+	// OLD1 is an old claim with its marker. Both go, the claim first. LIVE1
+	// is a claim that is not old, with an old marker. The marker stays while
+	// the claim is there, so the code stays spent. FRESH1 is not redeemed.
+	old, oldMark := filepath.Join(claims, "OLD111.json"), markerPath(claims, "OLD111")
+	live, liveMark := filepath.Join(claims, "LIVE11.json"), markerPath(claims, "LIVE11")
 	fresh := filepath.Join(claims, "FRESH1.json")
-	for _, p := range []string{stale, fresh} {
-		_ = os.WriteFile(p, []byte("{}"), 0640)
-	}
+	legacy := filepath.Join(claims, "STALE1.redeemed")
 	ago := time.Now().Add(-2 * time.Hour)
-	_ = os.Chtimes(stale, ago, ago)
-	Sweep(claims)
-	if _, err := os.Stat(stale); err == nil {
-		t.Fatal("stale file kept")
+	for _, p := range []string{old, oldMark, live, liveMark, fresh, legacy} {
+		_ = os.WriteFile(p, []byte("{}"), 0640)
+		if p != live && p != fresh {
+			_ = os.Chtimes(p, ago, ago)
+		}
 	}
-	if _, err := os.Stat(fresh); err != nil {
-		t.Fatal("fresh file removed")
+	Sweep(claims)
+	for _, p := range []string{old, oldMark, legacy} {
+		if _, err := os.Stat(p); err == nil {
+			t.Fatalf("old file %s kept", p)
+		}
+	}
+	for _, p := range []string{live, liveMark, fresh} {
+		if _, err := os.Stat(p); err != nil {
+			t.Fatalf("file %s removed", p)
+		}
 	}
 	if _, err := RedeemClaim(claims, "../etc"); err != ErrNoClaim {
 		t.Fatal("bad code accepted")

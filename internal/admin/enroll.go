@@ -62,7 +62,8 @@ type Claim struct {
 func (c *Config) claimsDir() string { return www.ClaimsDir(c.WWWDir) }
 
 // IssueClaim writes the one-time claim file and the ledger line. apply.sh
-// creates the claims directory as root:pf-fortress 0770.
+// creates the claims directory as root:pf-fortress 2750, and claims-redeemed
+// (markers and ledger, written by www) as root:pf-fortress 2770.
 func (c *Config) IssueClaim(slot string) (Claim, error) {
 	slot = strings.ToLower(strings.TrimSpace(slot))
 	rows, err := c.store().ListSlots()

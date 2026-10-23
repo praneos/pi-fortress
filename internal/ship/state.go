@@ -208,7 +208,7 @@ var stateSkip = map[string][]string{
 		"lab",
 	},
 	"lib": {
-		"engine/ca.pem", "mitm", "www/claims",
+		"engine/ca.pem", "mitm", "www/claims", "www/claims-redeemed",
 		"*.offset", "*.last", "journal.cursor", "observe.json", "*.leases", "monitor",
 		"releases", "incoming", "ship-work", "install", "install-work", "upgrade",
 		"ship.version", "ship.pending", ".ship.pending-*", "ship.lock", "state.version", ".pf-ship-*",

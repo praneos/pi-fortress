@@ -122,7 +122,6 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	claims := ClaimsDir(s.Dir)
-	Sweep(claims)
 	if code, ok := strings.CutPrefix(r.URL.Path, "/claim/"); ok {
 		s.serveClaim(w, r, claims, code)
 		return

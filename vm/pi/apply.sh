@@ -2003,11 +2003,22 @@ echo "pi-fortress: fence=split (engine+broker on ${PI_IP}:8080${INSPECT_DESC})"
 
 WWW=/var/lib/pi-fortress/www
 install -d -m 0755 "${WWW}"
-# Claim codes and the enrollment ledger: the TUI (root) writes, www
-# (DynamicUser in group pf-fortress) renames and appends. Nothing else.
+# Claim codes: only the TUI (root) writes claims/. www (DynamicUser in
+# group pf-fortress) reads it, and cannot create, change or remove a claim.
+# install -d also sets the mode of a claims/ that an earlier apply made
+# 2770. To spend a code, www makes a marker in claims-redeemed/, which also
+# holds the enrollment ledger. Root and www append to the ledger.
+install -d -m 2750 -o root -g pf-fortress "${WWW}/claims"
+install -d -m 2770 -o root -g pf-fortress "${WWW}/claims-redeemed"
+# The ledger was in claims/ before. Move it once, and never move a link.
+for _l in ledger.jsonl ledger.jsonl.1; do
+  if [[ -f "${WWW}/claims/${_l}" && ! -L "${WWW}/claims/${_l}" && ! -e "${WWW}/claims-redeemed/${_l}" ]]; then
+    mv "${WWW}/claims/${_l}" "${WWW}/claims-redeemed/${_l}"
+  fi
+done
 # apply makes the ledger through a descriptor, never by name: www can write
-# the directory, so the name can point to a different file.
-install -d -m 2770 -o root -g pf-fortress "${WWW}/claims"
+# claims-redeemed/, so the name can point to a different file. The same
+# call removes old claims and their markers: www cannot remove a claim.
 "${PF}" www -init-ledger -dir "${WWW}"
 if [[ -n "${ca_src}" ]]; then
   install -m 0644 "${ca_src}" "${WWW}/ca.pem"

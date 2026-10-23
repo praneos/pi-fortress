@@ -104,10 +104,13 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   stays root, for the conntrack netlink dump. There is no console daemon. For
   management, use `sudo pf tui`. This is a terminal program. Its only
   privilege is the sudo of the operator.
-- www writes to exactly one directory: `/var/lib/pi-fortress/www/claims`
-  (`root:pf-fortress 2770`, `SupplementaryGroups=pf-fortress`,
-  `ReadWritePaths` for that path only). In this directory, www renames claim
-  files and appends to the ledger. `/etc/pi-fortress/broker` stays in
+- www writes to exactly one directory:
+  `/var/lib/pi-fortress/www/claims-redeemed` (`root:pf-fortress 2770`,
+  `SupplementaryGroups=pf-fortress`, `ReadWritePaths` for that path only).
+  In this directory, www makes a marker for each spent claim code and
+  appends to the ledger. It only reads the claims in
+  `/var/lib/pi-fortress/www/claims` (`root:pf-fortress 2750`), so it cannot
+  create or change a claim. `/etc/pi-fortress/broker` stays in
   `InaccessiblePaths`.
 - The broker serves one source prefix. The unit reads `AGENT_NET` from
   `net.env` for `-agent-net`. With this flag, the broker refuses with 403 a
@@ -118,7 +121,7 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   - `pf broker`: owns `secrets.env` `0600`.
 - There are three groups:
   - `pf-fortress` has all daemons, for the files that they share (logs,
-    state, the claims directory).
+    state, the claims directories).
   - `pf-fence` has the engine and the broker, and nobody else. It exists to
     gate the broker socket.
   - `pf-fakeip` has the broker only. It is the group of the fake-IP journal

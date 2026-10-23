@@ -19,7 +19,9 @@ LimitNOFILE=1024
 OOMScoreAdjust=300
 DynamicUser=yes
 SupplementaryGroups=pf-fortress
-ReadWritePaths=/var/lib/pi-fortress/www/claims
+# Claims are read-only to www (ProtectSystem=strict; group read on
+# claims/). It writes only the redeemed markers and the ledger.
+ReadWritePaths=/var/lib/pi-fortress/www/claims-redeemed
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes

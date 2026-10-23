@@ -58,6 +58,7 @@ fence  absent /etc/pi-fortress/secrets.disabled
 both   absent /etc/pi-fortress/agent-env-*.sh
 both   absent /etc/pi-fortress/agent-credentials-*.json
 fence  absent /var/lib/pi-fortress/www/claims/*
+fence  absent /var/lib/pi-fortress/www/claims-redeemed/*
 fence  absent /var/lib/pi-fortress/appliance.slot
 both   absent /boot/pi-fortress-canary
 both   absent /boot/pi-fortress-claim

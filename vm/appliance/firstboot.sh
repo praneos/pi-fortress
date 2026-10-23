@@ -120,7 +120,7 @@ fence() {
 
   # A claim lives five minutes (internal/www ClaimTTL). An agent VM can take
   # longer to boot. Thus the script sends a new claim until the agent uses one.
-  local ledger=/var/lib/pi-fortress/www/claims/ledger.jsonl code i
+  local ledger=/var/lib/pi-fortress/www/claims-redeemed/ledger.jsonl code i
   waited=0
   while :; do
     code="$(/usr/local/sbin/pf claim -slot "${slot}" | sed -n 's/^code=//p')"

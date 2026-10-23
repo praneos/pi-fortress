@@ -1252,29 +1252,39 @@ ARP cannot swap any of the three. The script that comes back:
 
 Live values never leave `secrets.env`.
 
-Storage: `/var/lib/pi-fortress/www/claims/`, `root:pf-fortress 2770`. This
-directory is setgid. Thus a file that the root TUI writes there still goes
-into the group that www can rename and append to.
+Storage: two directories in `/var/lib/pi-fortress/www/`. Both are setgid.
+Thus a file that the root TUI writes there still goes into the group of www.
 
-The TUI writes `<CODE>.json` (0640). It has `code`, `slot`, `kinds`,
+- `claims/`, `root:pf-fortress 2750`. Only root writes it. www can read a
+  claim, but it cannot create, change, rename or remove one.
+- `claims-redeemed/`, `root:pf-fortress 2770`. www writes it: one marker
+  for each spent code, and the ledger.
+
+The TUI writes `claims/<CODE>.json` (0640). It has `code`, `slot`, `kinds`,
 `issued`, `expires`, `setup_sha256`, and `ca_sha256`, and `git_hosts` when
 the slot has `GITHUB_TOKEN`. www:
 
-- Redeems with one `os.Rename` to `<CODE>.redeemed`. This is what makes a
-  second redeem fail.
-- Refuses expired files.
-- Never serves a listing of the directory.
+- Redeems by making `claims-redeemed/<CODE>.redeemed` with `O_EXCL`. This
+  is what makes a second redeem fail. It makes the marker only for a claim
+  file that exists, and before it reads the claim. The marker is on disk,
+  so a spent code stays spent after a restart or a reboot. A claim that
+  was not redeemed stays valid until it expires.
+- Refuses expired claims, and a claim file that root does not own.
+- Never serves a listing of either directory.
 - Answers wrong, used, and expired codes with the same 404.
 - Allows ten attempts for each source address each minute.
 
-Every GET or HEAD that www serves, whatever the path, first sweeps the
-`.json` and `.redeemed` files with an mtime more than one hour old. The sweep
-never opens them. Thus it is a floor on the five-minute `expires`, and not
-the expiry check. The expiry check is in the redeem, on every redeem. www
-gets only `SupplementaryGroups=pf-fortress` and `ReadWritePaths` for that one
-directory. `secrets.env` stays inaccessible to www.
+Root sweeps: each claim issue and each `pf apply` (`pf www -init-ledger`)
+remove the claims with an mtime more than one hour old, and then the
+marker of each claim that is gone. A marker never goes before its claim.
+The sweep never opens a claim. Thus it is a floor on the five-minute
+`expires`, and not the expiry check. The expiry check is in the redeem, on
+every redeem. www gets only `SupplementaryGroups=pf-fortress` and
+`ReadWritePaths` for `claims-redeemed/`. `secrets.env` stays inaccessible to
+www.
 
-Ledger: `claims/ledger.jsonl` (0660, same group). It has these entries:
+Ledger: `claims-redeemed/ledger.jsonl` (0660, same group). It has these
+entries:
 
 - `issued {code, slot, uid}` from the TUI.
 - `redeemed {code, slot, ip}` from www, when a code is redeemed.

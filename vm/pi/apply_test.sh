@@ -2656,10 +2656,16 @@ _first="$(grep -nF -e ' "${SECRETS}"' -e ' "${BROKER_DIR}/' "${apply}" | head -1
 [[ -n "${_stop}" && -n "${_check}" && -n "${_first}" && "${_stop}" -lt "${_check}" && "${_check}" -lt "${_first}" ]] ||
   fail "apply works by name in the broker's directory before stopping the broker and checking those names"
 
-# www writes the claims directory. Thus root gets to the ledger
-# through the descriptor of pf, and never chowns or chmods it by name.
+# www writes claims-redeemed/, where the ledger is. Thus root gets to the
+# ledger through the descriptor of pf, and never chowns or chmods it by name.
 grep -qF '"${PF}" www -init-ledger -dir "${WWW}"' "${apply}" || fail "apply no longer makes the ledger through pf www -init-ledger"
 grep -qE '(touch|chown|chmod) .*ledger\.jsonl' "${apply}" && fail "apply works on the ledger by name in a directory www can write"
+
+# Only root writes claims/. www reads it, and writes only claims-redeemed/.
+grep -qF 'install -d -m 2750 -o root -g pf-fortress "${WWW}/claims"' "${apply}" || fail "apply does not make claims/ 2750 root:pf-fortress"
+grep -qF 'install -d -m 2770 -o root -g pf-fortress "${WWW}/claims-redeemed"' "${apply}" || fail "apply does not make claims-redeemed/ 2770 root:pf-fortress"
+[[ "$(grep '^ReadWritePaths=' "${here}/www.service")" == "ReadWritePaths=/var/lib/pi-fortress/www/claims-redeemed" ]] ||
+  fail "www.service must have claims-redeemed as its only writable path"
 
 # Each file that apply and provision write with > gets its mode from the
 # umask. Thus neither script may inherit the umask of the caller.
