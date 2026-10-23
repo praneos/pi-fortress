@@ -240,6 +240,11 @@ var (
 	reFwmark  = regexp.MustCompile(`^0x[0-9a-fA-F]+$`)
 )
 
+// ValidIfaceName reports whether render takes name as an interface name
+// (INT_IF, WAN_IF, HOUSE_IF, segments.d IF). pf install uses it. Thus it
+// refuses the same names before it writes them.
+func ValidIfaceName(name string) bool { return reIface.MatchString(name) }
+
 // DefaultHouseIP is the address of the house segment when house.env
 // names an interface but no address. doctor also asserts against it.
 const DefaultHouseIP = "10.78.0.1"

@@ -15,8 +15,14 @@ import (
 // on /etc/pi-fortress/net.env.local and house.env. net.env.local.example and
 // house.env.example document both as overlays that people edit by hand.
 // Thus a second run of the wizard must not overwrite lines that it was not
-// asked to change.
+// asked to change. It refuses a value with a line break, because that value
+// adds a line of its own; it writes nothing then.
 func UpsertEnv(path string, kv map[string]string, header string) error {
+	for _, k := range sortedKeys(kv) {
+		if strings.ContainsAny(kv[k], "\r\n") {
+			return fmt.Errorf("%s: %s=%q has a line break; a value must be one line", path, k, kv[k])
+		}
+	}
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {
