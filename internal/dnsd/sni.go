@@ -230,11 +230,17 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 		c.verdict(p.ID, nfq.Drop, nil)
 		return
 	}
+	syn := flags&tcpSYN != 0 && len(payload) == 0
 	c.mu.Lock()
 	if d, ok := c.done[key]; ok && c.now().Sub(d.at) < sniDone {
-		c.mu.Unlock()
-		c.repeat(p.ID, p.Mark, d.mark)
-		return
+		if !syn {
+			c.mu.Unlock()
+			c.repeat(p.ID, p.Mark, d.mark)
+			return
+		}
+		// A SYN after the verdict is a new connection on the same addresses
+		// and ports. The verdict was for the name of the old one.
+		delete(c.done, key)
 	}
 	f := c.flows[key]
 	if f == nil && (len(payload) > 0 || flags&tcpSYN != 0) {
@@ -250,9 +256,19 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 	// The SYN is in the queue too (the gate marks the flow on it). The SYN
 	// gives the exact start of the data. Thus the check does not read a
 	// second segment that arrives before the first as the start of the
-	// stream.
-	if flags&tcpSYN != 0 && len(payload) == 0 {
-		f.first, f.syn = seq+1, true
+	// stream. Only the first SYN, before any data, sets it. The server
+	// ignores a later SYN with a different sequence number. If the check took
+	// it, it would read the stream from a different place. Thus it is refused.
+	if syn {
+		switch {
+		case !f.syn && f.bytes == 0:
+			f.first, f.syn = seq+1, true
+		case !f.syn || seq+1 != f.first:
+			c.mu.Unlock()
+			c.decide(key, sniBad, "SYN moves the start of the stream")
+			c.verdict(p.ID, nfq.Drop, nil)
+			return
+		}
 	}
 	if len(payload) == 0 {
 		c.mu.Unlock()
@@ -265,18 +281,20 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 		c.verdict(p.ID, nfq.Drop, nil)
 		return
 	}
-	// A retransmit from the same sequence number can carry more: the client
-	// joins the segments that are not yet acknowledged. The server keeps the
-	// bytes that it got first and takes only the new tail. The check does the
-	// same. A retransmit that changes the bytes it repeats would show the
-	// check one name and the server another. It is refused.
-	old, dup := f.segs[seq]
-	if dup && len(payload) > len(old) && !bytes.Equal(payload[:len(old)], old) {
+	// A retransmit can repeat bytes that the check holds, from the same or a
+	// different sequence number, and can carry more: the client joins the
+	// segments that are not yet acknowledged. Which copy of a repeated byte a
+	// server keeps depends on its TCP stack and on the order of arrival. A
+	// segment that repeats a byte with a different value could show the check
+	// one name and the server another. It is refused. Thus each byte of the
+	// stream has one value, whatever copy the check or the server reads.
+	if f.conflicts(seq, payload) {
 		c.mu.Unlock()
-		c.decide(key, sniBad, "retransmit changes data already held")
+		c.decide(key, sniBad, "segment changes data already held")
 		c.verdict(p.ID, nfq.Drop, nil)
 		return
 	}
+	old, dup := f.segs[seq]
 	f.held = append(f.held, sniHeld{p.ID, p.Mark})
 	if !dup || len(payload) > len(old) {
 		f.segs[seq] = append([]byte(nil), payload...)
@@ -434,6 +452,25 @@ func (c *sniCheck) verdict(id, v uint32, mark *uint32) {
 	if err := c.q.Verdict(id, v, mark); err != nil && !errors.Is(err, nfq.ErrClosed) {
 		c.logf("pf dns: sni: verdict for packet %d: %v", id, err)
 	}
+}
+
+// conflicts is true when payload at seq repeats a byte that a held segment
+// has, with a different value.
+func (f *sniFlow) conflicts(seq uint32, payload []byte) bool {
+	end := seq + uint32(len(payload))
+	for s, d := range f.segs {
+		lo, hi := seq, end
+		if seqBefore(lo, s) {
+			lo = s
+		}
+		if e := s + uint32(len(d)); seqBefore(e, hi) {
+			hi = e
+		}
+		if seqBefore(lo, hi) && !bytes.Equal(payload[lo-seq:hi-seq], d[lo-s:hi-s]) {
+			return true
+		}
+	}
+	return false
 }
 
 // stream is the flow's data from its first byte, as far as it is

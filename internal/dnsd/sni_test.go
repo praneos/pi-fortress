@@ -247,6 +247,90 @@ func TestSNIKeepsTheLongerRetransmit(t *testing.T) {
 	}
 }
 
+// A new connection on the same addresses and ports, inside sniDone, is
+// checked again. It does not get the verdict of the old connection.
+func TestSNIChecksANewConnectionOnTheSamePorts(t *testing.T) {
+	ip := netip.MustParseAddr("172.66.147.243")
+	r := &fakeResolve{
+		ans:   map[string][]netip.Addr{"example.com": {ip}},
+		block: map[string]bool{"tracker.example": true},
+	}
+	c, q := newTestCheck(t, r)
+	ctx := context.Background()
+	c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4f(ip.String(), 4999, tcpSYN, nil)})
+	q.wait(t, 1)
+	c.packet(ctx, nfq.Packet{ID: 2, Payload: tcp4(ip.String(), 5000, clientHello(t, "example.com"))})
+	if v := q.wait(t, 2); v.mark != sniOK {
+		t.Fatalf("first connection: %+v", v)
+	}
+	c.packet(ctx, nfq.Packet{ID: 3, Payload: tcp4f(ip.String(), 90000, tcpSYN, nil)})
+	if v := q.wait(t, 3); v.v != nfq.Accept || v.set {
+		t.Fatalf("new SYN: %+v, want a plain accept", v)
+	}
+	c.packet(ctx, nfq.Packet{ID: 4, Payload: tcp4(ip.String(), 90001, clientHello(t, "tracker.example"))})
+	if v := q.wait(t, 4); v.mark != sniBad {
+		t.Fatalf("second connection with a blocked name: %+v, want the bad mark", v)
+	}
+}
+
+// Only the first SYN, before any data, sets the start of the stream. A
+// later SYN with a different sequence number is refused. A retransmit of
+// the first SYN is not.
+func TestSNIRefusesASYNThatMovesTheStream(t *testing.T) {
+	ip := netip.MustParseAddr("172.66.147.243")
+	r := &fakeResolve{ans: map[string][]netip.Addr{"example.com": {ip}}}
+	hello := clientHello(t, "example.com")
+	cut := len(hello) / 2
+	ctx := context.Background()
+
+	c, q := newTestCheck(t, r)
+	c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4f(ip.String(), 4999, tcpSYN, nil)})
+	q.wait(t, 1)
+	c.packet(ctx, nfq.Packet{ID: 2, Payload: tcp4f(ip.String(), 4999, tcpSYN, nil)})
+	if v := q.wait(t, 2); v.v != nfq.Accept || v.set {
+		t.Fatalf("retransmitted SYN: %+v, want a plain accept", v)
+	}
+	c.packet(ctx, nfq.Packet{ID: 3, Payload: tcp4(ip.String(), 5000, hello[:cut])})
+	q.none(t, 3)
+	c.packet(ctx, nfq.Packet{ID: 4, Payload: tcp4f(ip.String(), 9999, tcpSYN, nil)})
+	if v := q.wait(t, 4); v.v != nfq.Drop {
+		t.Fatalf("second SYN: %+v, want a drop", v)
+	}
+	if v := q.wait(t, 3); v.mark != sniBad {
+		t.Fatalf("held data after a second SYN: %+v, want the bad mark", v)
+	}
+	if len(r.asked) != 0 {
+		t.Fatalf("asked %v, want no lookup", r.asked)
+	}
+}
+
+// A segment that repeats a held byte from a different sequence number, with
+// a different value, is refused. The check and the server could otherwise
+// read different names.
+func TestSNIRefusesAnOverlapThatChangesHeldData(t *testing.T) {
+	ip := netip.MustParseAddr("172.66.147.243")
+	r := &fakeResolve{ans: map[string][]netip.Addr{"example.com": {ip}}}
+	hello := clientHello(t, "example.com")
+	other := clientHello(t, "blocked.example")
+	cut := 50
+	c, q := newTestCheck(t, r)
+	ctx := context.Background()
+	c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4f(ip.String(), 4999, tcpSYN, nil)})
+	q.wait(t, 1)
+	c.packet(ctx, nfq.Packet{ID: 2, Payload: tcp4(ip.String(), 5000+uint32(cut), other[cut:])})
+	q.none(t, 2)
+	c.packet(ctx, nfq.Packet{ID: 3, Payload: tcp4(ip.String(), 5000, hello)})
+	if v := q.wait(t, 3); v.v != nfq.Drop {
+		t.Fatalf("overlapping segment: %+v, want a drop", v)
+	}
+	if v := q.wait(t, 2); v.mark != sniBad {
+		t.Fatalf("held segment: %+v, want the bad mark", v)
+	}
+	if len(r.asked) != 0 {
+		t.Fatalf("asked %v, want no lookup", r.asked)
+	}
+}
+
 // A connection that is open but has no data yet (a preconnect) is logged
 // as such, with its source port. A refusal that the rate limit holds back
 // is counted on the next line.
