@@ -6,6 +6,33 @@ CA_DIR="${PF_CA_DIR:-/etc/pi-fortress}"
 
 sha256_of() { sha256sum "$1" 2>/dev/null | awk '{print $1}'; }
 
+# Limits for the fetched ca.pem. A rotation serves 3 certificates: the
+# current root, the next or old root, and the link. A larger file is
+# not a set of the Pi.
+CA_MAX_BYTES=65536
+CA_MAX_CERTS=8
+
+# fetch_ca FILE gets http://PI_IP/ca.pem into FILE. It fails when the Pi
+# does not answer, when the file has no certificate, or when the file is
+# larger than the limits above.
+fetch_ca() {
+  local rc=0 size certs
+  curl -fsS --max-time 5 --max-filesize "${CA_MAX_BYTES}" "http://${PI_IP}/ca.pem" -o "$1" 2>/dev/null || rc=$?
+  # curl gives 63 when the file is larger than --max-filesize. An old
+  # curl checks only the Content-Length. Thus check the size here too.
+  size="$(wc -c <"$1" 2>/dev/null)" || size=0
+  if ((rc == 63 || size > CA_MAX_BYTES)); then
+    echo "agent: http://${PI_IP}/ca.pem is larger than ${CA_MAX_BYTES} bytes; keeping the CA already trusted" >&2
+    return 1
+  fi
+  ((rc == 0)) || return 1
+  certs="$(grep -c -- '-----BEGIN CERTIFICATE-----' "$1")" || return 1
+  if ((certs > CA_MAX_CERTS)); then
+    echo "agent: http://${PI_IP}/ca.pem has more than ${CA_MAX_CERTS} certificates; keeping the CA already trusted" >&2
+    return 1
+  fi
+}
+
 # CA_SHA256 in agent.env pins the CA that this box trusts. Provisioning
 # records it, from PF_CA_SHA256 or (PF_CA_TOFU=1, set only by
 # provision.sh) from the first ca.pem that it fetches. After that, each
@@ -151,8 +178,7 @@ pick_ca() {
     pin=invalid
   fi
   fetched="$(mktemp)"
-  if curl -fsS --max-time 5 "http://${PI_IP}/ca.pem" -o "${fetched}" 2>/dev/null \
-     && grep -q "BEGIN CERTIFICATE" "${fetched}"; then
+  if fetch_ca "${fetched}"; then
     sum="$(sha256_of "${fetched}")"
     if [[ -z "${pin}" && "${PF_CA_TOFU:-0}" == 1 ]]; then
       record_pin "${sum}"
