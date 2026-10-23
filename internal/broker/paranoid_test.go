@@ -195,15 +195,15 @@ func TestParanoidNormalizesTheHostHeader(t *testing.T) {
 	}
 }
 
-// An empty Host falls back to the SNI, which the engine already examined.
-// It must not read as an empty name that the oracle refuses.
-func TestParanoidEmptyHostFallsBackToSNI(t *testing.T) {
+// An empty Host on HTTP/1.1 is refused before the oracle, as a missing
+// Host is. It never falls back to the SNI.
+func TestParanoidEmptyHostRefused(t *testing.T) {
 	b := paranoidBroker(t)
 	fakeUpstream(t, b, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("origin\n"))
 	})
 	p := preamble.Preamble{SNI: "api.github.com", OrigDst: netip.MustParseAddrPort("93.184.216.34:443")}
-	if body := roundtrip(t, b, p, "GET / HTTP/1.1\r\nHost: \r\n\r\n"); body != "origin\n" {
+	if body := roundtrip(t, b, p, "GET / HTTP/1.1\r\nHost: \r\n\r\n"); body != "request\n" {
 		t.Fatalf("body=%q", body)
 	}
 }

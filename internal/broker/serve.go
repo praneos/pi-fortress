@@ -358,10 +358,10 @@ func (b *Broker) admit(c *call) (done bool, err error) {
 // origin-form and OPTIONS * ever leave. Any other form would let the agent
 // name a vhost that the fence never judged, with the credential injected
 // for the vhost that the fence judged. CONNECT is a tunnel that the fence
-// cannot read into. An HTTP/1.1 request without a Host field makes the
-// routing of the origin a guess. An empty Host stays: for it, the
-// decisions use the SNI instead (TestParanoidEmptyHostFallsBackToSNI), as
-// the decisions of an origin do.
+// cannot read into. An HTTP/1.1 request without a Host field, or with an
+// empty one, makes the routing of the origin a guess. Each origin can send
+// it to a different vhost than the one the SNI names. HTTP/1.0 has no
+// Host requirement, so there the decisions use the SNI.
 func targetRefusal(req *httpwire.Request) string {
 	switch {
 	case req.Method == "CONNECT":
@@ -373,7 +373,7 @@ func targetRefusal(req *httpwire.Request) string {
 	case !strings.HasPrefix(req.Target, "/"):
 		return "request_target"
 	}
-	if req.Proto != "HTTP/1.0" && len(req.Values("Host")) == 0 {
+	if req.Proto != "HTTP/1.0" && strings.Trim(req.Get("Host"), " \t") == "" {
 		return "no_host"
 	}
 	return ""
