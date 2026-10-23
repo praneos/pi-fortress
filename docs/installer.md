@@ -81,6 +81,7 @@ These are the steps. Each step is idempotent:
 - Stop and remove the units.
 - `nft delete table inet fortress`.
 - Restore `/etc/dnsmasq.conf` if we made a backup of it.
+- Remove the apt hook `/etc/apt/apt.conf.d/60pi-fortress-ca` and `/var/lib/pi-fortress/ca-bundle.sha256`. If the hook stays, it does nothing when the script is gone.
 - Remove `/usr/local/lib/pi-fortress`.
 
 `--purge` also removes `/etc/pi-fortress`. This deletes the secrets and the CA. Thus, the command must say so. It must also require the flag two times or a typed confirmation. Without `--purge`, an uninstall/install round trip keeps all slots.

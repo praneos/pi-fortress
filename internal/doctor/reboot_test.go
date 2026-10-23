@@ -149,3 +149,22 @@ func TestSplitRelease(t *testing.T) {
 		}
 	}
 }
+
+func TestCARestartRungWarnsWhileTheMarkerIsThere(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "ca-restart-pending")
+	if _, ok := CARestartRung(p); ok {
+		t.Fatal("a rung with no marker")
+	}
+	if err := os.WriteFile(p, []byte("2026-10-23T04:00:00Z\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, ok := CARestartRung(p)
+	if !ok || r.Status != Warn {
+		t.Fatalf("got %v %v %q", ok, r.Status, r.Detail)
+	}
+	for _, want := range []string{"system CA bundle changed", "restart pi-fortress-broker.service", "pf unlock"} {
+		if !strings.Contains(r.Detail, want) {
+			t.Fatalf("detail does not say %q: %q", want, r.Detail)
+		}
+	}
+}

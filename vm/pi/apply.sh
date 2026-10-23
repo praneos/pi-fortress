@@ -755,6 +755,19 @@ if [[ -f "${PI_LIB}/ship-deadman.service" && -f "${PI_LIB}/ship-deadman.timer" ]
   systemctl enable --now pi-fortress-ship-deadman.timer >/dev/null 2>&1 \
     || echo "pi-fortress: pi-fortress-ship-deadman.timer did not start; an unconfirmed upgrade will not revert itself (journalctl -u pi-fortress-ship-deadman.timer)" >&2
 fi
+# A Go daemon reads the system CA roots one time, at start. The apt hook
+# runs ca-restart.sh after each dpkg run, and the script restarts the
+# daemons that verify TLS when the system CA bundle changed. Apply installs
+# it here, not only provision.sh, so a ship delivers it to a box
+# provisioned before it. --seed records the hash of the bundle now, so the
+# first change after this install is seen.
+if [[ -f "${PI_LIB}/ca-restart.sh" && -f "${PI_LIB}/60pi-fortress-ca" && -d /etc/apt/apt.conf.d ]]; then
+  install -d -m 0755 /usr/local/lib/pi-fortress
+  [[ "${PI_LIB}/ca-restart.sh" -ef /usr/local/lib/pi-fortress/ca-restart.sh ]] ||
+    install -m 0755 "${PI_LIB}/ca-restart.sh" /usr/local/lib/pi-fortress/ca-restart.sh
+  install -m 0644 "${PI_LIB}/60pi-fortress-ca" /etc/apt/apt.conf.d/60pi-fortress-ca
+  /usr/local/lib/pi-fortress/ca-restart.sh --seed || true
+fi
 # The budget goes in PF_BROKER_FLAGS, not in ${VAR} in the unit ExecStart.
 # A net.env from before these keys existed expands to a bare
 # "-slot-warn-requests=". The flag parser refuses it, and systemd then

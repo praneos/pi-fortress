@@ -1,0 +1,5 @@
+// pi-fortress: after each dpkg run, restart the pf daemons that verify TLS
+// if the system CA bundle changed (/usr/local/lib/pi-fortress/ca-restart.sh).
+// apply.sh installs this file. The command always exits 0, so it never
+// fails an apt run. If the script is gone, the hook does nothing.
+DPkg::Post-Invoke { "if [ -x /usr/local/lib/pi-fortress/ca-restart.sh ]; then /usr/local/lib/pi-fortress/ca-restart.sh >/dev/null 2>&1 || true; fi"; };

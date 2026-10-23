@@ -68,6 +68,9 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	if r, ok := doctor.SecretsRung(state, err); ok {
 		rs = append(rs, r)
 	}
+	if r, ok := doctor.CARestartRung(doctor.CARestartPending); ok {
+		rs = append(rs, r)
+	}
 	if r, ok := doctor.SudoRung(doctor.SudoersFiles(*etc)); ok {
 		rs = append(rs, r)
 	}

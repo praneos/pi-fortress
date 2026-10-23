@@ -40,6 +40,7 @@ distro-test:
 apply-test: pf
 	@./vm/pi/apply_test.sh
 	@./vm/pi/usb_nic_switch_test.sh
+	@./vm/pi/ca_restart_test.sh
 	@./vm/desk/setup_test.sh
 
 # Static check over the shell scripts. No pf build, no VM: it runs in

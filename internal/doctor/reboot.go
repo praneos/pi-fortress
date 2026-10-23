@@ -209,3 +209,24 @@ func shortAge(d time.Duration) string {
 	}
 	return fmt.Sprintf("%dm", int(d.Minutes()))
 }
+
+// CARestartPending is the marker that ca-restart.sh writes when the system
+// CA bundle changed but a sealed store kept it from a broker restart.
+// Each broker start removes it.
+const CARestartPending = "/var/lib/pi-fortress/ca-restart-pending"
+
+// CARestartRung warns while the marker is there: the broker still verifies
+// origins against the old system roots. An automatic restart would lock
+// the sealed store, so the restart is for an operator who can unlock. The
+// marker is root-only; its modification time is the time of the change,
+// so the rung needs no root. No marker, no rung.
+func CARestartRung(path string) (Result, bool) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return Result{}, false
+	}
+	return Result{Rung: "ca", Where: "fence", Status: Warn, Detail: fmt.Sprintf(
+		"system CA bundle changed at %s; the broker still has the old roots, because the store is sealed. "+
+			"When you can unlock: sudo systemctl restart pi-fortress-broker.service, then sudo pf unlock",
+		fi.ModTime().Local().Format("2006-01-02 15:04"))}, true
+}

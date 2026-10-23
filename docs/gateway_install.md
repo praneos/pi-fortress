@@ -170,6 +170,10 @@ There is no network wizard, and `provision.sh` does not run again. Reason: an up
 
 Plan the reboot: `sudo reboot`. The agents have no gateway while it starts.
 
+A Go daemon reads the system CA roots one time, when it starts. Thus `apply.sh` installs the apt hook `/etc/apt/apt.conf.d/60pi-fortress-ca`. After each dpkg run, it runs `/usr/local/lib/pi-fortress/ca-restart.sh`. When `/etc/ssl/certs/ca-certificates.crt` is different from the last run, the script restarts the running units of pf-broker, pf dns (`pi-fortress-dns-agent-go`, `pi-fortress-dns-stub@*`) and pf alert. The last hash is in `/var/lib/pi-fortress/ca-bundle.sha256` (mode 0600). The hook writes nothing to the terminal and never fails the apt run. The journal tag of a restart is `pi-fortress-ca`.
+
+A broker start locks a sealed credential store again. Thus with a sealed store (`#pf-sealed` header in `secrets.env`, or a store that the script cannot read), the hook does not restart pf-broker. It restarts pf dns and pf alert, and writes the time to `/var/lib/pi-fortress/ca-restart-pending` (mode 0600). While that file is there, `pf doctor` warns on rung `ca`. When you can unlock, run `sudo systemctl restart pi-fortress-broker.service`, then `sudo pf unlock`. Each broker start (also the restart of a `pf apply`) removes the file (`ExecStartPost` in `pf-broker.service`).
+
 ## Two signers, on purpose
 
 There are two different signer files:

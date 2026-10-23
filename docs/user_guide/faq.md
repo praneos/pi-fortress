@@ -165,6 +165,8 @@ If the credential store is sealed, nothing that needs a credential works until s
 
 A full `pf apply` or a software update also restarts the broker. Thus each of these also asks for the passphrase again.
 
+An OS update that changes the system CA bundle restarts the broker only when the store is not sealed. With a sealed store, the broker keeps the old CA roots, and `pf doctor` warns (rung `ca`) until the broker restarts. Restart it when you can unlock: `sudo systemctl restart pi-fortress-broker.service`, then `sudo pf unlock`.
+
 `pf apply --local` restarts the broker only if something that the fence reads has changed:
 
 - The blocklist (a feed edit or a blacklist edit).
