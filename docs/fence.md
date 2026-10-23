@@ -330,9 +330,9 @@ in header names and values, and in the body. It buffers a response that has a
 `Content-Length` of 1 MiB or less. It streams all other responses (chunked to
 an HTTP/1.1 client). The broker rewrites a match to the placeholder and logs a
 strip event with `where=response`. The broker cannot rewrite a header name,
-because the name gives the field its meaning. Thus a live value in a header
-name gets a 502 and the same strip event, and no byte of that response goes
-to the client. This also applies to the 101 of a WebSocket switch. A strip
+because the name gives the field its meaning. Thus a live value or a
+placeholder (in any letter case) in a header name gets a 502 and the same
+strip event, and no byte of that response goes to the client. This also applies to the 101 of a WebSocket switch. A strip
 event means that the origin server reflected a credential. Treat it as an
 incident, not a redaction. The lab echoes are not origin servers. The broker answers
 them itself, and the core echo reflects the live token back by design (above).

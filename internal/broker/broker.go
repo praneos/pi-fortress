@@ -38,7 +38,7 @@ var (
 	ErrResidue  = errors.New("broker: token response holds a token after the scrub")
 	ErrLeftover = errors.New("broker: origin sent bytes past the framed response")
 	ErrOpaque   = errors.New("broker: response to a substituted request in an encoding the scrub cannot read")
-	ErrLiveName = errors.New("broker: response field name holds a live value")
+	ErrLiveName = errors.New("broker: response field name holds a live value or a placeholder")
 )
 
 type DialTLSFunc func(ctx context.Context, dst netip.AddrPort, sni string) (net.Conn, error)
