@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
@@ -321,6 +322,98 @@ func TestSNIJudgesECHByRange(t *testing.T) {
 	}
 	if m, _ := c.judge(context.Background(), key("198.51.100.7"), h); m != sniBad {
 		t.Fatal("ECH outside the ranges accepted")
+	}
+}
+
+// After a long idle, a device opens a flow with an expired answer. The CDN
+// has moved the name to a different range, so the answer now does not
+// match. The address that the same name resolved to before still passes.
+// The memory is bound to the name, and a block now wins over it.
+func TestSNIAcceptsAnAddressTheNameResolvedToBefore(t *testing.T) {
+	old, now := netip.MustParseAddr("198.51.100.7"), netip.MustParseAddr("203.0.113.9")
+	r := &fakeResolve{
+		ans:   map[string][]netip.Addr{"x.example": {now}, "other.example": {now}},
+		block: map[string]bool{"gone.example": true},
+	}
+	c, _ := newTestCheck(t, r)
+	key := sniFlowKey{netip.MustParseAddrPort("10.78.0.160:1"), netip.AddrPortFrom(old, 443)}
+	judge := func(name string) uint32 {
+		m, _ := c.judge(context.Background(), key, tlssni.Hello{ServerName: name})
+		return m
+	}
+	if judge("x.example") != sniBad {
+		t.Fatal("an address in a different /24 passed with no memory")
+	}
+	c.seen = func(name string, addr netip.Addr) bool {
+		return (name == "x.example" || name == "gone.example") && addr == old
+	}
+	if judge("x.example") != sniOK {
+		t.Fatal("the address that x.example resolved to before was refused")
+	}
+	if judge("other.example") != sniBad {
+		t.Fatal("the memory of x.example opened the address for other.example")
+	}
+	if judge("gone.example") != sniBad {
+		t.Fatal("a name that is blocked now passed by its memory")
+	}
+}
+
+// The resolver remembers the upstream answers of a segment with the SNI
+// check under the name that was asked, in any case, for sniSeenFor. A
+// segment without the check remembers nothing.
+func TestResolverRemembersAnswersForTheSNICheck(t *testing.T) {
+	up := newUpstream(t, map[string][4]byte{"x.example": {198, 51, 100, 7}}, nil, 60)
+	clock := time.Unix(1_800_000_000, 0)
+	phone, addr := netip.MustParseAddr("10.78.0.160"), netip.MustParseAddr("198.51.100.7")
+	ask := func(name, ip string, queue uint16) *Server {
+		srv, err := New(Config{
+			NFTTable: "inet fortress",
+			NFT:      &fakeNFT{},
+			Now:      func() time.Time { return clock },
+			Segments: []Segment{{
+				Name: name, Iface: "lo", IP: netip.MustParseAddr(ip),
+				Upstream: up.addr(), NFTSet: "resolved_" + name + "_v4", SNIQueue: queue,
+			}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if addrs, _, err := srv.sniResolver(srv.segs[0])(context.Background(), phone, "x.example"); err != nil || len(addrs) != 1 {
+			t.Fatalf("x.example: %v %v", addrs, err)
+		}
+		return srv
+	}
+	house := ask("house", "127.0.0.2", 1)
+	desk := ask("desk", "127.0.0.3", 0)
+	if !house.seen.has("house", "X.Example.", addr, clock) {
+		t.Fatal("the house did not remember the answer under the name in any case")
+	}
+	if house.seen.has("house", "other.example", addr, clock) {
+		t.Fatal("the answer was remembered for a different name")
+	}
+	if desk.seen.has("desk", "x.example", addr, clock) {
+		t.Fatal("a segment without the SNI check remembered the answer")
+	}
+	if house.seen.has("house", "x.example", addr, clock.Add(sniSeenFor)) {
+		t.Fatal("the answer was remembered after sniSeenFor")
+	}
+}
+
+// The table is bounded. When it is full of live entries, it forgets them
+// all, and the check falls back to the answer now.
+func TestSeenAnswersForgetsAllWhenFull(t *testing.T) {
+	var m seenAnswers
+	now := time.Unix(1_800_000_000, 0)
+	a := netip.MustParseAddr("198.51.100.7")
+	for i := range seenTrack {
+		m.add("house", fmt.Sprintf("n%d.example", i), []netip.Addr{a}, now)
+	}
+	if !m.has("house", "n0.example", a, now) {
+		t.Fatal("an entry was lost before the table was full")
+	}
+	m.add("house", "last.example", []netip.Addr{a}, now)
+	if m.has("house", "n0.example", a, now) || !m.has("house", "last.example", a, now) {
+		t.Fatal("a full table was not cleared before the new entry")
 	}
 }
 

@@ -460,9 +460,12 @@ by its TLS name (the house SNI check). Under a different egress mode, it
 checks only a 443 miss by its TLS name and does not drop it.
 
 The house SNI check passes a flow when its name resolves through the house,
-is not blocked, and the flow address is one that the name resolved to or is
-in the same /24 as one. The /24 lets a CDN that rotates its addresses
-through. A flow with Encrypted Client Hello (ECH) shows only the outer name
+is not blocked, and the flow address is one that the name resolves to now,
+one that the name resolved to through the house in the last 24 hours, or is
+in the same /24 as one that it resolves to now. The /24 lets a CDN that
+rotates its addresses through. The 24 hours let a device that opens a flow
+with an expired answer after a long idle through, also when the CDN has moved
+the name to a different range. A flow with Encrypted Client Hello (ECH) shows only the outer name
 of the provider: it passes to a resolved address of that name or into the
 ranges of `vm/policy/house_ech.ips`, whatever the inner name, and never by
 the /24. A ClientHello that does not parse, or that has an extension type
