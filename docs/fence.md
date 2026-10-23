@@ -115,7 +115,8 @@ What the fence scans:
 
 - The literal bytes of the method, the request target, each header name and
   value, and the body.
-- A gzip or deflate body, after the decode (§5.3b).
+- A gzip or deflate body, after the decode, and the optional fields of each
+  gzip member header (§5.3b).
 - The decoded user:password of `Authorization: Basic`.
 - The request target after the fence decodes all percent escapes.
 
@@ -962,6 +963,11 @@ token-prefix scan and the placeholder-outside-header rule (5.2b). A clean
 decode changes nothing: the original compressed bytes go out. A hit refuses
 the whole request. The broker does not edit compressed bytes in place,
 because nothing on this path is ever encoded again.
+
+The gzip header of each member goes to the origin with the body. Thus the
+optional header fields (FEXTRA, FNAME, FCOMMENT) get the same scan as the
+decoded bytes, one field at a time. A hit there refuses the request in the
+same way.
 
 These all refuse in the same way, `encoded_body_unscannable`:
 

@@ -789,27 +789,62 @@ const (
 // zlib-wrapped form that all libraries that send deflate write. It is not
 // raw RFC 1951, which the response path also never had to read. ok is
 // false for all other codings, for bytes that do not decode, and for a
-// decoded size past maxDecodedBody.
-func decodeLayer(coding string, b []byte) (decoded []byte, ok bool) {
-	var r io.ReadCloser
-	var err error
+// decoded size past maxDecodedBody. For gzip, fields are the optional
+// fields of the member headers (gunzipMembers).
+func decodeLayer(coding string, b []byte) (decoded []byte, fields [][]byte, ok bool) {
 	switch coding {
 	case "gzip", "x-gzip":
-		r, err = gzip.NewReader(bytes.NewReader(b))
+		return gunzipMembers(b)
 	case "deflate":
-		r, err = zlib.NewReader(bytes.NewReader(b))
-	default:
-		return nil, false
+		return inflate(b)
 	}
+	return nil, nil, false
+}
+
+// inflate undoes the deflate coding: the zlib-wrapped form.
+func inflate(b []byte) (decoded []byte, fields [][]byte, ok bool) {
+	r, err := zlib.NewReader(bytes.NewReader(b))
 	if err != nil {
-		return nil, false
+		return nil, nil, false
 	}
 	defer r.Close()
 	out, err := readBody(r, maxDecodedBody+1, -1, true)
 	if err != nil || int64(len(out)) > maxDecodedBody {
-		return nil, false
+		return nil, nil, false
 	}
-	return out, true
+	return out, nil, true
+}
+
+// gunzipMembers inflates a gzip body one member at a time. It also returns
+// the FEXTRA, FNAME and FCOMMENT fields of each member header. The fence
+// forwards the compressed bytes, so these fields reach the origin with the
+// body. The stdlib reader keeps only the header of the first member when
+// it reads all members in one pass. Thus this reads each member alone.
+func gunzipMembers(b []byte) (decoded []byte, fields [][]byte, ok bool) {
+	br := bytes.NewReader(b)
+	zr, err := gzip.NewReader(br)
+	if err != nil {
+		return nil, nil, false
+	}
+	defer zr.Close()
+	for {
+		zr.Multistream(false)
+		for _, f := range [][]byte{zr.Extra, []byte(zr.Name), []byte(zr.Comment)} {
+			if len(f) > 0 {
+				fields = append(fields, f)
+			}
+		}
+		out, err := readBody(zr, maxDecodedBody+1-int64(len(decoded)), -1, true)
+		decoded = append(decoded, out...)
+		if err != nil || int64(len(decoded)) > maxDecodedBody {
+			return nil, nil, false
+		}
+		if err = zr.Reset(br); err == io.EOF {
+			return decoded, fields, true
+		} else if err != nil {
+			return nil, nil, false
+		}
+	}
 }
 
 // decodeRequestBody undoes each coding in encs, the last-listed first,
@@ -817,18 +852,21 @@ func decodeLayer(coding string, b []byte) (decoded []byte, ok bool) {
 // sees what the origin will decode the body to. ok is false for more
 // layers than maxEncodingLayers, for an unsupported coding anywhere in the
 // stack, and for bytes that do not decode. This includes a decompression
-// bomb, because decodeLayer refuses it the same way.
-func decodeRequestBody(encs []string, body []byte) (decoded []byte, ok bool) {
+// bomb, because decodeLayer refuses it the same way. fields are the gzip
+// header fields of all layers.
+func decodeRequestBody(encs []string, body []byte) (decoded []byte, fields [][]byte, ok bool) {
 	if len(encs) > maxEncodingLayers {
-		return nil, false
+		return nil, nil, false
 	}
 	decoded = body
 	for i := len(encs) - 1; i >= 0; i-- {
-		if decoded, ok = decodeLayer(encs[i], decoded); !ok {
-			return nil, false
+		var fs [][]byte
+		if decoded, fs, ok = decodeLayer(encs[i], decoded); !ok {
+			return nil, nil, false
 		}
+		fields = append(fields, fs...)
 	}
-	return decoded, true
+	return decoded, fields, true
 }
 
 // noteEncodedBody scans a request body after the decode, for what the
@@ -982,8 +1020,13 @@ func (s *scanner) intakeBody(reserve func(n int64) bool, req *httpwire.Request, 
 	if len(encs) > 0 {
 		// The fence never rewrites it in either case (5.3b): a clean
 		// decode only proves that the compressed bytes can go out as they are.
-		if decoded, ok := decodeRequestBody(encs, body); ok {
+		// Each gzip header field gets the scan of the body, one field at a
+		// time. A hit there refuses the request in the same way.
+		if decoded, fields, ok := decodeRequestBody(encs, body); ok {
 			s.noteEncodedBody(decoded)
+			for _, f := range fields {
+				s.noteEncodedBody(f)
+			}
 		} else {
 			s.refuse(CauseEncodedBody, "", "", "body")
 		}
