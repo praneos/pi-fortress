@@ -106,7 +106,7 @@ audit:
 	@GOFLAGS= go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK) ./...
 
 pf:
-	@CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -trimpath -ldflags '-s -w' -o bin/pf ./cmd/pf
+	@CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -buildmode=pie -trimpath -ldflags '-s -w' -o bin/pf ./cmd/pf
 	@echo "bin/pf $(GOOS)/$(GOARCH)"
 
 split-bin: pf

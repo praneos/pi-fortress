@@ -67,7 +67,7 @@ cp "$ROOT/EVALUATION_NOTICE.txt" "$stage/"
 if [ -f "$dir/pf-linux-amd64" ]; then
 	cp "$dir/pf-linux-amd64" "$stage/pf"
 else
-	(cd "$ROOT" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags '-s -w' -o "$stage/pf" ./cmd/pf)
+	(cd "$ROOT" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -buildmode=pie -trimpath -ldflags '-s -w' -o "$stage/pf" ./cmd/pf)
 fi
 
 state() { VBoxManage showvminfo "$1" --machinereadable | sed -n 's/^VMState="\(.*\)"$/\1/p'; }

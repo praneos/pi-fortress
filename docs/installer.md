@@ -19,7 +19,7 @@ Today, a Pi gets Pi Fortress with these steps:
 
 Eighteen Go call sites and all shell scripts probe `/vagrant/...` first. They probe `/etc/pi-fortress` or `/usr/local/lib/pi-fortress` second. That is a dev loop, not a distribution. A second user needs the repo, Go 1.27, `make`, and this document.
 
-The binary is already the easy part. `pf` is one static file (`CGO_ENABLED=0`, `-trimpath -ldflags '-s -w'`). It has no libc and no runtime deps. The problem is everything *around* the binary. These files are in many locations:
+The binary is already the easy part. `pf` is one file (`CGO_ENABLED=0`, `-buildmode=pie -trimpath -ldflags '-s -w'`). It links no shared library. It needs only the dynamic loader of the OS, which loads its code at a random address. The problem is everything *around* the binary. These files are in many locations:
 
 - six systemd units
 - `apply.sh` and `status.sh`, which `pf apply` / `pf status` exec
