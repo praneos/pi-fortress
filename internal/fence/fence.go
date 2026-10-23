@@ -204,56 +204,87 @@ func RefreshTokenField(body []byte) (string, bool) {
 	return string(body[sp[0]:sp[1]]), true
 }
 
+// StrictFields reads the named members of body with the RefreshTokenField
+// rule, for each key: one top-level JSON object, each key spelled exactly
+// once and in no other case, each value a string with no escape in it. A key
+// that is absent has no entry. For all other input, ok == false. The broker
+// reads a refresh response with it. A loose read there stores one value and
+// lets a different one through to the agent.
+func StrictFields(body []byte, keys ...string) (map[string]string, bool) {
+	spans, ok := fieldSpans(body, keys)
+	if !ok {
+		return nil, false
+	}
+	out := make(map[string]string, len(spans))
+	for k, sp := range spans {
+		out[k] = string(body[sp[0]:sp[1]])
+	}
+	return out, true
+}
+
 // refreshTokenSpan is the location of the RefreshTokenField value in body,
 // without the quotes.
 func refreshTokenSpan(body []byte) ([2]int, bool) {
+	spans, ok := fieldSpans(body, []string{"refresh_token"})
+	sp, found := spans["refresh_token"]
+	return sp, ok && found
+}
+
+// fieldSpans is the location of each StrictFields value in body, without
+// the quotes.
+func fieldSpans(body []byte, keys []string) (map[string][2]int, bool) {
 	dec := json.NewDecoder(bytes.NewReader(body))
 	if t, err := dec.Token(); err != nil || t != json.Delim('{') {
-		return [2]int{}, false
+		return nil, false
 	}
-	var span [2]int
-	found := false
+	spans := map[string][2]int{}
 	for dec.More() {
 		t, err := dec.Token()
 		if err != nil {
-			return [2]int{}, false
+			return nil, false
 		}
 		key, _ := t.(string)
-		if !strings.EqualFold(key, "refresh_token") {
+		want := ""
+		for _, k := range keys {
+			if strings.EqualFold(key, k) {
+				want = k
+			}
+		}
+		if want == "" {
 			var skip json.RawMessage
 			if dec.Decode(&skip) != nil {
-				return [2]int{}, false
+				return nil, false
 			}
 			continue
 		}
-		if key != "refresh_token" || found {
-			return [2]int{}, false
+		if _, dup := spans[want]; key != want || dup {
+			return nil, false
 		}
-		found = true
 		from := int(dec.InputOffset())
 		if t, err = dec.Token(); err != nil {
-			return [2]int{}, false
+			return nil, false
 		}
 		if _, ok := t.(string); !ok {
-			return [2]int{}, false
+			return nil, false
 		}
 		end := int(dec.InputOffset())
 		q := bytes.IndexByte(body[from:end], '"')
 		if q < 0 {
-			return [2]int{}, false
+			return nil, false
 		}
-		span = [2]int{from + q + 1, end - 1}
+		span := [2]int{from + q + 1, end - 1}
 		if span[0] > span[1] || bytes.IndexByte(body[span[0]:span[1]], '\\') >= 0 {
-			return [2]int{}, false
+			return nil, false
 		}
+		spans[want] = span
 	}
 	if t, err := dec.Token(); err != nil || t != json.Delim('}') {
-		return [2]int{}, false
+		return nil, false
 	}
 	if _, err := dec.Token(); err != io.EOF {
-		return [2]int{}, false
+		return nil, false
 	}
-	return span, found
+	return spans, true
 }
 
 // removeDotSegments resolves "." and ".." in the same way that RFC 3986

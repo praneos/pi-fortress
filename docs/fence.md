@@ -226,8 +226,14 @@ value, the refusal is the 403.
 The broker acquires that slot **before** the write to the origin server. It
 holds the slot until it has stored the rewritten response. A second refresh
 of the same slot in that window gets `429 refresh_busy`, not a race. The
-response must be JSON. If a 200 is not JSON, or does not parse, the agent
-gets a 502. The broker does not forward a live pair unread. Harvest refreshes
+response must be JSON. The broker reads a 200 strictly: one top-level
+object, `access_token` and `refresh_token` each spelled exactly once and in
+no other case, each value a string with no escape. A 200 must have a valid
+`access_token`. It may omit `refresh_token`, but a `refresh_token` that is
+present must be valid. For all other 200s, the agent gets a 502. After the
+scrub, the broker scans the token response (status reason, field names and
+values, body) with `key_prefixes.rules`. A match is a 502 for every status.
+The broker does not forward a live pair unread. Harvest refreshes
 only the rows of a slot that already exists (`upsert` never mints). If any
 other origin server returns `access_token`, it is data.
 

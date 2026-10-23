@@ -730,6 +730,15 @@ func (b *Broker) writeBuffered(c *call, resp *httpwire.Response, reencode bool) 
 	for _, key := range rewriteResponse(resp, c.slots) {
 		_ = b.logStrip(&c.strips, clientIP(c.p), c.host, "response", "secret:"+key)
 	}
+	// The scrub replaces only the values that the broker holds. A token
+	// response that still has a token shape after it holds a value that the
+	// broker did not store: a shape that the harvest did not know, or a
+	// status that it does not harvest. The agent must not get it.
+	if c.harvestSlot != "" && b.residue(resp) {
+		c.up.discard()
+		_ = writeErr(c.client, 502, "502 Bad Gateway", "harvest\n")
+		return ErrResidue
+	}
 	if reencode {
 		resp.Body = gzipBytes(resp.Body)
 		resp.SetInPlace("Content-Encoding", "gzip")

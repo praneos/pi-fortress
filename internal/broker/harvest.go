@@ -2,7 +2,6 @@ package broker
 
 import (
 	"bytes"
-	"encoding/json"
 	"io"
 	"strings"
 
@@ -48,17 +47,19 @@ func (b *Broker) harvest(slotID string, resp *httpwire.Response) ([]secrets.Slot
 		}
 		return nil, nil
 	}
-	var data struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-	}
-	if json.Unmarshal(resp.Body, &data) != nil {
-		if resp.Code == 200 {
+	// A 200 is the new pair. The broker must store each token in it, or
+	// refuse it. A value that it did not store is a value that it does not
+	// scrub. Thus a 200 with no access_token that it can read, or with a
+	// refresh_token that it cannot read, never reaches the agent. A 200
+	// without a refresh_token is valid: some servers do not rotate it.
+	f, ok := fence.StrictFields(resp.Body, "access_token", "refresh_token")
+	if resp.Code == 200 {
+		ort, hasORT := f["refresh_token"]
+		if !ok || !secrets.ValidLive(f["access_token"]) || hasORT && !secrets.ValidLive(ort) {
 			return nil, ErrHarvest
 		}
-		return nil, nil
 	}
-	oat, ort := data.AccessToken, data.RefreshToken
+	oat, ort := f["access_token"], f["refresh_token"]
 	if !secrets.ValidLive(oat) {
 		oat = ""
 	}
@@ -89,6 +90,25 @@ func (b *Broker) harvest(slotID string, resp *httpwire.Response) ([]secrets.Slot
 		return nil, err
 	}
 	return minted, nil
+}
+
+// residue reports a token shape (key_prefixes.rules) anywhere in a token
+// response after the scrub: the status reason, a field name or value, or
+// the body. The broker reads the body decoded, so the scan sees what the
+// agent would decode.
+func (b *Broker) residue(resp *httpwire.Response) bool {
+	if b.TokenRE == nil {
+		return false
+	}
+	if b.TokenRE.MatchString(resp.Status) || b.TokenRE.Match(resp.Body) {
+		return true
+	}
+	for _, f := range resp.Fields {
+		if b.TokenRE.MatchString(f.Name) || b.TokenRE.MatchString(f.Value) {
+			return true
+		}
+	}
+	return false
 }
 
 // withMinted puts the values that a harvest just read on top of the slots
