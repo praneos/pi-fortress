@@ -134,10 +134,10 @@ You can mint from your workstation. Then the tokens do not go into a shell argum
 pbpaste | ssh <user>@<pi> sudo pf enroll mint --kind CLAUDE --stdin
 ```
 
-On the Pi:
+On the Pi, paste the two lines after the mint command, then push Ctrl-D:
 
 ```
-sudo pf enroll mint --kind CLAUDE --oat 'sk-ant-oat01-...' --ort 'sk-ant-ort01-...'
+sudo pf enroll mint --kind CLAUDE --stdin
 sudo pf enroll list
 sudo pf enroll peek --slot <slot>
 sudo pf enroll delete --slot <slot>

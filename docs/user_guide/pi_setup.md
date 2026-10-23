@@ -187,11 +187,11 @@ The two files are in `/opt/pi-fortress/vm/policy/`. `core.hosts.local` is your f
 
 ```
 echo 'gitlab.com GITLAB_TOKEN' | sudo tee -a /opt/pi-fortress/vm/policy/core.hosts.local
-sudo pf enroll mint --kind GITLAB_TOKEN --value '...' --header PRIVATE-TOKEN
+sudo pf enroll mint --kind GITLAB_TOKEN --stdin --header PRIVATE-TOKEN
 sudo pf apply
 ```
 
-Then mint adds `gitlab.com GITLAB_TOKEN:PRIVATE-TOKEN` to `core.hosts.local` for each host that has the kind. If no host has the kind yet, mint refuses. You can never name these headers: `User-Agent`, `Referer`, `Origin`, `Host`, `Via`, `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Content-*`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Upgrade`, `TE`, `Trailer` and `Proxy-*`. `pf apply` refuses a line that tries to name one.
+`--stdin` reads the token from standard input. Paste the token, push Enter, then push Ctrl-D. The token does not go into a shell argument or the shell history. Then mint adds `gitlab.com GITLAB_TOKEN:PRIVATE-TOKEN` to `core.hosts.local` for each host that has the kind. If no host has the kind yet, mint refuses. You can never name these headers: `User-Agent`, `Referer`, `Origin`, `Host`, `Via`, `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Content-*`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Upgrade`, `TE`, `Trailer` and `Proxy-*`. `pf apply` refuses a line that tries to name one.
 
 ## 5. Cable the agent
 

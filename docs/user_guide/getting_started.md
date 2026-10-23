@@ -123,9 +123,9 @@ The last check above fails because the gateway also pins out DoH. DoH (DNS over 
 
 The gateway mints (makes) the live credential values. The agent never mints them. Each credential gets a 16-hex **slot** ID. The agent sees only a placeholder in the format `pf_<slot>_<KIND>`.
 
-**Lab:** run `vagrant ssh pi` (cloud lab: `lab.sh ssh pi`). Then run:
+**Lab:** run `vagrant ssh pi` (cloud lab: `lab.sh ssh pi`). Then run the mint command. Paste the access token and the refresh token on two lines, then push Ctrl-D:
 ```
-sudo pf enroll mint --kind CLAUDE --oat 'sk-ant-oat01-...' --ort 'sk-ant-ort01-...'
+sudo pf enroll mint --kind CLAUDE --stdin
 sudo pf enroll list
 ```
 **Pi:** run this from your workstation. The tokens do not go in a shell argument.
