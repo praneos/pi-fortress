@@ -2006,7 +2006,7 @@ if command -v /usr/sbin/dnsmasq >/dev/null 2>&1; then
 fi
 # The unit is the same as the house unit, line for line, except the names.
 diff <(grep -v '^#' "${here}/dns-house.service" | sed 's/house segment DHCP/DHCP for segment %i/') \
-  <(grep -v '^#' "${here}/dhcp@.service" | sed -e 's#pi-fortress-dhcp-%i#pi-fortress-dns-house#g' -e 's#dhcp-%i.conf#dns-house.conf#' -e 's#pf-dhcp-%i#pf-dhcp-house#g') >/dev/null ||
+  <(grep -v '^#' "${here}/dhcp@.service" | sed -e 's#pi-fortress-dhcp-%i#pi-fortress-dns-house#g' -e 's#dhcp-%i.conf#dns-house.conf#' -e 's#dhcp-%i.leases#house.leases#' -e 's#pf-dhcp-%i#pf-dhcp-house#g') >/dev/null ||
   fail "dhcp@.service drifted from dns-house.service beyond its names"
 grep -qF -- '--conf-file=/etc/pi-fortress/dhcp-%i.conf' "${here}/dhcp@.service" || fail "dhcp@.service does not read its own conf"
 grep -v '^#' "${here}/dhcp@.service" | grep -qF -- 'conf-dir' && fail "dhcp@.service reads a conf-dir"
@@ -2851,6 +2851,35 @@ _start="$(grep -nxF 'systemctl enable --now pi-fortress-ship.path' "${here}/prov
   fail "provision.sh does not make /var/lib/pi-fortress and /var/log/pi-fortress before it enables ship.path"
 grep -qF 'echo "d ${LOCK_DIR} 0750 root pf-fence -" >/etc/tmpfiles.d/pi-fortress.conf' "${apply}" ||
   fail "apply no longer writes the tmpfiles line for /run/pi-fortress"
+
+# wg-alert and the two DHCP units write only their own state. None can
+# write claims-redeemed/ or any other state under /var/lib/pi-fortress.
+[[ "$(grep '^ReadWritePaths=' "${here}/wg-alert.service")" == "ReadWritePaths=/var/lib/pi-fortress/wg.last" ]] ||
+  fail "wg-alert.service must write only wg.last"
+[[ "$(grep '^ReadWritePaths=' "${here}/dns-house.service")" == "ReadWritePaths=/var/lib/pi-fortress/house.leases /var/log/pi-fortress" ]] ||
+  fail "dns-house.service must write only its lease file and the logs"
+[[ "$(grep '^ReadWritePaths=' "${here}/dhcp@.service")" == "ReadWritePaths=/var/lib/pi-fortress/dhcp-%i.leases /var/log/pi-fortress" ]] ||
+  fail "dhcp@.service must write only its lease file and the logs"
+# The units name the paths that the daemons use.
+grep -qF 'const DefaultWGLast = "/var/lib/pi-fortress/wg.last"' "${here}/../../internal/alert/wg.go" ||
+  fail "pf alert wg does not write the wg.last that wg-alert.service names"
+grep -qxF 'dhcp-leasefile=/var/lib/pi-fortress/house.leases' "${apply}" ||
+  fail "the house dnsmasq does not use the lease file that dns-house.service names"
+grep -qxF 'DHCP_STATE=/var/lib/pi-fortress' "${apply}" && grep -qxF 'dhcp-leasefile=${DHCP_STATE}/dhcp-${name}.leases' "${here}/lib/dhcp.sh" ||
+  fail "a segment dnsmasq does not use the lease file that dhcp@.service names"
+# A file in ReadWritePaths must exist before the unit starts.
+_mk="$(grep -nxF '    touch /var/lib/pi-fortress/wg.last' "${apply}" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nF 'systemctl enable --now pi-fortress-wg-alert.timer' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "apply does not make wg.last before it enables the wg-alert timer"
+_mk="$(grep -nxF '  touch /var/lib/pi-fortress/house.leases' "${apply}" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nxF '  systemctl restart pi-fortress-dns-house.service' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "apply does not make house.leases before it starts dns-house"
+_mk="$(grep -nF 'touch "${DHCP_STATE}/dhcp-${n}.leases"' "${here}/lib/dhcp.sh" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nF 'systemctl restart "pi-fortress-dhcp@${n}.service"' "${here}/lib/dhcp.sh" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "seg_dhcp_sync does not make the lease file before it starts the instance"
 
 # Each file that apply and provision write with > gets its mode from the
 # umask. Thus neither script may inherit the umask of the caller.
