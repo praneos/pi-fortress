@@ -10,16 +10,22 @@ trap 'rm -rf "${t}"' EXIT
 fail() { echo "agent routes_test: $*" >&2; exit 1; }
 
 mkdir -p "${t}/bin"
-# curl -fsS --max-time 5 URL -o FILE: copies FAKE_CA to FILE, or fails
-# when FAKE_CA is empty (the Pi does not answer).
+# curl -fsS --max-time 5 [--max-filesize N] URL -o FILE: copies FAKE_CA to
+# FILE, or fails when FAKE_CA is empty (the Pi does not answer). It fails
+# with 63, as curl does, when FAKE_CA is larger than N. FAKE_CURL_NO_LIMIT=1
+# copies all of FAKE_CA: an old curl checks only a Content-Length.
 cat >"${t}/bin/curl" <<'EOF'
 #!/bin/bash
-out=""
+out="" max=""
 while [[ $# -gt 0 ]]; do
   [[ "$1" == -o ]] && { out="$2"; shift; }
+  [[ "$1" == --max-filesize ]] && { max="$2"; shift; }
   shift
 done
 [[ -n "${FAKE_CA:-}" && -n "${out}" ]] || exit 22
+if [[ -n "${max}" && "${FAKE_CURL_NO_LIMIT:-0}" != 1 ]] && (( $(wc -c <"${FAKE_CA}") > max )); then
+  exit 63
+fi
 cp "${FAKE_CA}" "${out}"
 EOF
 chmod +x "${t}/bin/curl"
@@ -83,6 +89,25 @@ out="$(pick "${t}/down" CA_SHA256="${real_sum}")"
 out="$(pick "${t}/bad" FAKE_CA="${t}/real.pem" CA_SHA256=deadbeef)"
 [[ "${out}" == *"is not a sha256"* && "${out}" != *"ca=/"* ]] || fail "a malformed pin let a CA through: ${out}"
 [[ ! -e "${t}/bad/etc/egress-ca.pem" ]] || fail "a malformed pin installed a CA"
+
+# A ca.pem larger than 64 KiB: the box does not take it. With a pin, it
+# keeps its own copy. The second case is a curl that does not stop the
+# transfer: routes.sh checks the size itself.
+{
+  cat "${t}/real.pem"
+  head -c 70000 /dev/zero | tr '\0' 'x'
+  echo
+} >"${t}/big.pem"
+out="$(pick "${t}/big" FAKE_CA="${t}/big.pem")"
+[[ "${out}" == *"ca=" && "${out}" != *"ca=/"* ]] || fail "big: an oversized ca.pem was trusted: ${out}"
+[[ ! -e "${t}/big/etc/egress-ca.pem" ]] || fail "big: an oversized ca.pem was installed"
+[[ "${out}" == *"larger than 65536 bytes"* ]] || fail "big: the refusal was not logged: ${out}"
+mkdir -p "${t}/big-old/etc"
+cp "${t}/real.pem" "${t}/big-old/etc/egress-ca.pem"
+out="$(pick "${t}/big-old" FAKE_CA="${t}/big.pem" CA_SHA256="${real_sum}" FAKE_CURL_NO_LIMIT=1)"
+cmp -s "${t}/real.pem" "${t}/big-old/etc/egress-ca.pem" || fail "big-old: an oversized ca.pem replaced the trusted CA: ${out}"
+[[ "${out}" == *"ca=${t}/big-old/etc/egress-ca.pem" ]] || fail "big-old: the box lost its trusted CA: ${out}"
+[[ "${out}" == *"larger than 65536 bytes"* ]] || fail "big-old: the refusal was not logged: ${out}"
 
 # A CA rotation on the Pi (pf engine ca). Real certificates: root a is
 # pinned, b is the next root, l is the link (the key of b, signed by a),
@@ -161,6 +186,14 @@ EOF
   cmp -s "${k}/promote.pem" "${t}/drop-promote/etc/egress-ca.pem" || fail "drop-promote: a set without the current root replaced the pinned set: ${out}"
   ! grep -q '^CA_SHA256=' "${t}/drop-promote/etc/agent.env" 2>/dev/null || fail "drop-promote: the pin moved: ${out}"
   [[ "${out}" == *"keeps neither the newest nor the first pinned root"* ]] || fail "drop-promote: the refusal was not logged: ${out}"
+
+  # A set with more than 8 certificates: the box keeps its pin, also when
+  # each certificate is in the pinned set.
+  set_of "${k}/rotate.pem" "${k}/rotate.pem" "${k}/rotate.pem" >"${k}/many.pem"
+  out="$(rot "${t}/many" "${k}/rotate.pem" "${k}/many.pem")"
+  cmp -s "${k}/rotate.pem" "${t}/many/etc/egress-ca.pem" || fail "many: a set with 9 certificates replaced the pinned set: ${out}"
+  ! grep -q '^CA_SHA256=' "${t}/many/etc/agent.env" 2>/dev/null || fail "many: the pin moved: ${out}"
+  [[ "${out}" == *"more than 8 certificates"* ]] || fail "many: the refusal was not logged: ${out}"
 
   # Sets that the pinned root did not sign: each one keeps root a.
   set_of "${k}/a.pem" "${k}/c.pem" >"${k}/added.pem"

@@ -980,6 +980,10 @@ The second rule has these results:
 A VM that did not fetch between `rotate` and `retire` keeps the old root and
 refuses the new set. Set its pin again (lab.md).
 
+`routes.sh` refuses a `ca.pem` that is larger than 64 KiB or that has more than
+8 certificates. Then it keeps the CA that it already trusts. A rotation serves
+3 certificates.
+
 A root that has expired cannot sign a link that agents accept. Rotate before
 the end date. `pf doctor` warns 90 days before it.
 

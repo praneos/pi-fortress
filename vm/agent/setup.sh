@@ -134,7 +134,7 @@ else
     echo "pi-fortress setup: curl is required (install it off-box; HTTPS through the Pi needs the CA first)" >&2
     exit 1
   fi
-  if ! curl -fsS --max-time 10 "http://${PI_IP}/ca.pem" -o "${tmp}"; then
+  if ! curl -fsS --max-time 10 --max-filesize 65536 "http://${PI_IP}/ca.pem" -o "${tmp}"; then
     echo "pi-fortress setup: could not fetch http://${PI_IP}/ca.pem" >&2
     exit 1
   fi
