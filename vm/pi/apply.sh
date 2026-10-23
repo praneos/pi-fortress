@@ -2137,11 +2137,15 @@ systemctl daemon-reload
 ENGINE_DIR=/var/lib/pi-fortress/engine
 ENGINE_CA="${ENGINE_DIR}/ca.pem"
 ENGINE_CERT="${ENGINE_DIR}/ca-cert.pem"
+# The trust set: the engine root and, during a rotation (pf engine ca),
+# the next or the old root and the link between them. Agents get this
+# set. Without a rotation it is the same bytes as ca-cert.pem.
+ENGINE_TRUST="${ENGINE_DIR}/ca-trust.pem"
 install -d -m 0700 -o pf-engine -g pf-fortress "${ENGINE_DIR}"
 if [[ ! -f "${ENGINE_CA}" && -f /var/lib/pi-fortress/mitm/mitmproxy-ca.pem ]]; then
   install -m 0600 -o pf-engine -g pf-fortress /var/lib/pi-fortress/mitm/mitmproxy-ca.pem "${ENGINE_CA}"
 fi
-"${PF}" engine -init-ca -ca "${ENGINE_CA}" -ca-cert "${ENGINE_CERT}"
+"${PF}" engine -init-ca -ca "${ENGINE_CA}" -ca-cert "${ENGINE_CERT}" -ca-trust "${ENGINE_TRUST}"
 chown pf-engine:pf-fortress "${ENGINE_CA}" 2>/dev/null || true
 chmod 0600 "${ENGINE_CA}"
 if [[ -f "${ENGINE_CERT}" ]]; then
@@ -2149,7 +2153,9 @@ if [[ -f "${ENGINE_CERT}" ]]; then
   chmod 0644 "${ENGINE_CERT}"
 fi
 ca_src=""
-if [[ -f "${ENGINE_CERT}" ]]; then
+if [[ -f "${ENGINE_TRUST}" ]]; then
+  ca_src="${ENGINE_TRUST}"
+elif [[ -f "${ENGINE_CERT}" ]]; then
   ca_src="${ENGINE_CERT}"
 elif [[ -f /var/lib/pi-fortress/mitm/mitmproxy-ca-cert.pem ]]; then
   ca_src=/var/lib/pi-fortress/mitm/mitmproxy-ca-cert.pem
