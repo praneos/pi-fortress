@@ -695,6 +695,7 @@ func plan(s *scanner, req *httpwire.Request) PlanResult {
 	if IsOAuthPath(req.Target) || (!req.Chunked && req.ContentLength >= 0 && req.ContentLength <= maxBodyBuf) {
 		out.BodyMode = BodyBuffer
 	}
+	s.noteMethod(req.Method)
 	s.noteNames(req.Fields)
 	for i, f := range req.Fields {
 		if framingHeader(f.Name) {

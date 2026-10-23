@@ -90,6 +90,11 @@ const (
 	// because the name gives the field its meaning. Thus it refuses the
 	// request.
 	CauseKeyInHeaderName RefusalCause = "key_in_header_name"
+	// CauseKeyInMethod is a request method that holds a live value, a
+	// token-prefix match or a placeholder. A method is a token, as a field
+	// name is. The fence cannot rewrite a method, because the method gives
+	// the request its meaning. Thus it refuses the request.
+	CauseKeyInMethod RefusalCause = "key_in_method"
 )
 
 type Refusal struct {
@@ -177,6 +182,25 @@ func (s *scanner) noteNames(fields httpwire.Fields) {
 	}
 	if s.all.match(b) {
 		s.refuse(CauseKeyInHeaderName, "", "", "header_name")
+	}
+}
+
+// noteMethod refuses the request when the method holds a placeholder, a
+// live value or a token-prefix match. It does the same checks as
+// noteNames, on the method.
+func (s *scanner) noteMethod(method string) {
+	b := []byte(method)
+	for _, span := range secrets.FindPlaceholderSpans(b) {
+		slot, kind := secrets.PlaceholderParts(b, span)
+		s.refuse(CauseKeyInMethod, slot, kind, "method")
+	}
+	for _, sl := range s.idx.Lives {
+		if strings.Contains(method, sl.Live) {
+			s.refuse(CauseKeyInMethod, sl.ID, sl.Kind, "method")
+		}
+	}
+	if s.all.match(b) {
+		s.refuse(CauseKeyInMethod, "", "", "method")
 	}
 }
 

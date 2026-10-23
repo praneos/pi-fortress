@@ -80,7 +80,7 @@ func (b *Broker) alertRefusal(cause fence.RefusalCause) bool {
 	// compresses its uploads with zstd gets a refusal on each request. A post
 	// for each would use all of the hourly cap of the webhook before a real
 	// strip arrives. It alerts one time, like the conditions below.
-	if cause == fence.CauseKindNotAllowed || cause == fence.CauseOutsideHeader || cause == fence.CauseEncodedBodyToken || cause == fence.CauseKeyInHeaderName {
+	if cause == fence.CauseKindNotAllowed || cause == fence.CauseOutsideHeader || cause == fence.CauseEncodedBodyToken || cause == fence.CauseKeyInHeaderName || cause == fence.CauseKeyInMethod {
 		return true
 	}
 	b.useMu.Lock()
