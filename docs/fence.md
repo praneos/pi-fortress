@@ -372,10 +372,22 @@ resolver, the engine, and the broker all match in the same way as the dnsmasq
 `address=/name/`: a listed name covers itself and every name under it. The
 walk goes label by label and knows nothing of the Public Suffix List. Thus it
 cannot tell a registrable domain from a shared parent that hosts the sites of
-other people. If a feed ever lists such a parent (`herokuapp.com`,
-`github.io`, `blogspot.com`), every tenant under it is blocked, not only the
-one bad `x.herokuapp.com` that the feed meant. Pi Fortress takes
-this side on purpose: it over-blocks a subtree, and does not under-block.
+other people. If a list names such a parent (`herokuapp.com`, `github.io`,
+`blogspot.com`), every tenant under it is blocked, not only the one bad
+`x.herokuapp.com` that the list meant. Pi Fortress takes this side on
+purpose: it over-blocks a subtree, and does not under-block.
+
+**A feed entry at a shared parent does not compile.** The shipped
+`shared_parents.domains` names shared parents: code and site hosts,
+application platforms, blog and site builders, dynamic DNS zones and the
+usual public suffixes with two labels (`co.uk`). `pf compile` drops a feed
+entry that is a name of that list or a parent of one (`github.io`, `io`).
+This applies to the agent feeds and to the two house feed lists. An entry
+under a listed name (`bad.github.io`) compiles. The summary of `pf compile`
+names the entries that it dropped. The list applies only to the fetched
+feeds: a name that the operator writes in `blacklist.domains` or
+`house.domains` compiles as written. Each ship replaces the list. A shared
+parent that the list does not name still blocks its subtree.
 
 The guard is curation: `blacklist.domains` is Pi-owned, and `make pi-ship`
 never overwrites it. The escape hatch is `never_block.domains`. It drops
@@ -393,9 +405,10 @@ under a `*.` entry. A feed line for `anthropic.com` must not cut the agent
 off from the service that holds its credentials. An entry under an exact
 core host stays, because it does not block the host.
 
-Public Suffix List handling is not planned. It adds complexity for a corner
-case that curation and `never_block` already cover. Examine this again if a
-shipped feed lists a shared parent, or if a legitimate tenant needs a
+Full Public Suffix List handling is not planned. It adds complexity for a
+corner case that `shared_parents.domains`, curation and `never_block`
+already cover. Examine this again if a shipped feed lists a shared parent
+that `shared_parents.domains` does not name, or if a legitimate tenant needs a
 narrower carve-out than `never_block` gives. The house list works in the same
 way, with `house_never_block.domains` as its shield.
 

@@ -329,6 +329,7 @@ Edit, then apply. No VM rebuild is necessary:
 
 - `vm/policy/blacklist.ips` / `blacklist.domains`: local canaries and extra drops. Pi-owned: `make pi-ship` seeds them one time and never overwrites them
 - `vm/policy/never_block.*`: never drop these entries from feeds (includes Mullvad), even if a feed contains them. Agent side only. The house list does not read it. Pi-owned
+- `vm/policy/shared_parents.domains`: shared parents (`github.io`, `herokuapp.com`, `co.uk`). A feed entry that is one of them, or a parent of one, does not compile. The block lists of the operator do not read it. Shipped. Each ship overwrites it
 - `vm/policy/house_default.domains`: shipped house-segment defaults (YouTube, chess.com, SoundCloud and their CDNs). Each ship overwrites it. You cannot edit it in the TUI. To unblock one, use `house_never_block.domains`
 - `vm/policy/house.domains` / `house_never_block.domains`: the house-segment sinkhole extras and exceptions of the operator. An exception can also disable a shipped default. The house list ignores `never_block.domains`. Pi-owned
 - `vm/policy/doh.ips` / `doh.domains`: public resolvers. They are for the DNS pin, so the agent cannot use DoH/DoT around the Pi. never_block cannot override them. Shipped. Each ship overwrites them

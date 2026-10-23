@@ -61,8 +61,9 @@ fi
 # This step does not merge sources.json as a ship merges it
 # (fetch.MergeSeed): a box with no tree gets no ship.
 # Each list here is in PI_OWNED (Makefile): the operator owns it, and a
-# ship keeps it. doh.*, core.hosts and key_prefixes.rules are not: they
-# ship, and each ship and each provision replace them.
+# ship keeps it. doh.*, shared_parents.domains, core.hosts and
+# key_prefixes.rules are not: they ship, and each ship and each provision
+# replace them.
 # The operator lines of each are in its .local file (core.hosts.local,
 # key_prefixes.rules.local, doh.ips.local, doh.domains.local). apply and
 # pf compile add that file, and this step never writes it.
@@ -74,6 +75,7 @@ for _f in blacklist.ips blacklist.domains never_block.ips never_block.domains di
 done
 cp "${SRC}"/vm/policy/doh.ips /etc/pi-fortress/doh.ips
 cp "${SRC}"/vm/policy/doh.domains /etc/pi-fortress/doh.domains
+cp "${SRC}"/vm/policy/shared_parents.domains /etc/pi-fortress/shared_parents.domains
 install -m 0755 "${SRC}"/vm/pi/apply.sh /usr/local/lib/pi-fortress/apply.sh
 install -d -m 0755 /usr/local/lib/pi-fortress/lib
 install -m 0644 "${SRC}"/vm/pi/lib/*.sh /usr/local/lib/pi-fortress/lib/
