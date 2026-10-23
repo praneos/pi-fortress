@@ -118,5 +118,25 @@ func WriteAgentPaste(slot string, kinds []string, dest string) error {
 		}
 		text = strings.Join(lines, "\n") + "\n"
 	}
-	return os.WriteFile(dest, []byte(text), 0644)
+	return writeOwnerOnly(dest, []byte(text))
+}
+
+// writeOwnerOnly writes the paste file 0600. A placeholder is a capability,
+// so other local users must not read it. WriteFile keeps the mode of a file
+// that is already there. Thus the chmod comes before the write, and an
+// older 0644 copy also becomes 0600.
+func writeOwnerOnly(dest string, data []byte) error {
+	f, err := os.OpenFile(dest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	if err := f.Chmod(0600); err != nil {
+		f.Close()
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }

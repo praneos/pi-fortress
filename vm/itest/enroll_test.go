@@ -114,7 +114,7 @@ func enrollTests(t *testing.T) {
 		}
 		// mint also writes the agent paste on the synced folder. That file
 		// is copied manually onto agents, so it is a leak path of its own.
-		paste, err := ssh(t, 20*time.Second, "pi", "cat /vagrant/vm/policy/generated/agent-credentials-"+slot+".json")
+		paste, err := ssh(t, 20*time.Second, "pi", "sudo cat /vagrant/vm/policy/generated/agent-credentials-"+slot+".json")
 		if err == nil && (contains(paste, "sk-ant") || !contains(paste, phOAT)) {
 			t.Fatalf("agent paste file is wrong:\n%s", paste)
 		}
