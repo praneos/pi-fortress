@@ -66,6 +66,13 @@ case "${role}" in
     exit 2
     ;;
 esac
+# A second provision finds the mgmt default route gone: the first one
+# dropped it. If the lab route did not come up, apt has no route at all.
+# The mgmt net is a libvirt net, so its router is the .1 address.
+if ! ip route show default | grep -q .; then
+  mgmt_ip="$(ip -4 -o addr show dev "${MGMT}" | awk '{print $4}' | cut -d/ -f1)"
+  ip route add default via "${mgmt_ip%.*}.1" dev "${MGMT}"
+fi
 apt-get update
 apt-get install -y --no-install-recommends "${pkgs[@]}"
 
