@@ -595,22 +595,46 @@ func TestResolverRemembersAnswersForTheSNICheck(t *testing.T) {
 	}
 }
 
-// The table is bounded. When it is full of live entries, it forgets them
-// all, and the check falls back to the answer now.
-func TestSeenAnswersForgetsAllWhenFull(t *testing.T) {
+// Each segment has its own bound. When one segment is full of live
+// entries, it forgets its oldest half. The newest entries of that segment
+// and all entries of the other segments stay.
+func TestSeenAnswersEvictsTheOldestOfOneSegment(t *testing.T) {
 	var m seenAnswers
-	now := time.Unix(1_800_000_000, 0)
+	start := time.Unix(1_800_000_000, 0)
 	a := netip.MustParseAddr("198.51.100.7")
+	m.add("desk", "desk.example", []netip.Addr{a}, start)
+	now := start
 	for i := range seenTrack {
+		now = start.Add(time.Duration(i) * time.Millisecond)
 		m.add("house", fmt.Sprintf("n%d.example", i), []netip.Addr{a}, now)
 	}
 	if !m.has("house", "n0.example", a, now) {
-		t.Fatal("an entry was lost before the table was full")
+		t.Fatal("an entry was lost before the segment was full")
 	}
 	m.add("house", "last.example", []netip.Addr{a}, now)
-	if m.has("house", "n0.example", a, now) || !m.has("house", "last.example", a, now) {
-		t.Fatal("a full table was not cleared before the new entry")
+	switch {
+	case m.has("house", "n0.example", a, now):
+		t.Fatal("the oldest entry of the full segment stayed")
+	case !m.has("house", fmt.Sprintf("n%d.example", seenTrack-1), a, now):
+		t.Fatal("the newest old entry of the full segment was lost")
+	case !m.has("house", "last.example", a, now):
+		t.Fatal("the new entry was lost")
+	case !m.has("desk", "desk.example", a, now):
+		t.Fatal("a full house cleared an entry of the desk")
 	}
+	if got := m.n["house"]; got > seenTrack/2+1 || got != countSeg(&m, "house") {
+		t.Fatalf("house count %d (table %d), want about half of %d", got, countSeg(&m, "house"), seenTrack)
+	}
+}
+
+func countSeg(m *seenAnswers, seg string) int {
+	n := 0
+	for k := range m.at {
+		if k.seg == seg {
+			n++
+		}
+	}
+	return n
 }
 
 // The shadow query uses the pipeline of the segment, not a separate

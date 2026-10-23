@@ -2,6 +2,7 @@ package dnsd
 
 import (
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -15,9 +16,10 @@ const (
 	// goes to the check. A CDN that rotates between ranges gives the check
 	// a different answer now. Without this, the flow is reset.
 	sniSeenFor = 24 * time.Hour
-	// seenTrack bounds the table. If it is this full after the sweep of the
-	// expired entries, the code forgets all of it. Then the check falls back
-	// to the current answer and the /24, as without the table.
+	// seenTrack bounds the entries of each segment. When a segment is this
+	// full after the sweep of the expired entries, the code forgets its
+	// oldest half. The other segments keep theirs. Thus one device that asks
+	// many names costs its own segment only its oldest answers.
 	seenTrack = 1 << 16
 	// seenSweepEvery bounds how often an add sweeps the table.
 	seenSweepEvery = 10 * time.Minute
@@ -35,6 +37,7 @@ type seenKey struct {
 type seenAnswers struct {
 	mu    sync.Mutex
 	at    map[seenKey]time.Time
+	n     map[string]int // entries of each segment
 	swept time.Time
 }
 
@@ -50,13 +53,23 @@ func (m *seenAnswers) add(seg, name string, addrs []netip.Addr, now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.at == nil {
-		m.at = map[seenKey]time.Time{}
+		m.at, m.n = map[seenKey]time.Time{}, map[string]int{}
 	}
-	if now.Sub(m.swept) >= seenSweepEvery || len(m.at)+len(addrs) > seenTrack {
+	if now.Sub(m.swept) >= seenSweepEvery {
 		m.sweep(now)
 	}
 	for _, a := range addrs {
-		m.at[seenKey{seg, name, a}] = now
+		k := seenKey{seg, name, a}
+		if _, ok := m.at[k]; !ok {
+			if m.n[seg] >= seenTrack {
+				m.sweep(now)
+			}
+			if m.n[seg] >= seenTrack {
+				m.evict(seg)
+			}
+			m.n[seg]++
+		}
+		m.at[k] = now
 	}
 }
 
@@ -65,10 +78,30 @@ func (m *seenAnswers) sweep(now time.Time) {
 	for k, at := range m.at {
 		if now.Sub(at) >= sniSeenFor {
 			delete(m.at, k)
+			m.n[k.seg]--
 		}
 	}
-	if len(m.at) >= seenTrack {
-		clear(m.at)
+}
+
+// evict forgets the oldest half of the entries of seg. Entries with the
+// same time as the middle one go too, so it can forget more than half.
+func (m *seenAnswers) evict(seg string) {
+	var times []time.Time
+	for k, at := range m.at {
+		if k.seg == seg {
+			times = append(times, at)
+		}
+	}
+	if len(times) == 0 {
+		return
+	}
+	slices.SortFunc(times, time.Time.Compare)
+	cut := times[len(times)/2]
+	for k, at := range m.at {
+		if k.seg == seg && !at.After(cut) {
+			delete(m.at, k)
+			m.n[seg]--
+		}
 	}
 }
 
