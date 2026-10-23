@@ -76,6 +76,10 @@ Then follow [Getting started](docs/user_guide/getting_started.md).
 Debian 12/13 or Ubuntu 24.04 on amd64 also works. Pinned versions,
 offline installs and upgrades: [docs/gateway_install.md](docs/gateway_install.md).
 
+Fixes go to `main` first and get a signed release later. To get the latest
+fixes now, [install from source](#install-from-source), and then
+[update from source](#update-from-source) when `main` changes.
+
 ### Install from source
 
 Use this to get fixes from `main` before the next release. You build and
