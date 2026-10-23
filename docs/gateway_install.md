@@ -184,6 +184,22 @@ A Go daemon reads the system CA roots one time, when it starts. Thus `apply.sh` 
 
 A broker start locks a sealed credential store again. Thus with a sealed store (`#pf-sealed` header in `secrets.env`, or a store that the script cannot read), the hook does not restart pf-broker. It restarts pf dns and pf alert, and writes the time to `/var/lib/pi-fortress/ca-restart-pending` (mode 0600). While that file is there, `pf doctor` warns on rung `ca`. When you can unlock, run `sudo systemctl restart pi-fortress-broker.service`, then `sudo pf unlock`. Each broker start (also the restart of a `pf apply`) removes the file (`ExecStartPost` in `pf-broker.service`).
 
+## Install from source
+
+The README gives the commands. This flow uses the same `install.sh`, `pf install` and `pf upgrade -bundle` as a release. Only the signer is different: your own SSH key, given to `install.sh` as `PF_SIGNER_PUBKEY`. `pf install` keeps that key in `release-signers`. Thus each later `pf upgrade` accepts only bundles that your key signed.
+
+`make release RELEASE_UNSIGNED=1` does these steps:
+
+- It refuses a tree with uncommitted changes, and a Go that is not the `toolchain` of `go.mod` (`GOTOOLCHAIN=local`, so no download).
+- It builds the bundles for arm64 and amd64 from a `git archive` of HEAD, into `dist/<version>/`. `<version>` is the tag of HEAD, or `git describe` plus `-dev` (for example `v0.1.3-31-ga40f790bc164-dev`). `scripts/release.sh version` prints it. The directory must be empty. To build the same commit again, remove it first.
+- It writes `SHA256SUMS` and does not sign. `make release` signs only with the key that `install.sh` pins. Thus you sign with `ssh-keygen -Y sign -n pi-fortress-dist`, as the README shows. The principal is not in the signature. `install.sh` binds your key to `release@pi-fortress` when it writes the signer file.
+
+The version floor of a bundle is the commit time of HEAD. Thus `pf upgrade` refuses a commit that is older than the installed one.
+
+You can also run the same steps on the Pi itself, with Go 1.27.3 for arm64 installed there. Then there is no `scp`, and `PF_BUNDLE` is `dist/$V/pf-bundle-$V-arm64.tar`. The build is slower, and the signing key is on the box that it protects.
+
+A box that you installed from a release trusts only the release key. To also accept your bundles, add a second line to `/etc/pi-fortress/release-signers`: `release@pi-fortress namespaces="pi-fortress-dist" <your public key>`. `ssh-keygen -Y verify` accepts a signature from each line.
+
 ## Two signers, on purpose
 
 There are two different signer files:
