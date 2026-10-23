@@ -42,6 +42,7 @@ apply-test: pf
 	@./vm/pi/usb_nic_switch_test.sh
 	@./vm/pi/ca_restart_test.sh
 	@./vm/desk/setup_test.sh
+	@./vm/agent/routes_test.sh
 
 # Static check over the shell scripts. No pf build, no VM: it runs in
 # seconds and goes first. Thus a broken script fails before the long suites.

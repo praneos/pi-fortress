@@ -107,6 +107,8 @@ EOF
   for r in a b c; do
     ossl req -x509 -config "${k}/cnf" -extensions ca -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
       -keyout "${k}/${r}.key" -out "${k}/${r}.pem" -days 2 -subj "/CN=root ${r}"
+    # notBefore has a resolution of one second. Root b must be newer than root a.
+    [[ "${r}" != a ]] || sleep 1
   done
   ossl req -new -config "${k}/cnf" -key "${k}/b.key" -subj "/CN=root b (link)" -out "${k}/l.csr"
   ossl x509 -req -in "${k}/l.csr" -CA "${k}/a.pem" -CAkey "${k}/a.key" -set_serial 2 -days 2 \
@@ -142,6 +144,23 @@ EOF
   cmp -s "${k}/promote.pem" "${t}/prom/etc/egress-ca.pem" || fail "the set after promote was refused: ${out}"
   out="$(rot "${t}/ret" "${k}/promote.pem" "${k}/b.pem")"
   cmp -s "${k}/b.pem" "${t}/ret/etc/egress-ca.pem" || fail "the set after retire was refused: ${out}"
+  # A box that missed promote: it fetches the set after retire.
+  out="$(rot "${t}/ret-late" "${k}/rotate.pem" "${k}/b.pem")"
+  cmp -s "${k}/b.pem" "${t}/ret-late/etc/egress-ca.pem" || fail "the set after retire was refused by a box pinned to the rotated set: ${out}"
+  grep -qxF "CA_SHA256=$(sha256sum "${k}/b.pem" | awk '{print $1}')" "${t}/ret-late/etc/agent.env" || fail "the pin did not move to the retired set: ${out}"
+
+  # Retire before promote stops a rotation. A box pinned to the set of
+  # rotate (a first) takes the set with root a only.
+  out="$(rot "${t}/stop-rotate" "${k}/rotate.pem" "${k}/a.pem")"
+  cmp -s "${k}/a.pem" "${t}/stop-rotate/etc/egress-ca.pem" || fail "stop-rotate: the set after a stopped rotation was refused: ${out}"
+  grep -qxF "CA_SHA256=$(sha256sum "${k}/a.pem" | awk '{print $1}')" "${t}/stop-rotate/etc/agent.env" || fail "stop-rotate: the pin did not move to the stopped set: ${out}"
+
+  # After promote (b first), a set with root a only keeps neither the
+  # newest nor the first pinned root: the box keeps its pin.
+  out="$(rot "${t}/drop-promote" "${k}/promote.pem" "${k}/a.pem")"
+  cmp -s "${k}/promote.pem" "${t}/drop-promote/etc/egress-ca.pem" || fail "drop-promote: a set without the current root replaced the pinned set: ${out}"
+  ! grep -q '^CA_SHA256=' "${t}/drop-promote/etc/agent.env" 2>/dev/null || fail "drop-promote: the pin moved: ${out}"
+  [[ "${out}" == *"keeps neither the newest nor the first pinned root"* ]] || fail "drop-promote: the refusal was not logged: ${out}"
 
   # Sets that the pinned root did not sign: each one keeps root a.
   set_of "${k}/a.pem" "${k}/c.pem" >"${k}/added.pem"
