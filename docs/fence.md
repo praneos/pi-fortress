@@ -405,6 +405,13 @@ under a `*.` entry. A feed line for `anthropic.com` must not cut the agent
 off from the service that holds its credentials. An entry under an exact
 core host stays, because it does not block the host.
 
+**An IP feed adds no prefix wider than `/12`.** One feed line with a `/8`
+would drop 16M addresses. `pf compile` drops a feed prefix that is wider
+than `min_ip_prefix` of `sources.json` (8 to 32, default 12), and its
+summary names the prefixes that it dropped. The widest entries of the
+shipped feeds are `/12`, in Spamhaus DROP. Thus the default keeps all of
+them. `blacklist.ips` of the operator accepts a prefix up to `/8`.
+
 Full Public Suffix List handling is not planned. It adds complexity for a
 corner case that `shared_parents.domains`, curation and `never_block`
 already cover. Examine this again if a shipped feed lists a shared parent

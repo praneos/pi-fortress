@@ -27,7 +27,11 @@ type Spec struct {
 	TimeoutSec int    `json:"timeout_sec"`
 	MaxIPs     int    `json:"max_ips"`
 	MaxDomains int    `json:"max_domains"`
-	Feeds      []Feed `json:"feeds"`
+	// MinIPPrefix is the widest prefix that an IP feed can add to the
+	// blocklist (8 to 32). pf compile drops a wider one. 0 means
+	// policycompile.FeedMinBits.
+	MinIPPrefix int    `json:"min_ip_prefix,omitempty"`
+	Feeds       []Feed `json:"feeds"`
 	// Seeded is each feed id that a ship has offered this box. MergeSeed
 	// adds a shipped feed only when its id is not here, so a feed that the
 	// operator deleted stays deleted.
@@ -79,6 +83,9 @@ func (s *Spec) validate() error {
 		if x.val < 0 {
 			return fmt.Errorf("sources.json: %s=%d is negative", x.key, x.val)
 		}
+	}
+	if p := s.MinIPPrefix; p != 0 && (p < 8 || p > 32) {
+		return fmt.Errorf("sources.json: min_ip_prefix=%d is not 8 to 32", p)
 	}
 	seen := map[string]bool{}
 	for _, f := range s.Feeds {

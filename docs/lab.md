@@ -346,7 +346,7 @@ Edit, then apply. No VM rebuild is necessary:
   - One name may head several lines (`vm/policy/key_prefixes.md`).
   - A rule tagged with a kind does not run on a core host that applies that kind. Thus, the fence never redacts the credential that it just substituted. All other rules run everywhere (`pf broker -strip-core`, default on)
 - `vm/policy/key_prefixes.md`: live-token prefixes to detect later
-- `vm/policy/sources.json`: feed URLs. `"enabled": false` (or `e` in Feeds of the TUI) disables a feed. `"segment": "house"` sends a feed only to the house list. Pi-owned: a signed ship keeps the copy of the Pi and appends only the feeds that are new in git. `"seeded"` holds the ids already offered. Thus, a disabled or deleted feed stays disabled or deleted
+- `vm/policy/sources.json`: feed URLs. `"enabled": false` (or `e` in Feeds of the TUI) disables a feed. `"segment": "house"` sends a feed only to the house list. `"min_ip_prefix"` (default 12) is the widest prefix that an IP feed can add; pf compile drops a wider one. Pi-owned: a signed ship keeps the copy of the Pi and appends only the feeds that are new in git. `"seeded"` holds the ids already offered. Thus, a disabled or deleted feed stays disabled or deleted
 - `vm/policy/generated/`: last fetch (gitignored)
 - Pi only: `/etc/pi-fortress/broker/secrets.env` (slotted; mint with `sudo pf enroll`)
 

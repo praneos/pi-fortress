@@ -478,6 +478,8 @@ func TestSourcesSchemaIsRefused(t *testing.T) {
 		"spamhaus domains":     `{"feeds":[{"id":"d","kind":"domains","format":"spamhaus","url":"https://d.test/"}]}`,
 		"hosts ips":            `{"feeds":[{"id":"d","kind":"ips","format":"hosts","url":"https://d.test/"}]}`,
 		"no url":               `{"feeds":[{"id":"d","kind":"domains","format":"plain","url":""}]}`,
+		"min_ip_prefix 4":      `{"min_ip_prefix":4,"feeds":[{"id":"d","kind":"domains","format":"plain","url":"https://d.test/"}]}`,
+		"min_ip_prefix 33":     `{"min_ip_prefix":33,"feeds":[{"id":"d","kind":"domains","format":"plain","url":"https://d.test/"}]}`,
 	}
 	for name, spec := range cases {
 		t.Run(name, func(t *testing.T) {

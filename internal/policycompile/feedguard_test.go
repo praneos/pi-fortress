@@ -1,6 +1,7 @@
 package policycompile
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -123,6 +124,50 @@ func TestShippedSharedParentsAreNotTunnels(t *testing.T) {
 			if strings.Contains(n, tunnel) {
 				t.Errorf("%s lists %s", SharedParentsFile, n)
 			}
+		}
+	}
+}
+
+// A fetched IP feed adds no prefix wider than the floor. blacklist.ips of
+// the operator keeps the /8 floor.
+func TestCompileDropsAWideFeedPrefix(t *testing.T) {
+	for _, tc := range []struct {
+		sources string
+		floor   int
+		skipped []string
+	}{
+		{"", FeedMinBits, []string{"5.0.0.0/11", "6.0.0.0/8"}},
+		{`{"min_ip_prefix":16,"feeds":[]}`, 16, []string{"42.128.0.0/12", "5.0.0.0/11", "6.0.0.0/8"}},
+		{`{"min_ip_prefix":8,"feeds":[]}`, 8, nil},
+		{`{"min_ip_prefix":4,"feeds":[]}`, FeedMinBits, []string{"5.0.0.0/11", "6.0.0.0/8"}},
+		{`{not json`, FeedMinBits, []string{"5.0.0.0/11", "6.0.0.0/8"}},
+	} {
+		files := map[string]string{
+			"generated/blacklist.ips": "6.0.0.0/8\n5.0.0.0/11\n42.128.0.0/12\n9.9.9.9\n",
+			"blacklist.ips":           "13.0.0.0/8\n",
+		}
+		if tc.sources != "" {
+			files["sources.json"] = tc.sources
+		}
+		dir := feedDir(t, files)
+		out := t.TempDir()
+		o := Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf"), IPMap: filepath.Join(out, "ip.map")}
+		sum, err := Compile(dir, o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sum.FeedFloor != tc.floor || !slices.Equal(sum.WidePrefixes, tc.skipped) {
+			t.Fatalf("%q: floor /%d, skipped %v; want /%d and %v", tc.sources, sum.FeedFloor, sum.WidePrefixes, tc.floor, tc.skipped)
+		}
+		nft, ipMap := readOut(t, o.NFT), readOut(t, o.IPMap)
+		for _, p := range []string{"6.0.0.0/8", "5.0.0.0/11", "42.128.0.0/12", "9.9.9.9", "13.0.0.0/8"} {
+			want := !slices.Contains(tc.skipped, p)
+			if strings.Contains(nft, p) != want || strings.Contains(ipMap, p) != want {
+				t.Errorf("%q: %s compiled is %v, want %v:\n%s", tc.sources, p, !want, want, nft)
+			}
+		}
+		if len(tc.skipped) > 0 && !strings.Contains(sum.Line(), fmt.Sprintf("skipped %d feed entries wider than /%d", len(tc.skipped), tc.floor)) {
+			t.Fatalf("summary does not report the skipped prefixes:\n%s", sum.Line())
 		}
 	}
 }
