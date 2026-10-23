@@ -230,7 +230,9 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 		c.verdict(p.ID, nfq.Drop, nil)
 		return
 	}
-	syn := flags&tcpSYN != 0 && len(payload) == 0
+	// A SYN can carry data (TCP Fast Open). It is still the start of a
+	// connection, and its data starts at seq+1.
+	syn := flags&tcpSYN != 0
 	c.mu.Lock()
 	if d, ok := c.done[key]; ok && c.now().Sub(d.at) < sniDone {
 		if !syn {
@@ -269,6 +271,7 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 			c.verdict(p.ID, nfq.Drop, nil)
 			return
 		}
+		seq++
 	}
 	if len(payload) == 0 {
 		c.mu.Unlock()
