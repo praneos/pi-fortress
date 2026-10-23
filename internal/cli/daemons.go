@@ -37,7 +37,10 @@ func signalCtx() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 }
 
-func runEngine(args []string, _, stderr io.Writer) int {
+func runEngine(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 && args[0] == "ca" {
+		return runEngineCA(args[1:], stdout, stderr)
+	}
 	fs := newFlags("engine", stderr)
 	listen := fs.String("listen", "", "agent-NIC ip:port, e.g. PI_IP:8080 (required; 0.0.0.0 and :: are refused)")
 	var inspect listFlag
@@ -45,6 +48,7 @@ func runEngine(args []string, _, stderr io.Writer) int {
 	sock := fs.String("sock", "/run/pi-fortress/broker/broker.sock", "broker unix socket")
 	caPath := fs.String("ca", "/var/lib/pi-fortress/engine/ca.pem", "CA cert+key PEM")
 	caCert := fs.String("ca-cert", "", "also write cert-only PEM (with -init-ca)")
+	caTrust := fs.String("ca-trust", "", "also write the certs that agents trust, with the roots of a rotation (with -init-ca)")
 	initCA := fs.Bool("init-ca", false, "create CA at -ca if missing, then exit")
 	maxConns := fs.Int("max-conns", 256, "connection cap")
 	// The limit for each agent address, inside -max-conns. Thus one agent
@@ -69,6 +73,11 @@ func runEngine(args []string, _, stderr io.Writer) int {
 	if *initCA {
 		if err := ca.Init(*caPath, *caCert); err != nil {
 			return fail(stderr, err)
+		}
+		if *caTrust != "" {
+			if err := ca.Publish(*caPath, *caTrust); err != nil {
+				return fail(stderr, err)
+			}
 		}
 		log.Printf("pf engine ca %s", *caPath)
 		return 0

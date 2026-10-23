@@ -1,6 +1,6 @@
 // Package ca owns the certificate authority of the engine: the root bundle on
-// disk and the cached leaf minted for each SNI. internal/engine and
-// pf engine -init-ca call it.
+// disk and the cached leaf minted for each SNI. internal/engine,
+// pf engine -init-ca and pf engine ca call it.
 package ca
 
 import (
@@ -137,37 +137,55 @@ func adopt(bundlePath, certPath string) error {
 	return writeFile(certPath, s.CertPEM(), 0644)
 }
 
-func Init(bundlePath, certPath string) error {
-	if _, err := os.Stat(bundlePath); err == nil {
-		return adopt(bundlePath, certPath)
-	}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return err
-	}
+// rootTemplate is the template of each root: Init makes the first, Rotate
+// makes the next ones.
+func rootTemplate(cn string, now time.Time) (*x509.Certificate, error) {
 	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	tmpl := &x509.Certificate{
+	return &x509.Certificate{
 		SerialNumber:          serial,
-		Subject:               pkix.Name{CommonName: "pi-fortress"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(10 * 365 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature,
 		BasicConstraintsValid: true,
 		IsCA:                  true,
 		MaxPathLenZero:        true,
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	}, nil
+}
+
+// newRoot makes a self-signed root and returns its cert+key bundle.
+func newRoot(cn string, now time.Time) (der, bundle []byte, key *ecdsa.PrivateKey, err error) {
+	key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		return err
+		return nil, nil, nil, err
+	}
+	tmpl, err := rootTemplate(cn, now)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	der, err = x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
+		return nil, nil, nil, err
+	}
+	bundle = append(certPEM(der), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})...)
+	return der, bundle, key, nil
+}
+
+func Init(bundlePath, certPath string) error {
+	if _, err := os.Stat(bundlePath); err == nil {
+		return adopt(bundlePath, certPath)
+	}
+	der, bundle, _, err := newRoot("pi-fortress", time.Now())
+	if err != nil {
 		return err
 	}
-	bundle := append(certPEM(der), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})...)
 	bundleDir := filepath.Dir(bundlePath)
 	if err := os.MkdirAll(bundleDir, 0755); err != nil {
 		return err
