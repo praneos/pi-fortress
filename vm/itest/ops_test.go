@@ -169,7 +169,7 @@ func retiredFlagTests(t *testing.T) {
 func logrotateTests(t *testing.T) {
 	e := netenv(t)
 	const log = "/var/log/pi-fortress/dns.jsonl"
-	const offsetPath = "/var/lib/pi-fortress/dns.offset"
+	const offsetPath = "/var/lib/pi-fortress/observe/dns.offset"
 	// Read before the rotation: the cursor of the reader into the old file
 	// is the only reference against which to measure a shrink.
 	offsetBefore := logOffset(t, offsetPath)

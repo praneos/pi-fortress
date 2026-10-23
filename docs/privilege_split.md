@@ -100,9 +100,14 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   put a second process on `:8080`.
 - A third user, `pf-sidecar`, runs alert and monitor. These are file tailers
   with no capabilities. The state directories stay owned by root. `apply.sh`
-  gives the sidecar exactly the files that the sidecar rewrites. observe
-  stays root, for the conntrack netlink dump. There is no console daemon. For
-  management, use `sudo pf tui`. This is a terminal program. Its only
+  gives the sidecar exactly the files that the sidecar rewrites
+  (`alert.offset`, `alert-notice.offset`, `alert.last`). `alert.service`
+  can write only these three files. observe stays root, for the conntrack
+  netlink dump. `observe.service` can write only
+  `/var/lib/pi-fortress/observe` (its ledger and checkpoints) and
+  `/var/log/pi-fortress`. The other state under `/var/lib/pi-fortress`,
+  `www/claims-redeemed` too, is read-only to both. There is no console
+  daemon. For management, use `sudo pf tui`. This is a terminal program. Its only
   privilege is the sudo of the operator.
 - www writes to exactly one directory:
   `/var/lib/pi-fortress/www/claims-redeemed` (`root:pf-fortress 2770`,
@@ -150,7 +155,7 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   `/var/lib/pi-fortress/engine` (`pf-engine 0700`, `ca.pem` `0600`). Only
   `ca-cert.pem` is `0644`, and it is copied out for www.
 - The strip, unknown, and use logs are `pf-broker:pf-fortress 0640`.
-  `observe.json` and `observe.jsonl` are `root:pf-fortress 0640` (observe
+  `observe/observe.json` and `observe.jsonl` are `root:pf-fortress 0640` (observe
   runs `Group=pf-fortress`, `UMask=0027`).
 - Both units run with:
   - An empty capability set.

@@ -2730,6 +2730,67 @@ grep -qF 'install -d -m 2770 -o root -g pf-fortress "${WWW}/claims-redeemed"' "$
 [[ "$(grep '^ReadWritePaths=' "${here}/www.service")" == "ReadWritePaths=/var/lib/pi-fortress/www/claims-redeemed" ]] ||
   fail "www.service must have claims-redeemed as its only writable path"
 
+# observe and alert write only their own state. Neither can write
+# claims-redeemed/ or any other state under /var/lib/pi-fortress.
+[[ "$(grep '^ReadWritePaths=' "${here}/observe.service")" == "ReadWritePaths=/var/lib/pi-fortress/observe /var/log/pi-fortress" ]] ||
+  fail "observe.service must write only its state directory and the logs"
+[[ "$(grep '^ReadWritePaths=' "${here}/alert.service")" == "ReadWritePaths=-/var/lib/pi-fortress/alert.offset -/var/lib/pi-fortress/alert-notice.offset -/var/lib/pi-fortress/alert.last" ]] ||
+  fail "alert.service must write only its three state files"
+# The units name the paths that the daemons use.
+grep -qF 'const StateDir = "/var/lib/pi-fortress/observe"' "${here}/../../internal/observe/observe.go" ||
+  fail "pf observe keeps its state outside the directory that observe.service can write"
+for _f in alert.offset alert-notice.offset alert.last; do
+  grep -qF "\"/var/lib/pi-fortress/${_f}\"" "${here}/../../internal/alert/alert.go" ||
+    fail "pf alert does not write /var/lib/pi-fortress/${_f}, which alert.service names"
+done
+# apply makes the directory and the files before it starts the units.
+# provision.sh makes the directory too: it can start observe before the
+# first apply.
+_mk="$(grep -nF 'install -d -m 0755 "${OBSERVE_STATE}"' "${apply}" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nF 'systemctl restart pi-fortress-observe.service' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "apply does not make the observe state directory before it starts observe"
+_mk="$(grep -n '^for _f in /var/lib/pi-fortress/alert.offset /var/lib/pi-fortress/alert.last /var/lib/pi-fortress/alert-notice.offset; do' "${apply}" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nF 'systemctl restart pi-fortress-alert.service' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "apply does not make the alert state files before it starts alert"
+_mk="$(grep -nF 'install -d -m 0755 /var/lib/pi-fortress/observe' "${here}/provision.sh" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nF 'systemctl restart pi-fortress-observe' "${here}/provision.sh" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "provision.sh does not make the observe state directory before it starts observe"
+# An install from before kept the observe state at the top of
+# /var/lib/pi-fortress. apply moves it into the directory one time, with
+# observe stopped. A file at the top is newer than a copy in the directory.
+# The state of other daemons stays where it is.
+(
+  ob="${tmp}/obsmove"
+  lib="${ob}/var/lib/pi-fortress"
+  mkdir -p "${lib}/observe"
+  systemctl() { printf '%s\n' "$*" >>"${ob}/systemctl.log"; }
+  for _f in observe.json observe.json.lock dns.offset dns-house.offset dns-desk.offset journal.cursor strip.offset \
+    alert.offset alert.last house.leases; do
+    printf 'top %s\n' "${_f}" >"${lib}/${_f}"
+  done
+  printf 'stale\n' >"${lib}/observe/observe.json"
+  _move="$(sed -n '/^OBSERVE_STATE=/,/^fi$/p' "${apply}" | sed "s#/var/lib/pi-fortress#${lib}#g")"
+  [[ -n "${_move}" ]] || fail "the observe state move is gone from apply.sh"
+  eval "${_move}"
+  for _f in observe.json dns.offset dns-house.offset dns-desk.offset journal.cursor strip.offset; do
+    [[ -e "${lib}/${_f}" ]] && fail "apply left ${_f} at the top of the state directory"
+    [[ "$(cat "${lib}/observe/${_f}")" == "top ${_f}" ]] || fail "apply did not move ${_f} into observe/"
+  done
+  [[ -e "${lib}/observe.json.lock" ]] && fail "apply left the old observe lock"
+  for _f in alert.offset alert.last house.leases; do
+    [[ "$(cat "${lib}/${_f}")" == "top ${_f}" ]] || fail "apply moved ${_f}, which is not observe state"
+  done
+  grep -qx 'stop pi-fortress-observe.service' "${ob}/systemctl.log" || fail "apply moved the observe state with observe running"
+  : >"${ob}/systemctl.log"
+  eval "${_move}"
+  if [[ -s "${ob}/systemctl.log" ]]; then
+    fail "apply stopped observe with nothing to move"
+  fi
+)
+
 # Each file that apply and provision write with > gets its mode from the
 # umask. Thus neither script may inherit the umask of the caller.
 for _s in apply.sh provision.sh; do

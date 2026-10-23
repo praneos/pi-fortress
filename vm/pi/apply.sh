@@ -1951,9 +1951,30 @@ if [[ "${LOCAL_ONLY}" -eq 1 ]]; then
   exit "${_settled}"
 fi
 
+# observe keeps its ledger and its checkpoints in their own directory.
+# It is the one path under /var/lib/pi-fortress that observe.service can
+# write, and it must exist before the unit starts. An install from before
+# this kept them at the top. A file there is from an observe of that
+# version, so it is newer than a copy in the directory, and it replaces
+# that copy. Move them with the old observe stopped: if it stays up, it
+# writes them back under the old names.
+OBSERVE_STATE=/var/lib/pi-fortress/observe
+install -d -m 0755 "${OBSERVE_STATE}"
+_obs_old=()
+for _f in /var/lib/pi-fortress/observe.json /var/lib/pi-fortress/journal.cursor \
+  /var/lib/pi-fortress/strip.offset /var/lib/pi-fortress/dns.offset /var/lib/pi-fortress/dns-*.offset; do
+  if [[ -f "${_f}" && ! -L "${_f}" ]]; then
+    _obs_old+=("${_f}")
+  fi
+done
+if [[ "${#_obs_old[@]}" -gt 0 ]]; then
+  systemctl stop pi-fortress-observe.service >/dev/null 2>&1 || true
+  mv -f "${_obs_old[@]}" "${OBSERVE_STATE}/"
+  rm -f /var/lib/pi-fortress/observe.json.lock
+fi
 # observe runs as root:pf-fortress with umask 027, so observe.json and
 # observe.jsonl are 0640 for the group. Correct the files that exist.
-for _f in /var/lib/pi-fortress/observe.json /var/log/pi-fortress/observe.jsonl; do
+for _f in "${OBSERVE_STATE}/observe.json" /var/log/pi-fortress/observe.jsonl; do
   if [[ -f "${_f}" ]]; then
     chown root:pf-fortress "${_f}"
     chmod 0640 "${_f}"
@@ -1997,7 +2018,8 @@ if [[ -f "${PI_LIB}/fetch.service" && -f "${PI_LIB}/fetch.timer" ]]; then
 fi
 
 # alert runs as pf-sidecar. Root keeps ownership of the state directories.
-# The sidecar owns exactly the files that it rewrites.
+# The sidecar owns exactly the files that it rewrites. These three are
+# also the only paths that alert.service can write.
 for _f in /var/lib/pi-fortress/alert.offset /var/lib/pi-fortress/alert.last /var/lib/pi-fortress/alert-notice.offset; do
   touch "${_f}"
   chown pf-sidecar:pf-fortress "${_f}"

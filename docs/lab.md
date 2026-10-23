@@ -201,7 +201,7 @@ Both screens read `observe.json` again every 5 s. Thus, they are late by a maxim
 
 On the Pi the files are:
 
-- `/var/lib/pi-fortress/observe.json`
+- `/var/lib/pi-fortress/observe/observe.json`
 - `/var/log/pi-fortress/observe.jsonl`
 
 The gateway never terminates the traffic of a plain segment. Thus, observe keeps its first-seen destinations instead:

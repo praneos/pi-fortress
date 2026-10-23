@@ -50,7 +50,11 @@ SystemCallFilter=~@privileged
 # @privileged includes @chown, and a filtered call kills the process. The
 # state file keeps the group that apply gave it (root:pf-fortress).
 SystemCallFilter=@chown
-ReadWritePaths=/var/lib/pi-fortress /var/log/pi-fortress
+# Its own state directory and the logs, nothing else. The other state
+# under /var/lib/pi-fortress (www/claims-redeemed, dns/, the alert
+# offsets) is read-only here. apply.sh makes the directory before the
+# unit starts.
+ReadWritePaths=/var/lib/pi-fortress/observe /var/log/pi-fortress
 InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine
 # Write chunking: first-seen rows, offsets
 # and state stay in memory until one of the two limits. A crash loses that data.

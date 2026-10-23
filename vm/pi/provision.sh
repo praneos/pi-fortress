@@ -132,6 +132,10 @@ EOF
 fi
 cp "${SRC}"/vm/policy/core.hosts /etc/pi-fortress/core.hosts
 cp "${SRC}"/vm/policy/key_prefixes.rules /etc/pi-fortress/key_prefixes.rules
+# observe.service can write only this directory under /var/lib/pi-fortress,
+# and does not start without it. apply makes it too, but the restart
+# below can come before the first apply.
+install -d -m 0755 /var/lib/pi-fortress/observe
 install -m 0644 "${SRC}"/vm/pi/observe.service /etc/systemd/system/pi-fortress-observe.service
 install -m 0644 "${SRC}"/vm/pi/alert.service /etc/systemd/system/pi-fortress-alert.service
 install -m 0644 "${SRC}"/vm/pi/www.service /etc/systemd/system/pi-fortress-www.service

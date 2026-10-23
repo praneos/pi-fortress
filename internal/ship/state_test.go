@@ -110,7 +110,7 @@ func TestSnapshotLeavesOutSecretsKeysTrustRootsAndShipBookkeeping(t *testing.T) 
 		"etc/secrets.env", "etc/mullvad.conf", "etc/allowed_signers", "etc/release-signers", "etc/lab",
 		"etc/agent-env-a1.sh", "etc/agent-credentials-a1.json",
 		"lib/engine/ca.pem", "lib/mitm/mitmproxy-ca.pem", "lib/www/claims/ledger.jsonl", "lib/www/claims-redeemed/ledger.jsonl",
-		"lib/alert.offset", "lib/alert.last", "lib/observe.json", "lib/house.leases", "lib/monitor/x.json",
+		"lib/alert.offset", "lib/alert.last", "lib/observe.json", "lib/observe/observe.json", "lib/observe/dns.offset", "lib/house.leases", "lib/monitor/x.json",
 		"lib/ship.version", "lib/ship.pending", "lib/state.version", "lib/install-work/tree/x", "lib/upgrade/abc/pf-bundle.tar",
 	}
 	for p, body := range kept {

@@ -94,6 +94,7 @@ fence  absent /var/lib/pi-fortress/*.offset
 fence  absent /var/lib/pi-fortress/*.last
 fence  absent /var/lib/pi-fortress/observe.json
 fence  absent /var/lib/pi-fortress/journal.cursor
+fence  absent /var/lib/pi-fortress/observe/*
 fence  absent /var/lib/pi-fortress/logrotate.state
 
 # DHCP leases.
