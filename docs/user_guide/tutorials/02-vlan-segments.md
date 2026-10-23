@@ -72,6 +72,8 @@ The position after the conntrack accept is important. These rules control only *
 
 An apply does not flush conntrack. Thus `isolate_ct` holds the same pair drops and SSH holes for **established flows**. It matches each hole in the two directions of the flow. If an apply removes a hole, the flows that use it stop at their next packet. Flows that cross no pair go on to the conntrack accept. Each pair has one `drop` for each direction, never `reject`. Thus a prober gets only silence.
 
+An egress change of a segment is different. A new `HOUSE_EGRESS` or segment egress mode, or a smaller `ssh_allow` of a segment, applies only to **new flows**. A flow that is already open keeps the old permission until it closes. To stop such flows at once, run `sudo conntrack -D -s <segment subnet>` on the Pi after the apply. This also stops all other open flows of that segment.
+
 **Holes are named, not implicit.**
 
 - The house gets exactly one hole: the `HOUSE_ADMIN_IP` can reach one agent VM on tcp/22. `HOUSE_SSH_TO` can widen this to a range of agent VMs.
