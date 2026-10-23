@@ -104,7 +104,21 @@ type sniCheck struct {
 	flows   map[sniFlowKey]*sniFlow
 	done    map[sniFlowKey]sniDecided
 	lastLog time.Time
+	skipped int // refusals not logged since lastLog
 	swept   time.Time
+}
+
+// timeoutWhy is the reason for a flow whose ClientHello did not complete
+// in time. A connection that the client opened and did not use yet sends
+// no data (a browser preconnect, a keepalive). It is a different case from
+// a ClientHello that stopped part of the way.
+func (c *sniCheck) timeoutWhy(key sniFlowKey) string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if f := c.flows[key]; f != nil && f.bytes > 0 {
+		return fmt.Sprintf("no whole ClientHello in time (%d bytes held)", f.bytes)
+	}
+	return "no data in time"
 }
 
 func newSNICheck(q sniQueue, resolve func(context.Context, netip.Addr, string) ([]netip.Addr, bool, error), ech []netip.Prefix) *sniCheck {
@@ -230,7 +244,7 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 		}
 		f = &sniFlow{segs: map[uint32][]byte{}, first: seq}
 		c.flows[key] = f
-		f.timer = time.AfterFunc(c.wait, func() { c.decide(key, sniBad, "no whole ClientHello in time") })
+		f.timer = time.AfterFunc(c.wait, func() { c.decide(key, sniBad, c.timeoutWhy(key)) })
 	}
 	// The SYN is in the queue too (the gate marks the flow on it). The SYN
 	// gives the exact start of the data. Thus the check does not read a
@@ -358,12 +372,20 @@ func (c *sniCheck) decide(key sniFlowKey, mark uint32, why string) {
 	}
 	c.done[key] = sniDecided{mark, now}
 	say := mark == sniBad && now.Sub(c.lastLog) >= time.Second
+	skipped := 0
 	if say {
 		c.lastLog = now
+		skipped, c.skipped = c.skipped, 0
+	} else if mark == sniBad {
+		c.skipped++
 	}
 	c.mu.Unlock()
 	if say {
-		c.logf("pf dns: sni: %s -> %s refused: %s", key.src.Addr(), key.dst, why)
+		more := ""
+		if skipped > 0 {
+			more = fmt.Sprintf(" (and %d more refused since the last line)", skipped)
+		}
+		c.logf("pf dns: sni: %s -> %s refused: %s%s", key.src, key.dst, why, more)
 	}
 	for _, h := range f.held {
 		c.repeat(h.id, h.mark, mark)

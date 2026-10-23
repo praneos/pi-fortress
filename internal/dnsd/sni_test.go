@@ -230,6 +230,60 @@ func TestSNIKeepsTheLongerRetransmit(t *testing.T) {
 	}
 }
 
+// A connection that is open but has no data yet (a preconnect) is logged
+// as such, with its source port. A refusal that the rate limit holds back
+// is counted on the next line.
+func TestSNILogSaysWhy(t *testing.T) {
+	c, q := newTestCheck(t, &fakeResolve{})
+	var mu sync.Mutex
+	var lines []string
+	c.logf = func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+	clock := time.Unix(1_800_000_000, 0)
+	c.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	ctx := context.Background()
+	c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4f("198.51.100.7", 4999, tcpSYN, nil)})
+	q.wait(t, 1)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		mu.Lock()
+		n := len(lines)
+		mu.Unlock()
+		if n > 0 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	key := func(port uint16) sniFlowKey {
+		return sniFlowKey{netip.AddrPortFrom(netip.MustParseAddr("10.78.0.160"), port), netip.MustParseAddrPort("198.51.100.7:443")}
+	}
+	for _, p := range []uint16{2, 3} {
+		c.mu.Lock()
+		c.flows[key(p)] = &sniFlow{timer: time.NewTimer(time.Hour)}
+		c.mu.Unlock()
+		c.decide(key(p), sniBad, "test")
+	}
+	mu.Lock()
+	clock = clock.Add(time.Second)
+	mu.Unlock()
+	c.mu.Lock()
+	c.flows[key(4)] = &sniFlow{timer: time.NewTimer(time.Hour)}
+	c.mu.Unlock()
+	c.decide(key(4), sniBad, "test")
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{
+		"pf dns: sni: 10.78.0.160:50806 -> 198.51.100.7:443 refused: no data in time",
+		"pf dns: sni: 10.78.0.160:4 -> 198.51.100.7:443 refused: test (and 2 more refused since the last line)",
+	}
+	if strings.Join(lines, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("log:\n%s\nwant:\n%s", strings.Join(lines, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 func TestSNIRefuses(t *testing.T) {
 	r := &fakeResolve{
 		ans: map[string][]netip.Addr{
