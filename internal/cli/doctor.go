@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"pi-fortress/internal/admin"
+	"pi-fortress/internal/ca"
 	"pi-fortress/internal/doctor"
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/render"
@@ -29,6 +30,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	etc := fs.String("etc", "/etc", "directory holding sudoers and sudoers.d, for the sudo rung")
 	sshdConfig := fs.String("sshd-config", "/etc/ssh/sshd_config", "sshd_config path, for the ssh rung")
 	shipLog := fs.String("ship-log", ship.Defaults().Log, "signed ship log, for the ship rung")
+	engineCA := fs.String("engine-ca", doctor.EngineCA, "CA bundle of the engine, for the ca root rung")
 	postUpgrade := fs.Bool("post-upgrade", false, "after a ship install: required units, sinkhole + public resolve per segment, broker + engine sockets, uplink; exit 0/1, none of the other rungs")
 	unitsFile := fs.String("units-file", "/var/lib/pi-fortress/units.required", "unit list apply.sh wrote, for -post-upgrade")
 	brokerSock := fs.String("broker-sock", "/run/pi-fortress/broker/broker.sock", "broker credential socket, for -post-upgrade")
@@ -70,6 +72,10 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		rs = append(rs, r)
 	}
 	if r, ok := doctor.CARestartRung(doctor.CARestartPending); ok {
+		rs = append(rs, r)
+	}
+	roots, err := ca.Status(*engineCA)
+	if r, ok := doctor.CARootRung(roots, err, time.Now()); ok {
 		rs = append(rs, r)
 	}
 	if r, ok := doctor.SudoRung(doctor.SudoersFiles(*etc)); ok {
