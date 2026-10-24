@@ -112,12 +112,16 @@ func BenchmarkDecideCoreHeaders(b *testing.B) {
 	runDecide(b, "api.anthropic.com", headersReq("api.anthropic.com", "pf_b0b1b2b3b4b5b6b7_CLAUDE_OAT"))
 }
 
+// A foreign host carries no kind, so a placeholder there is a refusal. The
+// headers carry an opaque value, as postReq does.
 func BenchmarkDecideForeignHeaders(b *testing.B) {
-	runDecide(b, "example.com", headersReq("example.com", "pf_b0b1b2b3b4b5b6b7_CLAUDE_OAT"))
+	runDecide(b, "example.com", headersReq("example.com", "session-abc"))
 }
 
+// The placeholder is in the Authorization header, where the host may carry
+// it. A placeholder in this body is a refusal (CauseOutsideHeader).
 func BenchmarkDecideCoreBody64K(b *testing.B) {
-	runDecide(b, "api.anthropic.com", postReqPH("api.anthropic.com", jsonBody(64<<10, "pf_b0b1b2b3b4b5b6b7_CLAUDE_OAT")))
+	runDecide(b, "api.anthropic.com", postReqPH("api.anthropic.com", jsonBody(64<<10, "nothing")))
 }
 
 func BenchmarkDecideForeignBody1MClean(b *testing.B) {
