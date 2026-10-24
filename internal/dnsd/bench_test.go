@@ -82,6 +82,25 @@ func BenchmarkAnswer(b *testing.B) {
 	}
 }
 
+// BenchmarkAnswerParallel is a cached A answer for many devices at the
+// same time. They share the cache and its lock.
+func BenchmarkAnswerParallel(b *testing.B) {
+	srv := benchServer(b)
+	ctx := context.Background()
+	req := benchQuery(b, "ok.example", dnsmessage.TypeA)
+	src := netip.MustParseAddr("10.77.0.10")
+	if srv.answer(ctx, srv.segs[0], src, req, 0) == nil {
+		b.Fatal("no reply")
+	}
+	b.ReportAllocs()
+	b.RunParallel(func(pb *testing.PB) {
+		req := append([]byte(nil), req...)
+		for pb.Next() {
+			srv.answer(ctx, srv.segs[0], src, req, 0)
+		}
+	})
+}
+
 func BenchmarkKeyShapeMatch(b *testing.B) {
 	k, err := loadKeyShapes(shippedRules)
 	if err != nil {
