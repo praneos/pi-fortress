@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"net"
+	"strings"
 	"testing"
 )
 
@@ -258,6 +259,32 @@ func TestDuplicateExtensionMalformed(t *testing.T) {
 	} {
 		if _, _, err := Parse(buf); err != ErrMalformed {
 			t.Fatalf("%s: err=%v, want ErrMalformed", name, err)
+		}
+	}
+}
+
+// A server name has labels of 1 to 63 bytes and at most one trailing dot.
+func TestNormalizeHostNameLabels(t *testing.T) {
+	long := strings.Repeat("a", 63)
+	for in, want := range map[string]string{
+		"Example.COM":           "example.com",
+		"example.com.":          "example.com",
+		long + ".com":           long + ".com",
+		"example.c..":           "",
+		"example..com":          "",
+		".example.com":          "",
+		long + "a.com":          "",
+		"xn--bcher-kva.example": "xn--bcher-kva.example",
+	} {
+		got, err := normalizeHostName([]byte(in))
+		if want == "" {
+			if err == nil {
+				t.Errorf("%q: got %q, want ErrMalformed", in, got)
+			}
+			continue
+		}
+		if err != nil || got != want {
+			t.Errorf("%q: got %q, %v; want %q", in, got, err, want)
 		}
 	}
 }

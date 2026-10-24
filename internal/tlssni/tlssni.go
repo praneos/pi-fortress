@@ -259,5 +259,11 @@ func normalizeHostName(raw []byte) (string, error) {
 	if digitsAndDotsOnly {
 		return "", ErrMalformed
 	}
+	// Each label has 1 to 63 bytes. This also refuses a second trailing dot.
+	for label := range strings.SplitSeq(s, ".") {
+		if len(label) == 0 || len(label) > 63 {
+			return "", ErrMalformed
+		}
+	}
 	return s, nil
 }
