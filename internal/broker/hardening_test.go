@@ -438,6 +438,67 @@ func TestBlockedHostOrSNIRefused(t *testing.T) {
 	}
 }
 
+// The blocklist walks the labels of the Host. A Host that is not a host
+// and port, such as "x@blocked.example", has no label that the list holds.
+// An origin that reads it loosely can still route it to the listed name.
+// So the broker refuses such a Host before the blocklist, and the origin
+// never sees it. What real clients send still goes through.
+func TestHostMustBeHostAndPort(t *testing.T) {
+	cdn := preamble.Preamble{SNI: "cdn.example", OrigDst: netip.MustParseAddrPort("8.8.8.8:443")}
+	cases := []struct {
+		host string
+		code int
+	}{
+		{"x@blocked.example", 400},
+		{"[blocked.example]", 400},
+		{"[blocked.example]:443", 400},
+		{"cdn.example", 204},
+		{"cdn.example:443", 204},
+		{"CDN.Example", 204},
+		{"cdn.example.", 204},
+		{"[2001:db8::1]", 204},
+		{"[2001:db8::1]:8443", 204},
+		{"192.0.2.1:443", 204},
+	}
+	for _, c := range cases {
+		t.Run(c.host, func(t *testing.T) {
+			b, _ := testBroker(t)
+			b.Blocked = blocklist.New("blocked.example")
+			var seen atomic.Int32
+			rawUpstream(t, b, func(_ int, req *httpwire.Request, conn net.Conn) bool {
+				seen.Add(1)
+				_, _ = conn.Write([]byte("HTTP/1.1 204 No Content\r\n\r\n"))
+				return false
+			})
+			s := open(t, b, cdn)
+			s.send("GET / HTTP/1.1\r\nHost: " + c.host + "\r\n\r\n")
+			if resp := s.read(); resp.Code != c.code {
+				t.Fatalf("Host %q: code %d, want %d", c.host, resp.Code, c.code)
+			}
+			s.close()
+			if c.code == 400 && seen.Load() != 0 {
+				t.Fatalf("Host %q reached the origin", c.host)
+			}
+		})
+	}
+}
+
+func TestValidHost(t *testing.T) {
+	long := strings.Repeat("a", 64)
+	for h, want := range map[string]bool{
+		"api.anthropic.com": true, "API.Anthropic.COM:443": true, "localhost": true, "_dmarc.example": true,
+		"a.example.": true, "192.0.2.1": true, "[::1]": true, "[::ffff:192.0.2.1]:443": true, "x:65535": true,
+		"": false, ".": false, "a..b": false, ".a": false, "a.example..": false, long + ".example": false,
+		"x@blocked.example": false, "[blocked.example]": false, "[192.0.2.1]": false, "::1": false,
+		"[::1%25eth0]": false, "[fe80::1%eth0]": false, "a%2eb": false, "a b": false, "é.example": false,
+		"x:": false, "x:0": false, "x:65536": false, "x:+1": false, "x:1:2": false, "x:4430000": false,
+	} {
+		if got := validHost(h); got != want {
+			t.Errorf("validHost(%q) = %v, want %v", h, got, want)
+		}
+	}
+}
+
 // A 100-continue in a second Expect field, or later in a list, still shows
 // a client that holds its body back. If the broker reads the body instead,
 // both sides stall until one side stops.
