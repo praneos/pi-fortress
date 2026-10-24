@@ -216,7 +216,7 @@ func TestConnLimitsRefused(t *testing.T) {
 func TestSegmentConnLimits(t *testing.T) {
 	o := connBox(t, map[string]string{"SEG_CONN_TOTAL": "4096"})
 	write(t, o.SegmentsDir, "guest.env", "IF=eth4\nNET=10.81.0.0/24\nIP=10.81.0.1\nCONN_PER_IP=64\nNEW_PER_IP=0\n")
-	write(t, o.SegmentsDir, "lab-b.env", "IF=eth5\nNET=10.82.0.0/24\nIP=10.82.0.1\nCONN_TOTAL=0\nNEW_PER_IP=20/40\n")
+	write(t, o.SegmentsDir, "lab-b.env", "IF=eth5\nNET=10.82.0.0/24\nIP=10.82.0.1\nCONN_TOTAL=0\nNEW_PER_IP=20/40\nCONN_PER_IP=\n")
 	nft := load(t, o).Ruleset(labElements)
 	for _, want := range []string{
 		// desk: nothing of its own, net.env's SEG_ values.
@@ -226,7 +226,8 @@ func TestSegmentConnLimits(t *testing.T) {
 		// guest: its own per-device cap, meter off, SEG_CONN_TOTAL kept.
 		`iifname "eth4" ct state new add @seg_guest_conn_v4 { ip saddr ct count over 64 } jump seg_guest_connlimit`,
 		`iifname "eth4" ct state new ct count over 4096 jump seg_guest_connlimit`,
-		// lab-b: its own meter, no segment total, the default per device.
+		// lab-b: its own meter, no segment total, the default per device
+		// (its empty CONN_PER_IP is the SEG_ value, not off).
 		`iifname "eth5" ct state new meter seg_lab_b_newconn { ip saddr limit rate over 20/second burst 40 packets }`,
 		`iifname "eth5" ct state new add @seg_lab_b_conn_v4 { ip saddr ct count over 128 }`,
 	} {
