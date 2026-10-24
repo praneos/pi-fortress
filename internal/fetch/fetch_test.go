@@ -511,6 +511,14 @@ func TestParseHostsKeepsEveryAlias(t *testing.T) {
 	}
 }
 
+// A wildcard or a trailing dot does not make an address into a name.
+func TestParseHostsDropsAddressWithWildcardOrDot(t *testing.T) {
+	got := ParseHosts("0.0.0.0 *.0.0.0.0 0.0.0.0. *.1.2.3.4. four.example\n")
+	if want := "four.example"; strings.Join(got, ",") != want {
+		t.Fatalf("got %q, want %q", strings.Join(got, ","), want)
+	}
+}
+
 // The partial run (one feed answers, one is dead) is the case that the
 // audit entry must describe, and Run reports it as success. The count is
 // the only place for the number outside fetch.report itself.
