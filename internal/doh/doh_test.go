@@ -91,3 +91,16 @@ func TestARepeatedFieldIsStillSeen(t *testing.T) {
 		t.Error("a DNS media type in a second Content-Type field was missed")
 	}
 }
+
+// A path that is only a path parameter is empty after the parameter is
+// removed. The classifier reads it as "/", as it reads an empty path.
+func TestAPathOfOnlyAParameterIsTheRoot(t *testing.T) {
+	for _, target := range []string{";", ";v=1", ";?x=1", ";%3B"} {
+		if HTTPFields(target, nil, nil) {
+			t.Errorf("%q: read as DoH", target)
+		}
+	}
+	if got := cleanPath(";"); got != cleanPath("/") {
+		t.Errorf(`cleanPath(";") = %q, want %q`, got, cleanPath("/"))
+	}
+}
