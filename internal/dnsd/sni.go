@@ -113,10 +113,10 @@ type sniCheck struct {
 // in time. A connection that the client opened and did not use yet sends
 // no data (a browser preconnect, a keepalive). It is a different case from
 // a ClientHello that stopped part of the way.
-func (c *sniCheck) timeoutWhy(key sniFlowKey) string {
+func (c *sniCheck) timeoutWhy(f *sniFlow) string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if f := c.flows[key]; f != nil && f.bytes > 0 {
+	if f.bytes > 0 {
 		return fmt.Sprintf("no whole ClientHello in time (%d bytes held)", f.bytes)
 	}
 	return "no data in time"
@@ -251,9 +251,10 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 			c.verdict(p.ID, nfq.Drop, nil)
 			return
 		}
-		f = &sniFlow{segs: map[uint32][]byte{}, first: seq}
-		c.flows[key] = f
-		f.timer = time.AfterFunc(c.wait, func() { c.decide(key, sniBad, c.timeoutWhy(key)) })
+		nf := &sniFlow{segs: map[uint32][]byte{}, first: seq}
+		c.flows[key] = nf
+		nf.timer = time.AfterFunc(c.wait, func() { c.decide(key, nf, sniBad, c.timeoutWhy(nf)) })
+		f = nf
 	}
 	// The SYN is in the queue too (the gate marks the flow on it). The SYN
 	// gives the exact start of the data. Thus the check does not read a
@@ -267,7 +268,7 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 			f.first, f.syn = seq+1, true
 		case !f.syn || seq+1 != f.first:
 			c.mu.Unlock()
-			c.decide(key, sniBad, "SYN moves the start of the stream")
+			c.decide(key, f, sniBad, "SYN moves the start of the stream")
 			c.verdict(p.ID, nfq.Drop, nil)
 			return
 		}
@@ -280,7 +281,7 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 	}
 	if len(f.held) >= sniMaxHeld || f.bytes+len(payload) > sniMaxBytes {
 		c.mu.Unlock()
-		c.decide(key, sniBad, "ClientHello too large")
+		c.decide(key, f, sniBad, "ClientHello too large")
 		c.verdict(p.ID, nfq.Drop, nil)
 		return
 	}
@@ -293,7 +294,7 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 	// stream has one value, whatever copy the check or the server reads.
 	if f.conflicts(seq, payload) {
 		c.mu.Unlock()
-		c.decide(key, sniBad, "segment changes data already held")
+		c.decide(key, f, sniBad, "segment changes data already held")
 		c.verdict(p.ID, nfq.Drop, nil)
 		return
 	}
@@ -327,15 +328,15 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 		// a TLS handshake record but is not a ClientHello is not that protocol.
 		// It stays refused.
 		if errors.Is(err, tlssni.ErrNotTLS) && len(buf) > 0 && buf[0] != 0x16 && inPrefixes(c.opaque, key.dst.Addr()) {
-			c.decide(key, sniOK, "")
+			c.decide(key, f, sniOK, "")
 			return
 		}
-		c.decide(key, sniBad, "not a TLS ClientHello: "+err.Error())
+		c.decide(key, f, sniBad, "not a TLS ClientHello: "+err.Error())
 		return
 	}
 	go func() {
 		mark, why := c.judge(ctx, key, hello)
-		c.decide(key, mark, why)
+		c.decide(key, f, mark, why)
 	}()
 }
 
@@ -388,11 +389,12 @@ func (c *sniCheck) judge(ctx context.Context, key sniFlowKey, h tlssni.Hello) (u
 // decide ends a flow. It repeats each packet held for the flow with the
 // mark of the verdict. It keeps the verdict for packets that are still in
 // the queue behind them. A second decide for the same flow finds nothing
-// to do, for example when the timer fires as the name comes back.
-func (c *sniCheck) decide(key sniFlowKey, mark uint32, why string) {
+// to do, for example when the timer fires as the name comes back. A late
+// judge or timer of an old flow finds a new flow on the same addresses
+// and ports, not its own, and leaves it alone.
+func (c *sniCheck) decide(key sniFlowKey, f *sniFlow, mark uint32, why string) {
 	c.mu.Lock()
-	f := c.flows[key]
-	if f == nil {
+	if c.flows[key] != f || f == nil {
 		c.mu.Unlock()
 		return
 	}

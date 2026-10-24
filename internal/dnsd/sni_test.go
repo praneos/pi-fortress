@@ -383,17 +383,19 @@ func TestSNILogSaysWhy(t *testing.T) {
 	}
 	for _, p := range []uint16{2, 3} {
 		c.mu.Lock()
-		c.flows[key(p)] = &sniFlow{timer: time.NewTimer(time.Hour)}
+		f := &sniFlow{timer: time.NewTimer(time.Hour)}
+		c.flows[key(p)] = f
 		c.mu.Unlock()
-		c.decide(key(p), sniBad, "test")
+		c.decide(key(p), f, sniBad, "test")
 	}
 	mu.Lock()
 	clock = clock.Add(time.Second)
 	mu.Unlock()
 	c.mu.Lock()
-	c.flows[key(4)] = &sniFlow{timer: time.NewTimer(time.Hour)}
+	f := &sniFlow{timer: time.NewTimer(time.Hour)}
+	c.flows[key(4)] = f
 	c.mu.Unlock()
-	c.decide(key(4), sniBad, "test")
+	c.decide(key(4), f, sniBad, "test")
 	mu.Lock()
 	defer mu.Unlock()
 	want := []string{
@@ -704,9 +706,10 @@ func TestSNIDoneIsBoundedAndSweptOnATimer(t *testing.T) {
 			dst: netip.MustParseAddrPort("209.216.230.207:443"),
 		}
 		c.mu.Lock()
-		c.flows[key] = &sniFlow{timer: time.AfterFunc(time.Hour, func() {})}
+		f := &sniFlow{timer: time.AfterFunc(time.Hour, func() {})}
+		c.flows[key] = f
 		c.mu.Unlock()
-		c.decide(key, sniOK, "")
+		c.decide(key, f, sniOK, "")
 	}
 	for i := range 3 * sniMaxDone {
 		decide(i)
@@ -721,5 +724,41 @@ func TestSNIDoneIsBoundedAndSweptOnATimer(t *testing.T) {
 	decide(0)
 	if n := len(c.done); n != 1 {
 		t.Fatalf("after every verdict expired: %d left", n)
+	}
+}
+
+// A judge of an old flow can finish after a new connection on the same
+// addresses and ports has started. Its verdict is for the name of the old
+// flow. It must not release the ClientHello of the new one.
+func TestSNILateVerdictLeavesANewFlowAlone(t *testing.T) {
+	q := newFakeQueue()
+	dst := "203.0.113.9"
+	slow, slowDone, blocked := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	c := newSNICheck(q, func(_ context.Context, _ netip.Addr, name string) ([]netip.Addr, bool, error) {
+		if name == "allowed.example" {
+			defer close(slowDone)
+			<-slow
+			return []netip.Addr{netip.MustParseAddr(dst)}, false, nil
+		}
+		<-blocked
+		return nil, true, nil
+	}, nil)
+	ctx := context.Background()
+	c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4f(dst, 1000, 0x02, nil)})
+	c.packet(ctx, nfq.Packet{ID: 2, Payload: tcp4(dst, 1001, clientHello(t, "allowed.example"))})
+	// A SYN that moves the start refuses the first flow while its judge waits.
+	c.packet(ctx, nfq.Packet{ID: 3, Payload: tcp4f(dst, 5000, 0x02, nil)})
+	if v := q.wait(t, 2); v.mark&sniBits != sniBad {
+		t.Fatalf("first flow: %+v", v)
+	}
+	c.packet(ctx, nfq.Packet{ID: 4, Payload: tcp4f(dst, 9000, 0x02, nil)})
+	c.packet(ctx, nfq.Packet{ID: 5, Payload: tcp4(dst, 9001, clientHello(t, "blocked.example"))})
+	close(slow)
+	<-slowDone
+	time.Sleep(50 * time.Millisecond) // the old judge calls decide
+	q.none(t, 5)
+	close(blocked)
+	if v := q.wait(t, 5); v.mark&sniBits != sniBad {
+		t.Fatalf("blocked.example on the new flow: %+v", v)
 	}
 }
