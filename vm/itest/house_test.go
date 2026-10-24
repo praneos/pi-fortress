@@ -47,6 +47,15 @@ func houseTests(t *testing.T) {
 	// house_never_block frees doubleclick.net although hagezi lists it.
 	t.Run("never-block ad name resolves", func(t *testing.T) {
 		if ips := digOn(t, "house", "static.doubleclick.net", gw); len(ips) == 0 || ips[len(ips)-1] == "0.0.0.0" {
+			// A filtering resolver upstream of the lab blocks it too. Then
+			// the Pi cannot free it, and the answer says nothing of pf.
+			// net.env.local on the Pi can set its own DNS_UPSTREAM.
+			out, _ := ssh(t, 10*time.Second, "pi", "sudo -n sh -c '. /etc/pi-fortress/net.env; . /etc/pi-fortress/net.env.local 2>/dev/null; echo $DNS_UPSTREAM'")
+			if up := strings.TrimSpace(out); ipv4(up) {
+				if a := digOn(t, "pi", "static.doubleclick.net", up); len(a) > 0 && a[len(a)-1] == "0.0.0.0" {
+					t.Skipf("the upstream %s itself answers 0.0.0.0 for doubleclick.net", up)
+				}
+			}
 			t.Fatalf("%v (house_never_block.domains should free doubleclick.net)", ips)
 		}
 	})
