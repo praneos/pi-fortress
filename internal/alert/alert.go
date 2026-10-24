@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -754,7 +755,10 @@ func (a *Alerter) flush(url string) error {
 		p, summary, ok := a.next()
 		var snap webhookCap
 		if summary {
+			// A copy of by, not the live map: handle adds to the live map
+			// while the post is out, and after subtracts snap from it.
 			snap = a.cap
+			snap.by = maps.Clone(a.cap.by)
 		}
 		a.mu.Unlock()
 		if !ok {
