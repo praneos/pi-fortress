@@ -308,6 +308,8 @@ func runAlert(args []string, _, stderr io.Writer) int {
 	case "run":
 		if *pressure {
 			a.Pressure = pr
+			// Under MemoryMax=128M with GOMEMLIMIT=80MiB (alert.service).
+			fmt.Fprintln(stderr, "pressure: "+alert.LockMemory(80<<20))
 		}
 		if err := a.Run(ctx); err != nil {
 			return fail(stderr, err)
