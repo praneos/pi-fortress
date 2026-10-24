@@ -183,7 +183,7 @@ func cleanPath(p string) string {
 		}
 		p = strings.Join(segs, "/")
 	}
-	if p[0] != '/' {
+	if !strings.HasPrefix(p, "/") {
 		p = "/" + p
 	}
 	return strings.TrimRight(strings.ToLower(path.Clean(p)), "/")
