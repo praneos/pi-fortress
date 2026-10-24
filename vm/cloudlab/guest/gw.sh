@@ -52,9 +52,14 @@ if ! nmcli -t -f NAME con show | grep -qx agent-net; then
 fi
 nmcli con up agent-net >/dev/null
 
+# DNS goes to the libvirt resolver at the WAN gateway, which forwards to
+# the resolver of the host. A host on a network that refuses plain DNS to
+# public resolvers (a desk behind a Pi) cannot reach 9.9.9.9 on port 53.
+UPSTREAM="$(ip -4 route show default dev "${WAN}" | awk '{print $3; exit}')"
 cat >/etc/pi-fortress/net.env.local <<EOF
 INT_IF=${AGENT_IF}
 WAN_IF=${WAN}
+${UPSTREAM:+DNS_UPSTREAM=${UPSTREAM}}
 EOF
 
 cat >/etc/pi-fortress/house.env <<EOF
