@@ -31,7 +31,7 @@ func captureClientHello(t testing.TB, cfg *tls.Config) []byte {
 
 // fragment changes a single-record ClientHello into two records. It cuts
 // the handshake bytes at splitAt, to test reassembly across records.
-func fragment(t *testing.T, hello []byte, splitAt int) []byte {
+func fragment(t testing.TB, hello []byte, splitAt int) []byte {
 	t.Helper()
 	if hello[0] != 0x16 {
 		t.Fatalf("not a handshake record")
@@ -56,7 +56,7 @@ func fragment(t *testing.T, hello []byte, splitAt int) []byte {
 
 // insertECH puts an encrypted_client_hello (0xfe0d) extension into a
 // captured single-record ClientHello.
-func insertECH(t *testing.T, hello []byte) []byte {
+func insertECH(t testing.TB, hello []byte) []byte {
 	t.Helper()
 	return insertExt(t, hello, []byte{0xfe, 0x0d, 0x00, 0x02, 0xaa, 0xbb}) // type, len=2, 2 bytes of filler
 }
@@ -64,7 +64,7 @@ func insertECH(t *testing.T, hello []byte) []byte {
 // insertExt appends one extension (type, length and data) to the extensions
 // of a captured single-record ClientHello. It corrects each length that
 // changes: the extensions block, the handshake body, and the record.
-func insertExt(t *testing.T, hello, newExt []byte) []byte {
+func insertExt(t testing.TB, hello, newExt []byte) []byte {
 	t.Helper()
 	recLen := int(binary.BigEndian.Uint16(hello[3:5]))
 	body := hello[5 : 5+recLen]
