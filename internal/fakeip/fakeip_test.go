@@ -280,6 +280,23 @@ func TestTornLine(t *testing.T) {
 	}
 }
 
+// A journal line with the mapped form of a pool address is skipped. It
+// does not give a second name the address that a first name holds.
+func TestJournalSkipsMappedAddress(t *testing.T) {
+	path := journal(t)
+	if err := os.WriteFile(path, []byte("1800000000 198.18.0.1 a.example\n1800000000 ::ffff:198.18.0.1 b.example\n"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	p := open(t, pool16, path)
+	held := netip.MustParseAddr("198.18.0.1")
+	if b := assign(t, p, "b.example", t0); !b.Is4() || b == held {
+		t.Fatalf("b.example got %v", b)
+	}
+	if n, _ := NewTable(pool16, path).Name(held); n != "a.example" {
+		t.Fatalf("%v names %q", held, n)
+	}
+}
+
 func TestConcurrentAssignName(t *testing.T) {
 	path := journal(t)
 	p := open(t, pool24, path)
