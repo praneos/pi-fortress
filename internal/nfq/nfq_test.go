@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
-	"math/rand"
 	"syscall"
 	"testing"
 )
@@ -171,21 +170,82 @@ func TestParseMessages_NegativeErrno(t *testing.T) {
 	}
 }
 
-func TestParseMessages_NoPanicOnRandomInput(t *testing.T) {
-	r := rand.New(rand.NewSource(1))
-	buf := make([]byte, 128)
-	for i := 0; i < 5000; i++ {
-		n := r.Intn(len(buf) + 1)
-		r.Read(buf[:n])
-		func() {
-			defer func() {
-				if p := recover(); p != nil {
-					t.Fatalf("panic on %x: %v", buf[:n], p)
-				}
-			}()
-			parseMessages(buf[:n])
-		}()
-	}
+// FuzzWalkMessages: no recv buffer makes the walk panic. Each message has
+// a 16-byte header, so there are at most len/16 packets. A payload is a
+// copy: the next read reuses the buffer. parseMessages stops at the first
+// netlink error, so its packets are the start of the packets of parseRecv.
+func FuzzWalkMessages(f *testing.F) {
+	body := mkNfgenmsg(afInet, 5)
+	body = append(body, mkAttr(attrPacketHdr, mkPacketHdr(100, 0x0800, 0))...)
+	body = append(body, mkAttr(attrMark, mkU32BE(42))...)
+	body = append(body, mkAttr(attrPayload, []byte{1, 2, 3, 4, 5})...)
+	pkt := mkNlmsg(nfqMsgType(msgPacket), 0, 1, body)
+	errMsg := mkNlmsg(syscall.NLMSG_ERROR, 0, 2, mkU32BE(0xffffffea))
+	f.Add(pkt)
+	f.Add(append(append(append([]byte(nil), pkt...), errMsg...), pkt...))
+	f.Add(pkt[:len(pkt)-3])
+	f.Add([]byte{})
+	f.Fuzz(func(t *testing.T, buf []byte) {
+		all, nlErrs, _ := parseRecv(buf)
+		if len(all) > len(buf)/nlmsgHdrLen {
+			t.Fatalf("%d packets from %d bytes", len(all), len(buf))
+		}
+		if len(nlErrs) > len(buf)/nlmsgHdrLen {
+			t.Fatalf("%d errors from %d bytes", len(nlErrs), len(buf))
+		}
+		first, err := parseMessages(buf)
+		if len(first) > len(all) {
+			t.Fatalf("parseMessages %d packets, parseRecv %d", len(first), len(all))
+		}
+		for i := range first {
+			if first[i].ID != all[i].ID || first[i].Mark != all[i].Mark || !bytes.Equal(first[i].Payload, all[i].Payload) {
+				t.Fatalf("packet %d differs", i)
+			}
+		}
+		if len(nlErrs) == 0 && err == nil && len(first) != len(all) {
+			t.Fatalf("no error, but %d of %d packets", len(first), len(all))
+		}
+		want := make([][]byte, len(all))
+		for i, p := range all {
+			want[i] = append([]byte(nil), p.Payload...)
+		}
+		for i := range buf {
+			buf[i] ^= 0xff
+		}
+		for i, p := range all {
+			if !bytes.Equal(p.Payload, want[i]) {
+				t.Fatalf("payload %d shares the recv buffer", i)
+			}
+		}
+	})
+}
+
+// FuzzParseAttrs: no attribute stream makes parseAttrs panic. Each value
+// lies inside the stream, after its 4-byte header.
+func FuzzParseAttrs(f *testing.F) {
+	f.Add(append(mkAttr(attrMark, mkU32BE(42)), mkAttr(attrPayload, []byte{1, 2, 3, 4, 5})...))
+	f.Add(mkAttr(attrMark|0x8000, nil))
+	f.Add([]byte{3, 0, 0, 0})
+	f.Fuzz(func(t *testing.T, b []byte) {
+		attrs, err := parseAttrs(b)
+		if err != nil {
+			if attrs != nil {
+				t.Fatalf("error with attributes: %v", err)
+			}
+			return
+		}
+		if len(attrs) > len(b)/4 {
+			t.Fatalf("%d attributes from %d bytes", len(attrs), len(b))
+		}
+		for typ, v := range attrs {
+			if typ&^nlaTypeMask != 0 {
+				t.Fatalf("type %#x keeps flag bits", typ)
+			}
+			if len(v)+4 > len(b) {
+				t.Fatalf("value of %d bytes in %d", len(v), len(b))
+			}
+		}
+	})
 }
 
 func TestParseMessages_NoPanicOnTruncatedPrefixes(t *testing.T) {
