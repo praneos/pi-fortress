@@ -1,0 +1,2 @@
+go test fuzz v1
+string("pi-fortress 0-0: SRC=\v DST=0")
