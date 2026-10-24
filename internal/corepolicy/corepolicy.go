@@ -453,10 +453,19 @@ func tlsAuthority(sni, hostHeader string) (string, string) {
 // fixed point. HostIn normalizes again a name that Allowed already
 // normalized. A trim that changed "githuB.Com ." to "github.com " let the
 // second pass match github.com, where the first pass had seen a different
-// name (FuzzForwardAllowed found this).
+// name (FuzzForwardAllowed found this). Only ASCII letters fold. A Unicode
+// fold turns the Kelvin sign into "k", so a name that the origin reads as
+// other bytes would match a listed line.
 func normHost(name string) string {
-	name = strings.ToLower(strings.TrimSpace(name))
+	name = strings.Map(asciiLower, strings.TrimSpace(name))
 	return strings.TrimRightFunc(name, func(r rune) bool { return r == '.' || unicode.IsSpace(r) })
+}
+
+func asciiLower(r rune) rune {
+	if r >= 'A' && r <= 'Z' {
+		return r + 'a' - 'A'
+	}
+	return r
 }
 
 // emptyLabel reports a leading dot or a run of dots. The label walk would

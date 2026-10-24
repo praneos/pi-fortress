@@ -129,6 +129,25 @@ func TestAuthorityHostKeepsItsOwnLine(t *testing.T) {
 	}
 }
 
+// Unicode lowercase maps the Kelvin sign (U+212A) to an ASCII "k". The
+// origin gets the raw bytes, which are not the listed name. So a name
+// with a byte outside ASCII matches no line.
+func TestNonASCIIHostMatchesNothing(t *testing.T) {
+	p, err := Load(writePolicy(t, "core.hosts", "kx.example A\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.Authority("kx.example", "KX.example") || !p.HostAllowed("KX.Example") {
+		t.Fatal("ASCII case must still fold")
+	}
+	if p.Authority("kx.example", "Kx.example") {
+		t.Error("Authority took a Host with a Kelvin sign")
+	}
+	if p.HostAllowed("Kx.example") || len(p.KindsFor("Kx.example")) != 0 {
+		t.Error("a name with a Kelvin sign matched kx.example")
+	}
+}
+
 func TestBindingHeaderDenyList(t *testing.T) {
 	for _, h := range []string{
 		"User-Agent", "referer", "Origin", "Host", "Via", "Forwarded", "X-Forwarded-For", "x-forwarded-host",
