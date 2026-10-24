@@ -11,15 +11,16 @@ Restart=always
 RestartSec=2
 # Resource caps (pf-broker.service explains the scheme). The cache, the
 # fake-IP table (tens of MiB at a /16) and the held packets of the SNI
-# queue are well below this. The lowest OOM score of the pf daemons and the
-# highest CPU weight: this one process is the DNS for all segments, also
-# for the house.
+# queue are well below this. A low OOM score and the highest CPU weight:
+# this one process is the DNS for all segments, also for the house.
 MemoryHigh=200M
 MemoryMax=256M
 Environment=GOMEMLIMIT=160MiB
 TasksMax=256
 LimitNOFILE=4096
-OOMScoreAdjust=100
+# The OOM killer takes it after the fence and after each unranked process:
+# without it the house has no DNS. MemoryMax stops a leak in it first.
+OOMScoreAdjust=-500
 CPUWeight=200
 # A Go daemon does not drop its own privilege or reopen a log that root
 # owns. Thus systemd does both. The four capabilities that dnsmasq needed

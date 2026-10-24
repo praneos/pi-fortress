@@ -39,6 +39,9 @@ IOSchedulingClass=idle
 # 8 MiB at most.
 MemoryHigh=768M
 MemoryMax=1G
+# The OOM killer takes the refresh first. The live lists stay, and the
+# timer runs it again.
+OOMScoreAdjust=800
 TasksMax=256
 NoNewPrivileges=yes
 PrivateTmp=yes

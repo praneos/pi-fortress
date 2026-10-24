@@ -734,9 +734,10 @@ for _u in pf-broker pf-engine dns-agent-go dns-stub@ dns-house observe alert mon
   _f="${here}/${_u}.service"
   for _d in MemoryHigh MemoryMax TasksMax LimitNOFILE OOMScoreAdjust; do
     _re="^${_d}=[0-9]"
-    # The one exception: alert posts the pressure alert, so the OOM killer
-    # takes it last (alert.service).
+    # alert posts the pressure alert, so the OOM killer takes it last
+    # (alert.service). DNS and DHCP keep the house up, so they go late too.
     [[ "${_u}" == alert && "${_d}" == OOMScoreAdjust ]] && _re='^OOMScoreAdjust=-900$'
+    [[ "${_u}" == dns-* && "${_d}" == OOMScoreAdjust ]] && _re='^OOMScoreAdjust=-500$'
     grep -qE "${_re}" "${_f}" || fail "${_u}.service has no ${_d}"
   done
   grep -q '^StartLimitIntervalSec=0$' "${_f}" || fail "${_u}.service can give up restarting"
@@ -759,6 +760,12 @@ done
 _oom() { sed -n 's/^OOMScoreAdjust=//p' "${here}/$1.service"; }
 (( $(_oom dns-agent-go) < $(_oom pf-broker) )) || fail "pf dns does not rank below the broker for the OOM killer"
 (( $(_oom pf-engine) < $(_oom pf-broker) )) || fail "the engine does not rank below the broker for the OOM killer"
+# Kill order: fetch, broker, the rest of the fence, unranked processes,
+# DNS and DHCP, then alert and sshd.
+(( $(_oom fetch) > $(_oom pf-broker) )) || fail "the feed refresh does not go before the broker for the OOM killer"
+for _u in dns-agent-go dns-house dns-stub@ dhcp@; do
+  (( $(_oom "${_u}") < 0 && $(_oom "${_u}") > $(_oom alert) )) || fail "${_u}.service does not rank between unranked processes and alert"
+done
 grep -q '^Environment=GOMEMLIMIT=' "${here}/pf-broker.service" || fail "pf-broker.service sets no GOMEMLIMIT"
 
 # apply writes the journal, the connection table and the sshd OOM rank on

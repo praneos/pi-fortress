@@ -15,8 +15,8 @@ MemoryMax=128M
 Environment=GOMEMLIMIT=80MiB
 TasksMax=64
 LimitNOFILE=1024
-# This unit differs from the other pf daemons. They get a positive OOM rank,
-# so that the OOM killer takes them first. This unit posts the pressure
+# The fence daemons get a positive OOM rank, so that the OOM killer takes
+# them first. DNS and DHCP get -500. This unit posts the pressure
 # alert, so it must be the last to go when RAM is short. -900, not -1000:
 # the kernel can still stop it if it leaks, and MemoryMax stops it first.
 OOMScoreAdjust=-900

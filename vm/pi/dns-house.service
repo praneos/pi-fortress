@@ -16,7 +16,7 @@ MemoryHigh=48M
 MemoryMax=64M
 TasksMax=64
 LimitNOFILE=1024
-OOMScoreAdjust=100
+OOMScoreAdjust=-500
 # systemd does the privilege drop, not dnsmasq. The dnsmasq drop has a
 # getuid() == 0 guard. When dnsmasq starts as this account, it never calls
 # setgroups/setgid/capset/prctl/setuid -- the full @privileged block that
