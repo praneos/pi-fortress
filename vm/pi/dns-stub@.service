@@ -20,7 +20,7 @@ MemoryMax=128M
 Environment=GOMEMLIMIT=80MiB
 TasksMax=128
 LimitNOFILE=1024
-OOMScoreAdjust=100
+OOMScoreAdjust=-500
 CPUWeight=200
 # The same account as the agent resolver. Thus one uid covers all stubs
 # in the 853 pin of the output chain. apply creates the account, not a

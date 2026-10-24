@@ -1603,8 +1603,8 @@ fi
 # sshd is the path back in when something else is wrong. Thus it is the last
 # process that the kernel OOM killer may select. OpenSSH already writes -1000
 # to its own oom_score_adj on Linux builds. But that is a compile-time
-# option of a package that we do not build. The pf daemons now get
-# positive scores on purpose (their units). Thus the order must be correct
+# option of a package that we do not build. The pf daemons get scores
+# on purpose (their units), from 800 down to -500. Thus the order must be correct
 # whatever the package did. -900, not -1000: sshd gives its start value
 # to each session. Thus a login shell -- and all that the operator runs
 # in it -- inherits this. At -900, the kernel can still kill a session
