@@ -49,6 +49,11 @@ const (
 	sniMaxFlows = 4096
 	sniMaxHeld  = 32
 	sniMaxBytes = 64 << 10
+	// sniMaxJudges bounds the name lookups in progress. Each one goes to the
+	// upstream and can start an nft process. The query slots of the
+	// listeners do not cover these. When all are in use, a new flow is
+	// refused.
+	sniMaxJudges = 256
 	// sniDone keeps a verdict for packets of the flow that were already in
 	// the queue behind the packets that got the verdict.
 	sniDone = 30 * time.Second
@@ -100,6 +105,8 @@ type sniCheck struct {
 	now     func() time.Time
 	logf    func(format string, args ...any)
 	wait    time.Duration // sniWait; shorter in tests
+	slots   chan struct{} // one for each judge in progress, sniMaxJudges
+	judges  sync.WaitGroup
 
 	mu      sync.Mutex
 	flows   map[sniFlowKey]*sniFlow
@@ -130,6 +137,7 @@ func newSNICheck(q sniQueue, resolve func(context.Context, netip.Addr, string) (
 		now:     time.Now,
 		logf:    log.Printf,
 		wait:    sniWait,
+		slots:   make(chan struct{}, sniMaxJudges),
 		flows:   map[sniFlowKey]*sniFlow{},
 		done:    map[sniFlowKey]sniDecided{},
 	}
@@ -211,7 +219,11 @@ func (s *Server) sniResolver(seg *Segment) func(context.Context, netip.Addr, str
 	}
 }
 
+// run returns only after the judges that it started are done. A judge
+// uses the resolver and the logs of the server, which Server.Run closes
+// after its loops end.
 func (c *sniCheck) run(ctx context.Context) error {
+	defer c.judges.Wait()
 	for {
 		p, err := c.q.Recv()
 		if err != nil {
@@ -334,7 +346,15 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 		c.decide(key, f, sniBad, "not a TLS ClientHello: "+err.Error())
 		return
 	}
+	select {
+	case c.slots <- struct{}{}:
+	default:
+		c.decide(key, f, sniBad, "too many name lookups in progress")
+		return
+	}
+	c.judges.Add(1)
 	go func() {
+		defer func() { <-c.slots; c.judges.Done() }()
 		mark, why := c.judge(ctx, key, hello)
 		c.decide(key, f, mark, why)
 	}()
