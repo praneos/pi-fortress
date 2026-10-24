@@ -82,7 +82,7 @@ func (q *fakeQueue) none(t *testing.T, id uint32) {
 // clientHello is the first message that crypto/tls sends for name. It is
 // a real one, with a post-quantum key share, so its size is that of a
 // browser.
-func clientHello(t *testing.T, name string) []byte {
+func clientHello(t testing.TB, name string) []byte {
 	t.Helper()
 	c, s := net.Pipe()
 	defer s.Close()
