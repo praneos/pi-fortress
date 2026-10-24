@@ -88,6 +88,8 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 		rs = append(rs, r)
 	}
 	rs = append(rs, doctor.RebootRung(doctor.DefaultRebootPaths(), time.Now()))
+	kp := doctor.DefaultKernelPaths()
+	rs = append(rs, doctor.MemoryCgroupRung(kp), doctor.PSIRung(kp))
 	return doctor.Report(stdout, rs)
 }
 
