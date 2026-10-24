@@ -410,4 +410,10 @@ if ! declare -F "${fn}" >/dev/null; then
   usage
   exit 2
 fi
+# Vagrant plugins are per user: root has no vagrant-libvirt. Only host and
+# host-clean need sudo.
+case "${sub}" in
+  host | host-clean | help) ;;
+  *) [[ ${EUID} -ne 0 ]] || die "${sub}: run without sudo (only host and host-clean need it)" ;;
+esac
 "${fn}" "$@"
