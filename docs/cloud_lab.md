@@ -249,6 +249,37 @@ The same group runs against a real Pi with `PF_TARGET=pi PF_E2E_LIFECYCLE=1 make
 
 `make cloudlab-up`, `make cloudlab-test` and so on run the matching `lab.sh` command with no extra arguments.
 
+### Race tier
+
+The race tier runs the full e2e suite against a build of `pf` with the Go race detector. It finds data races in the daemons on `gw` under real traffic. Run it after the full e2e passes, and before a release.
+
+**Host**
+```sh
+make test-race
+```
+
+`make test-race` does these steps:
+
+1. `PF_RACE=1 lab.sh sync` builds `pf` with `make pf RACE=1` and copies it to `gw`.
+2. On `gw`, `lab.sh` writes a drop-in `90-lab-race.conf` for each unit that runs `pf`. The drop-in removes the memory and task caps and sets `GORACE=halt_on_error=0 exitcode=66`. It also makes the `gw` journal persistent if it is volatile.
+3. `PF_E2E_REBOOT=1 lab.sh test` runs the full suite without the `lifecycle` group, with a timeout of `RACE_TIMEOUT` (150m by default).
+4. After `go test`, `lab.sh test` reads the `gw` journal from the start of the run. It writes each `WARNING: DATA RACE` report to `vm/cloudlab/.vagrant/race.log`. It fails if it finds a race or a `pf` unit that exited with code 66, also when `go test` passed.
+5. A normal `lab.sh sync` puts a normal `pf` back on `gw` and removes the drop-ins. This step runs also when the test fails.
+
+`lab.sh test` does the race check each time that `gw` runs a race build. To run one group: `PF_RACE=1 vm/cloudlab/lab.sh sync`, then `vm/cloudlab/lab.sh test -run TestLab/house`. Then run `vm/cloudlab/lab.sh sync` to go back. `lab.sh ship` always installs a normal `pf` and removes the drop-ins.
+
+The `lifecycle` group is not in the race run. It ships normal bundles, so `gw` would run a normal `pf` after it starts. The normal full e2e covers it.
+
+Limits:
+
+| Item | Value |
+|---|---|
+| Cost | A race build uses approximately 3 to 5 times the memory and 3 to 20 times the CPU. The suite takes longer than the full e2e. |
+| Arch | linux/amd64 only. `make pf RACE=1` refuses a different `GOARCH`. The race detector needs cgo. Thus a cross build for arm64 needs an arm64 C compiler. On arm64, it also needs a kernel with a 48-bit address space. Thus the Pi never runs it. |
+| Ship | A race build never ships. `release`, `appliance`, `pi-bundle`, `pi-ship`, `pi-ship-sudo`, `pi-sync` and `pi-provision` refuse `RACE=1`. `pi-bundle` also refuses a `vm/pi/pf` that is a race build. |
+| Coverage | The check reads only the units on `gw`. A `pf` command that a test starts over SSH prints its race report to that SSH session, and exits with code 66. |
+| Hardening | The drop-in keeps `LockPersonality`, `MemoryDenyWriteExecute` and `SystemCallFilter`. The race runtime of Go on amd64 needs none of them relaxed. |
+
 ## 4. Daily loop
 
 | Task | Command |
@@ -261,6 +292,7 @@ The same group runs against a real Pi with `PF_TARGET=pi PF_E2E_LIFECYCLE=1 make
 | Start again after `down` or a host reboot | `sudo vm/cloudlab/lab.sh host && vm/cloudlab/lab.sh up` |
 | Start from zero | `vm/cloudlab/lab.sh destroy && vm/cloudlab/lab.sh up` |
 | Ship a real signed upgrade to the gateway VM, the way a Pi gets one | `vm/cloudlab/lab.sh ship` |
+| Run the full suite against a race build of `pf` ([Race tier](#race-tier)) | `make test-race` |
 | Snapshot all lab VMs | `vm/cloudlab/lab.sh snapshot before-upgrade` |
 | Roll all lab VMs back to a snapshot | `vm/cloudlab/lab.sh restore before-upgrade` |
 | List the snapshots of this lab | `vm/cloudlab/lab.sh snapshots` |

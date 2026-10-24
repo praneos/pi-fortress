@@ -44,6 +44,7 @@ make hooks      # once per clone: installs the leak-check pre-commit hook
 make pf         # bin/pf for this machine
 make smoke      # fast gate, no VMs: run before every commit
 make test-mid   # the next gate up, before a pull request
+make test-race  # full e2e against a race build of pf in the cloud lab, before a release
 make e2e PF_SSH_CONFIG=...   # the full suite over SSH: the cloud lab or a real Pi
 make docs       # build the website; must print "No issues found"
 ```

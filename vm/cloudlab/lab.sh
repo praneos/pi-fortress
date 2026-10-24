@@ -135,11 +135,13 @@ preflight() {
 }
 
 # build: pf for the arch of this host, at the path where apply.sh looks (vm/pi/pf).
+# PF_RACE=1 makes a race build (make pf RACE=1) for the race tier.
 cmd_build() {
-  make -C "${ROOT}" -s split-bin
+  make -C "${ROOT}" -s split-bin RACE="${PF_RACE:-0}"
 }
 
 cmd_up() {
+  [[ "${PF_RACE:-0}" != 1 ]] || die "up: PF_RACE=1 is for sync only. Run $0 up, then PF_RACE=1 $0 sync"
   preflight
   local vm want=() rest=()
   if (($#)); then want=("$@"); else mapfile -t want < <(echo gw; clients); fi
@@ -225,10 +227,106 @@ cmd_uncut() {
   done
 }
 
+# Race tier (docs/cloud_lab.md). A race build of pf uses approximately 3
+# to 5 times the memory of a normal build. The caps in vm/pi/*.service can
+# stop it. Thus sync and ship write a lab-only drop-in on gw for each unit
+# that runs pf. Nothing in vm/pi/ or in a bundle changes. These settings
+# stay as they are:
+# - LockPersonality: the race runtime of Go on amd64 does not call
+#   personality(2). The re-exec without ASLR is only in the C/C++ TSan.
+# - MemoryDenyWriteExecute: the race runtime maps its shadow memory
+#   read-write. It maps no page that is writable and executable.
+# - SystemCallFilter: the race runtime uses no syscall in @privileged, and
+#   none outside @system-service on its normal path.
+# A race build of pf under systemd-run with these settings started and
+# reported a race. If a pf unit stops with SIGSYS or EPERM in a race run,
+# examine this list again.
+RACE_DROPIN=90-lab-race.conf
+RACE_LOG="${HERE}/.vagrant/race.log"
+RACE_JOURNAL="${HERE}/.vagrant/race-journal.log"
+
+# race_bin FILE: true if FILE is a race build. Capture, then match (net_active).
+race_bin() { [[ "$(GOTOOLCHAIN=local go version -m "$1" 2>/dev/null)" == *-race=true* ]]; }
+
+# race_units: write or remove the drop-ins on gw. vm/pi/pf decides, because
+# sync copies it and ship bundles it. The units are those of gw that run
+# /usr/local/sbin/pf. A template drop-in covers each instance. Before an
+# apply: apply restarts each pf unit, and the restart reads the drop-ins.
+# GORACE: report each race and continue. Exit code 66 at the end shows a
+# race. The reports go to stderr, thus to the journal.
+race_units() {
+  local race=0
+  race_bin "${ROOT}/vm/pi/pf" && race=1
+  # The script goes on stdin. Thus vagrant in cmd_ssh_config must not read it.
+  [[ -f "${SSH_CFG}" ]] || cmd_ssh_config >/dev/null </dev/null
+  lab_ssh pi "sudo bash -s ${race} ${RACE_DROPIN}" <<'EOF'
+set -euo pipefail
+race=$1 conf=$2
+if [[ ${race} == 1 ]]; then
+  for unit in $(grep -l /usr/local/sbin/pf /etc/systemd/system/pi-fortress-*.service); do
+    install -d -m 0755 "${unit}.d"
+    cat >"${unit}.d/${conf}" <<'UNIT'
+# Lab only: vm/cloudlab/lab.sh writes this for a race build of pf.
+[Service]
+MemoryHigh=infinity
+MemoryMax=infinity
+TasksMax=infinity
+Environment="GORACE=halt_on_error=0 exitcode=66"
+UNIT
+  done
+  if [[ ! -d /var/log/journal ]]; then
+    install -d -m 2755 -g systemd-journal /var/log/journal
+    systemd-tmpfiles --create --prefix /var/log/journal
+    journalctl --flush
+    echo "lab.sh: gw journal is now persistent, for the race check across a reboot"
+  fi
+else
+  rm -f /etc/systemd/system/pi-fortress-*.service.d/"${conf}"
+fi
+systemctl daemon-reload
+EOF
+}
+
+race_banner() {
+  race_bin "${ROOT}/vm/pi/pf" || return 0
+  cat >&2 <<EOF
+lab.sh: ****************************************************************
+lab.sh: gw now runs a RACE build of pf. It is for the lab only.
+lab.sh: ${RACE_DROPIN} removes the memory and task caps of each pf unit.
+lab.sh: To put a normal pf back: $0 sync (with no PF_RACE=1)
+lab.sh: ****************************************************************
+EOF
+}
+
+# race_check SINCE: race reports and exit code 66 in the gw journal since
+# the epoch SINCE, written to RACE_LOG. Fails if it finds one, or if it
+# cannot read the journal.
+race_check() {
+  local races exits
+  if ! lab_ssh pi "sudo journalctl --since @$1 --no-pager -q" >"${RACE_JOURNAL}"; then
+    echo "lab.sh: race check: cannot read the gw journal. The race result is not known." >&2
+    return 1
+  fi
+  races="$(grep -c 'WARNING: DATA RACE' "${RACE_JOURNAL}" || true)"
+  exits="$(grep -E 'status=66/' "${RACE_JOURNAL}" || true)"
+  {
+    grep -A40 'WARNING: DATA RACE' "${RACE_JOURNAL}" || true
+    [[ -z "${exits}" ]] || printf '\n== pf units that exited with code 66 ==\n%s\n' "${exits}"
+  } >"${RACE_LOG}"
+  echo "lab.sh: race check: ${races} data race report(s) on gw. Report: ${RACE_LOG}"
+  if [[ -n "${exits}" ]]; then
+    echo "lab.sh: race check: a pf unit exited with code 66:" >&2
+    printf '%s\n' "${exits}" >&2
+  fi
+  [[ "${races}" == 0 && -z "${exits}" ]]
+}
+
 cmd_sync() {
   cmd_build
   vagrant rsync gw
+  race_units
   vagrant provision gw --provision-with apply
+  race_banner
 }
 
 # ship: the same path that the Pi gets (docs/signed_ship.md), not the
@@ -270,6 +368,9 @@ cmd_ship() {
   # idempotent. It creates pfship / writes its authorized_keys only when
   # the pubkey above is present (docs/signed_ship.md, Setup; vm/pi/provision.sh).
   lab_ssh pi "sudo PF_SHIP_PUBKEY=/etc/pi-fortress/pfship.pub PF_LAB=1 bash /vagrant/vm/pi/provision.sh"
+  # pi-bundle refuses a race build. Thus this removes the drop-ins of an
+  # earlier race sync before the ship installs a normal pf.
+  race_units
 
   echo "lab.sh: uploading the signed bundle to pfship"
   local pi_host rsh
@@ -353,13 +454,24 @@ cmd_provision() {
   [[ "${vm}" == gw ]] || cmd_cut
 }
 
+# test: with a race build on gw (only that build has the TSan runtime),
+# it also runs race_check after go test, also when go test fails.
 cmd_test() {
   cmd_ssh_config >/dev/null
   cmd_cut
   cd "${ROOT}"
-  PF_TARGET=cloudlab PF_SSH_CONFIG="${SSH_CFG}" PF_LAB_ENV="${HERE}/lab.env" \
-    GOTOOLCHAIN=local GOFLAGS=-mod=vendor CGO_ENABLED=0 \
-    exec go test -tags=vagrant -count=1 -timeout 45m ./vm/itest "$@"
+  export PF_TARGET=cloudlab PF_SSH_CONFIG="${SSH_CFG}" PF_LAB_ENV="${HERE}/lab.env" \
+    GOTOOLCHAIN=local GOFLAGS=-mod=vendor CGO_ENABLED=0
+  set -- go test -tags=vagrant -count=1 -timeout 45m ./vm/itest "$@"
+  lab_ssh pi 'grep -qa ThreadSanitizer /usr/local/sbin/pf' || exec "$@"
+  local since rc=0
+  since="$(lab_ssh pi 'date +%s')"
+  echo "lab.sh: gw runs a race build of pf. The race check reads the gw journal from @${since}."
+  lab_ssh pi 'test -d /var/log/journal' ||
+    echo "lab.sh: WARNING: the gw journal is volatile. A reboot of gw loses the race reports before it." >&2
+  "$@" || rc=$?
+  race_check "${since}" || ((rc)) || rc=1
+  exit "${rc}"
 }
 
 cmd_ssh() {
@@ -399,7 +511,8 @@ usage: $0 <command>
   ssh-config        write ${SSH_CFG}
   cut | uncut       client mgmt links down or up
   build | status | down [vm...] | destroy [vm...]
-Env: PF_AGENT_COUNT (1-3, default 2), PF_BOX, PF_E2E_REBOOT=1.
+Env: PF_AGENT_COUNT (1-3, default 2), PF_BOX, PF_E2E_REBOOT=1,
+     PF_RACE=1 (sync: race build of pf for the lab, docs/cloud_lab.md).
 EOF
 }
 

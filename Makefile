@@ -1,4 +1,4 @@
-.PHONY: up apply fetch test smoke test-mid go-test apply-test shell-test leak-check leak-check-test mermaid-check hooks lab-test e2e distro-test observe status halt destroy pf split-bin fuzz audit dupes inline pi-check pi-sync pi-ship pi-provision pi-ssh agent-up agent-reload agent-provision agent-shell agent-destroy agent-audit
+.PHONY: up apply fetch test smoke test-mid test-race go-test apply-test shell-test leak-check leak-check-test mermaid-check hooks lab-test e2e distro-test observe status halt destroy pf split-bin fuzz audit dupes inline pi-check pi-sync pi-ship pi-provision pi-ssh agent-up agent-reload agent-provision agent-shell agent-destroy agent-audit
 
 CGO_ENABLED ?= 0
 # Supply chain: each build resolves modules from vendor/. It never
@@ -10,6 +10,16 @@ GOVULNCHECK ?= v1.8.0
 GOOS ?= linux
 GOARCH ?= $(shell go env GOARCH)
 FUZZTIME ?= 15
+# RACE=1 builds pf with the Go race detector, for the cloud lab only
+# (docs/cloud_lab.md, Race tier). A race build never ships: the targets
+# that make a shipped artifact refuse it (no_race below).
+RACE ?= 0
+
+# no_race: the first recipe line of each target that makes a shipped
+# artifact or puts pf on a real Pi.
+define no_race
+@test "$(RACE)" != 1 || { echo "$@: refused with RACE=1. A race build is for the cloud lab only and never ships." >&2; exit 1; }
+endef
 
 up:
 	./vm/bin/up.sh
@@ -85,6 +95,19 @@ test-mid:
 	./vm/cloudlab/lab.sh sync
 	./vm/cloudlab/lab.sh test -run 'TestLab/(policy|enroll|dns-segments|agent-vm|house|desk)$$'
 
+# Race tier (docs/cloud_lab.md): the full e2e suite against a race build
+# of pf on gw. lab.sh test fails if the gw journal shows a data race. At
+# the end, a normal sync puts a normal pf back on gw, also after a failure.
+# The race report stays in vm/cloudlab/.vagrant/race.log.
+RACE_TIMEOUT ?= 150m
+test-race:
+	@test "$(RACE)" != 1 || { echo "test-race: run it with no RACE=1. It makes the race build itself." >&2; exit 1; }
+	PF_RACE=1 ./vm/cloudlab/lab.sh sync
+	@rc=0; PF_E2E_REBOOT=1 ./vm/cloudlab/lab.sh test -timeout $(RACE_TIMEOUT) $(if $(filter 1,$(V)),-v,) $(if $(RUN),-run '$(RUN)',) || rc=$$?; \
+	echo "test-race: lab.sh sync, to put a normal pf back on gw"; \
+	./vm/cloudlab/lab.sh sync || echo "test-race: WARNING: gw can still run the race build of pf. Run: vm/cloudlab/lab.sh sync" >&2; \
+	exit $$rc
+
 fuzz:
 	./scripts/fuzz.sh $(FUZZTIME)
 
@@ -106,9 +129,20 @@ audit:
 	@go mod verify
 	@GOFLAGS= go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK) ./...
 
+# RACE=1: the race detector needs cgo, and Go refuses -race with
+# -buildmode=pie on linux/amd64. No -s -w: the symbols stay for the reports.
+# Only linux/amd64: a cross race build for arm64 needs an arm64 C
+# compiler, and the race runtime on arm64 needs a kernel with a 48-bit
+# address space.
 pf:
+ifeq ($(RACE),1)
+	@test "$(GOOS)/$(GOARCH)" = linux/amd64 || { echo "pf: RACE=1 builds only linux/amd64 (the cloud lab), not $(GOOS)/$(GOARCH)" >&2; exit 1; }
+	@CGO_ENABLED=1 GOOS=$(GOOS) GOARCH=$(GOARCH) go build -race -trimpath -o bin/pf ./cmd/pf
+	@echo "bin/pf $(GOOS)/$(GOARCH) RACE (cloud lab only, never ship)"
+else
 	@CGO_ENABLED=$(CGO_ENABLED) GOOS=$(GOOS) GOARCH=$(GOARCH) go build -buildmode=pie -trimpath -ldflags '-s -w' -o bin/pf ./cmd/pf
 	@echo "bin/pf $(GOOS)/$(GOARCH)"
+endif
 
 split-bin: pf
 	@cp -f bin/pf vm/pi/pf
@@ -121,6 +155,7 @@ SIGN_KEY ?= ~/.ssh/pi_fortress_release
 RELEASE_DIR ?=
 REV ?= HEAD
 release:
+	$(no_race)
 	@SIGN_KEY=$(SIGN_KEY) RELEASE_DIR=$(RELEASE_DIR) RELEASE_UNSIGNED=$(RELEASE_UNSIGNED) APPLIANCE=$(APPLIANCE) PI_SEED="$(PI_SEED)" ./scripts/release.sh release
 
 # release-lint: the per-arch bundles that make release just built (or an
@@ -151,6 +186,7 @@ release-check:
 # into a signed release. appliance-test lints a fake root, with no VMs.
 .PHONY: appliance appliance-test
 appliance:
+	$(no_race)
 	@./scripts/appliance.sh $(RELEASE_DIR)
 
 appliance-test: pf
@@ -215,6 +251,7 @@ pi-check:
 	@test -n "$(PI_IP)" || { echo "set PI_IP, e.g. PI_IP=192.168.1.50 make $(MAKECMDGOALS)"; exit 1; }
 
 pi-sync: pi-check
+	$(no_race)
 	@rsync -a --delete --exclude .git --exclude .vagrant $(PI_KEEP) -e "$(PI_SSH)" ./ $(PI):$(PI_DIR)/
 	@rsync -a --ignore-existing -e "$(PI_SSH)" $(PI_SEED) $(PI):$(PI_DIR)/vm/policy/
 
@@ -244,6 +281,7 @@ PI_BUNDLE_ARCH := arm64
 endif
 
 pi-bundle:
+	$(no_race)
 	@$(MAKE) -s split-bin GOARCH=$(PI_BUNDLE_ARCH)
 	@PI_SEED="$(PI_SEED)" ./scripts/release.sh pi-bundle $(PI_BUNDLE) "$$(git rev-parse --short HEAD)$$(git diff --quiet HEAD -- || echo -dirty)"
 
@@ -252,6 +290,7 @@ pi-sign:
 	@ssh-keygen -Y sign -f $(SIGN_KEY) -n pi-fortress-release $(PI_BUNDLE)
 
 pi-ship: pi-check
+	$(no_race)
 	@test -f $(SIGN_KEY) -a -f $(PI_SHIP_KEY) || { echo "pi-ship: no $(SIGN_KEY) or $(PI_SHIP_KEY). One-time setup: docs/signed_ship.md, Setup. Until then: make pi-ship-sudo PI_IP=$(PI_IP)"; exit 1; }
 	@$(MAKE) -s pi-bundle
 	@$(MAKE) -s pi-sign
@@ -268,6 +307,7 @@ pi-ship: pi-check
 # apply. Its .prev is not the tree that this push replaced, and the
 # dead-man timer would swap it back over the push.
 pi-ship-sudo: pi-check
+	$(no_race)
 	@$(MAKE) -s split-bin GOARCH=arm64
 	@rsync -a --delete --exclude .git --exclude .vagrant $(PI_KEEP) -e "$(PI_SSH)" ./ $(PI):$(PI_STAGE)/
 	@rsync -a -e "$(PI_SSH)" $(PI_SEED) $(PI):$(PI_STAGE)/vm/policy/
@@ -315,6 +355,7 @@ agent-audit:
 	@for v in $(AGENT_VMS); do ./vm/agent/audit.sh "pi-fortress-$$v" || exit 1; done
 
 pi-provision: pi-check
+	$(no_race)
 	@$(MAKE) -s split-bin GOARCH=arm64
 	@$(MAKE) -s pi-sync
 	@$(PI_SSH) -t $(PI) sudo $(PI_DIR)/vm/pi/provision.sh
