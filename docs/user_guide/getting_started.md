@@ -204,6 +204,8 @@ To also get an alert on your phone:
 
 The webhook carries the host, the location, and the rule. It never carries the token. It sends a maximum of 30 alerts in one hour, plus a maximum of 30 more about keys and credentials. If there are more alerts, one message at the end of the hour gives the number and the kind of the alerts that it held back. `pf alert show` still has all of them.
 
+On a Pi, the same webhook also gets a message when memory or CPU pressure is high, and after a restart without a clean shutdown. Refer to [Pressure alerts and the hardware watchdog](pi_setup.md#pressure-alerts-and-the-hardware-watchdog).
+
 ### 7. Look at what the agent actually hit
 
 ```
