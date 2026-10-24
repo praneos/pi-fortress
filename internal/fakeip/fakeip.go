@@ -158,8 +158,11 @@ func parse(p netip.Prefix, s string) (stamp int64, a netip.Addr, off uint32, nam
 	if err != nil {
 		return 0, netip.Addr{}, 0, "", false
 	}
+	// line writes the plain IPv4 form only. The mapped form
+	// (::ffff:a.b.c.d) is a different map key for the same slot. Thus two
+	// names could hold one address.
 	a, err = netip.ParseAddr(f[1])
-	if err != nil {
+	if err != nil || !a.Is4() {
 		return 0, netip.Addr{}, 0, "", false
 	}
 	off, ok = offsetOf(p, a)
