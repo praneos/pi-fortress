@@ -100,6 +100,35 @@ func TestBindingHeadersFollowTheEntry(t *testing.T) {
 	}
 }
 
+// A Host below the SNI takes the line of the SNI. When the Host has a line
+// of its own that grants something else, the SNI line must not reach it.
+// Otherwise SNI ex.example with Host b.ex.example gets the kinds that the
+// line for b.ex.example takes away.
+func TestAuthorityHostKeepsItsOwnLine(t *testing.T) {
+	p, err := Load(writePolicy(t, "core.hosts", "*.ex.example A:X-Tok\nb.ex.example\nh.ex.example A\nsame.ex.example A:X-Tok\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		sni, host string
+		ok        bool
+	}{
+		{"ex.example", "ex.example", true},
+		{"ex.example", "c.ex.example", true},
+		{"ex.example", "same.ex.example", true},
+		{"b.ex.example", "b.ex.example", true},
+		{"ex.example", "b.ex.example", false},
+		{"ex.example", "B.Ex.Example.:443", false},
+		{"ex.example", "h.ex.example", false},
+		{"b.ex.example", "x.b.ex.example", false},
+	}
+	for _, c := range cases {
+		if got := p.Authority(c.sni, c.host); got != c.ok {
+			t.Errorf("Authority(%q, %q) = %v, want %v", c.sni, c.host, got, c.ok)
+		}
+	}
+}
+
 func TestBindingHeaderDenyList(t *testing.T) {
 	for _, h := range []string{
 		"User-Agent", "referer", "Origin", "Host", "Via", "Forwarded", "X-Forwarded-For", "x-forwarded-host",

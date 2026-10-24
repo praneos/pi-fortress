@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"os"
 	"sort"
@@ -282,11 +283,38 @@ func (p *Policy) listed(name string) bool {
 }
 
 func (p *Policy) Authority(sni, host string) bool {
-	auth := tlsAuthority(sni, host)
-	if auth == "" {
+	auth, hdr := tlsAuthority(sni, host)
+	if auth == "" || !p.listed(auth) {
 		return false
 	}
-	return p.listed(auth)
+	return hdr == "" || hdr == auth || p.sameGrant(auth, hdr)
+}
+
+// sameGrant reports whether host, a name below sni, gets from its own entry
+// what sni gets from its entry. The kinds come from the line of the SNI.
+// A line for the Host that grants fewer kinds or other headers is the word
+// of the operator for that name. A Host must not get past it through a
+// parent SNI.
+func (p *Policy) sameGrant(sni, host string) bool {
+	h, hSuffix, ok := p.entry(host)
+	if !ok {
+		return true
+	}
+	s, sSuffix, _ := p.entry(sni)
+	if h == s && hSuffix == sSuffix {
+		return true
+	}
+	hk, hh := p.line(h, hSuffix)
+	sk, sh := p.line(s, sSuffix)
+	return maps.Equal(hk, sk) && maps.EqualFunc(hh, sh, func(a, b map[string]struct{}) bool { return maps.Equal(a, b) })
+}
+
+// line gives the kinds and the headers of one entry.
+func (p *Policy) line(name string, suffix bool) (map[string]struct{}, map[string]map[string]struct{}) {
+	if suffix {
+		return p.SuffixKinds[name], p.SuffixHeaders[name]
+	}
+	return p.HostKinds[name], p.HostHeaders[name]
 }
 
 // HostsWithKind gives a sorted list of the exact names whose line names
@@ -393,14 +421,16 @@ func KindAllowed(kind string, allowed []string) bool {
 	return false
 }
 
-func tlsAuthority(sni, hostHeader string) string {
+// tlsAuthority gives the SNI as the name that credentials go to, and the
+// Host as normalized, or "" when the two do not agree.
+func tlsAuthority(sni, hostHeader string) (string, string) {
 	sniN := normHost(sni)
 	if sniN == "" {
-		return ""
+		return "", ""
 	}
 	hdr := strings.TrimSpace(hostHeader)
 	if strings.Contains(hdr, "%") {
-		return ""
+		return "", ""
 	}
 	if h, _, err := net.SplitHostPort(hdr); err == nil {
 		hdr = h
@@ -410,12 +440,12 @@ func tlsAuthority(sni, hostHeader string) string {
 	// label. "0::.api.anthropic.com" fails SplitHostPort, and HostIn found
 	// api.anthropic.com in it (FuzzAuthority).
 	if hdr != "" && !validName(hdr) {
-		return ""
+		return "", ""
 	}
 	if hdr != "" && hdr != sniN && !HostIn(hdr, map[string]struct{}{sniN: {}}) {
-		return ""
+		return "", ""
 	}
-	return sniN
+	return sniN, hdr
 }
 
 // normHost lowercases a name and removes the space around it and its

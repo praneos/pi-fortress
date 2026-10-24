@@ -53,7 +53,9 @@ live only toward GitHub.
 
 The SNI is mandatory and must be a valid host name. The Host must match that
 SNI, or be a subdomain of it. Thus Host `api.anthropic.com` with SNI
-`evil.example` does not inject. For an off-core host and for a kind mismatch,
+`evil.example` does not inject. A subdomain Host whose own `core.hosts`
+line grants other kinds or headers than the line of the SNI does not
+inject either. For an off-core host and for a kind mismatch,
 the fence refuses the request with one response that does not give the cause
 (§5.2b). The fence strips live-looking values in the bytes that it scans
 (see "What the fence scans" below).
