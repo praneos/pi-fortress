@@ -733,10 +733,20 @@ done
 for _u in pf-broker pf-engine dns-agent-go dns-stub@ dns-house observe alert monitor www; do
   _f="${here}/${_u}.service"
   for _d in MemoryHigh MemoryMax TasksMax LimitNOFILE OOMScoreAdjust; do
-    grep -qE "^${_d}=[0-9]" "${_f}" || fail "${_u}.service has no ${_d}"
+    _re="^${_d}=[0-9]"
+    # The one exception: alert posts the pressure alert, so the OOM killer
+    # takes it last (alert.service).
+    [[ "${_u}" == alert && "${_d}" == OOMScoreAdjust ]] && _re='^OOMScoreAdjust=-900$'
+    grep -qE "${_re}" "${_f}" || fail "${_u}.service has no ${_d}"
   done
   grep -q '^StartLimitIntervalSec=0$' "${_f}" || fail "${_u}.service can give up restarting"
 done
+# alert keeps memory, CPU and disk time for the pressure alert. The lock
+# needs an infinite LimitMEMLOCK (alert.service gives the reason).
+for _l in MemoryMin=32M CPUWeight=1000 IOWeight=1000 Nice=-10 LimitMEMLOCK=infinity; do
+  grep -qx "${_l}" "${here}/alert.service" || fail "alert.service lacks ${_l}"
+done
+grep -q '^ProcSubset=pid' "${here}/alert.service" && fail "alert.service hides /proc/pressure and /proc/meminfo from the pressure watch"
 # The two daemons that an agent drives back off while a kill loop
 # continues. House DNS and DHCP keep a fixed short restart.
 for _u in pf-broker pf-engine; do

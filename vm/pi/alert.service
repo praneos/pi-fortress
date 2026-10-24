@@ -15,7 +15,24 @@ MemoryMax=128M
 Environment=GOMEMLIMIT=80MiB
 TasksMax=64
 LimitNOFILE=1024
-OOMScoreAdjust=300
+# This unit differs from the other pf daemons. They get a positive OOM rank,
+# so that the OOM killer takes them first. This unit posts the pressure
+# alert, so it must be the last to go when RAM is short. -900, not -1000:
+# the kernel can still stop it if it leaks, and MemoryMax stops it first.
+OOMScoreAdjust=-900
+# Reclaim does not take the first 32M of this unit. With CPUWeight and
+# Nice, it gets the CPU before the other units when they compete. IOWeight
+# has an effect only with an I/O scheduler that uses weights (BFQ).
+MemoryMin=32M
+CPUWeight=1000
+IOWeight=1000
+Nice=-10
+# pf alert run locks its pages in RAM (mlockall, MCL_ONFAULT). The kernel
+# counts the full address space of the Go runtime (about 1 GiB) against
+# this limit, not the pages in use. A finite value refuses the lock, or
+# stops the Go runtime later when its heap grows. MemoryMax is the real
+# bound on the locked pages.
+LimitMEMLOCK=infinity
 User=pf-sidecar
 Group=pf-fortress
 NoNewPrivileges=yes
