@@ -200,6 +200,8 @@ A Pi with no swap can stop when its RAM is full or when its CPUs cannot do all t
 
 The watch uses pressure stall information (PSI) from `/proc/pressure` when the kernel has it. PSI tells how much of the time tasks wait for memory or for a CPU. Without PSI, the watch reads MemAvailable, the load and the CPU time each 2 seconds. To see which one the gateway uses, run `journalctl -u pi-fortress-alert | grep 'pressure:'`.
 
+The Raspberry Pi OS kernel has PSI, but it is off by default: `/proc/pressure` does not exist. To turn it on, add ` psi=1` to the end of the single line in `/boot/firmware/cmdline.txt`. Do not add a new line. Then reboot. `pf apply` does not change this file.
+
 | Condition | Default |
 |---|---|
 | All tasks wait for memory (PSI memory full) for this percent of the time, for 4 seconds | 10% |

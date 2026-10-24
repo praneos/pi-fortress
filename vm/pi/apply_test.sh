@@ -1573,7 +1573,7 @@ _wconf="${wroot}/system.conf.d/pi-fortress-watchdog.conf"
 : >"${hroot}/systemctl.log"
 wd_run auto >/dev/null 2>"${wroot}/err" || fail "harden_watchdog failed with no device: $(cat "${wroot}/err")"
 [[ ! -e "${_wconf}" && ! -s "${hroot}/systemctl.log" ]] || fail "HW_WATCHDOG=auto enabled the watchdog on a box with no watchdog device"
-# The Pi 5 device takes at most 15 s. A larger value fails in systemd.
+# A device with a 15 s maximum. A larger value fails in systemd.
 mkdir -p "${wroot}/sys/watchdog0"
 echo 15 >"${wroot}/sys/watchdog0/max_timeout"
 wd_run auto >/dev/null || fail "harden_watchdog failed with a device"
@@ -1588,6 +1588,13 @@ echo 600 >"${wroot}/sys/watchdog0/max_timeout"
 wd_run auto >/dev/null
 for _l in RuntimeWatchdogSec=30s RebootWatchdogSec=120s; do
   grep -qx "${_l}" "${_wconf}" || fail "a device with a long maximum did not get ${_l}"
+done
+# max_timeout 0: the kernel pings the device itself, so any value is
+# accepted (the Pi 5 device does this).
+echo 0 >"${wroot}/sys/watchdog0/max_timeout"
+wd_run auto >/dev/null
+for _l in RuntimeWatchdogSec=30s RebootWatchdogSec=120s; do
+  grep -qx "${_l}" "${_wconf}" || fail "a device with no hardware maximum did not get ${_l}"
 done
 # No maximum to read: 15 s, which each device takes.
 rm -f "${wroot}/sys/watchdog0/max_timeout"

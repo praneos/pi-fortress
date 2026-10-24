@@ -190,8 +190,9 @@ harden_ssh() {
 # cannot run, the device resets the Pi. After the boot, pf alert posts the
 # unclean restart. auto enables it only when the kernel has a watchdog
 # device: a lab VM usually has none. The timeout is 30 s and 2 min at
-# reboot, but never above the maximum of the device. The Pi 5 watchdog
-# takes at most 15 s. With no maximum to read, both are 15 s. PID 1
+# reboot, but never above the maximum of the device. A maximum of 0 means
+# that the kernel pings the device itself, so there is no limit (the Pi 5
+# device). With no maximum to read, both are 15 s. PID 1
 # reads system.conf only at start, so a change re-executes it.
 #
 # The paths come from the caller, as HARDEN_SYSTEM_CONF_D and
@@ -215,7 +216,9 @@ harden_watchdog() {
     echo "pi-fortress: HW_WATCHDOG=1, but the kernel has no watchdog device; systemd logs the failure and continues" >&2
   fi
   max="$(cat "${dev}/max_timeout" 2>/dev/null || true)"
-  if [[ "${max}" =~ ^[0-9]+$ && "${max}" -gt 0 ]]; then
+  if [[ "${max}" == 0 ]]; then
+    rt=30 rb=120
+  elif [[ "${max}" =~ ^[0-9]+$ ]]; then
     rt=$((max < 30 ? max : 30))
     rb=$((max < 120 ? max : 120))
   fi
