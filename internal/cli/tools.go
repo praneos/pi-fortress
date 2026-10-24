@@ -269,6 +269,7 @@ func runAlert(args []string, _, stderr io.Writer) int {
 	fs.DurationVar(&pr.CPUFor, "pressure-cpu-for", pr.CPUFor, "how long the CPU condition must hold")
 	fs.Float64Var(&pr.LoadPerCPU, "pressure-load", pr.LoadPerCPU, "without PSI: load for each CPU that a busy CPU must also have")
 	fs.DurationVar(&pr.Repeat, "pressure-repeat", pr.Repeat, "minimum time between two posts while pressure stays")
+	fs.StringVar(&pr.StatePath, "pressure-state", pr.StatePath, "state file for the unclean-restart post; empty for none")
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}

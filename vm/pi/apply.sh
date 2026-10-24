@@ -224,6 +224,11 @@ if [[ "${FEED_REFRESH}" != "0" && "${FEED_REFRESH}" != "1" ]]; then
   echo "pi-fortress: FEED_REFRESH='${FEED_REFRESH}' is not 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
   exit 1
 fi
+HW_WATCHDOG="${HW_WATCHDOG:-auto}"
+if [[ "${HW_WATCHDOG}" != auto && "${HW_WATCHDOG}" != 0 && "${HW_WATCHDOG}" != 1 ]]; then
+  echo "pi-fortress: HW_WATCHDOG='${HW_WATCHDOG}' is not auto, 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
+  exit 1
+fi
 # The hourly budget of each slot (net.env, docs/fence.md 5.2d). Apply
 # checks it here because nothing else does. A typo goes to the broker as
 # a flag, the unit does not start, and the fence is down until someone
@@ -281,6 +286,8 @@ HARDEN_SYSCTL_D=/etc/sysctl.d
 HARDEN_APT_D=/etc/apt/apt.conf.d
 HARDEN_SSHD_D=/etc/ssh/sshd_config.d
 HARDEN_HOME=/home
+HARDEN_SYSTEM_CONF_D=/etc/systemd/system.conf.d
+HARDEN_WATCHDOG_SYS=/sys/class/watchdog
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "${WORKDIR}"' EXIT
@@ -2253,6 +2260,7 @@ harden_sysctl_write
 harden_sysctl_load
 harden_apt
 harden_ssh
+harden_watchdog
 
 # pf apply gets to this script through syscall.Exec, which replaces the
 # Go process. internal/admin records that an apply was requested, and can

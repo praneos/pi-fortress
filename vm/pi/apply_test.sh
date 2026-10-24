@@ -1548,6 +1548,57 @@ grep -qx 'net.ipv4.ip_forward=0' "${tmp}/sysctl.conf" ||
 grep -qx 'net.ipv4.ip_forward=1' "${tmp}/sysctl.conf" &&
   fail "lib/harden.sh persists ip_forward=1 again; a boot without a good ruleset would route"
 
+# The hardware watchdog (harden_watchdog). A fake sysfs class directory
+# stands in for the device. The stubs are the ones of the hardening above.
+wroot="${tmp}/wdroot"
+mkdir -p "${wroot}/work" "${wroot}/sys"
+wd_run() {
+  (
+    # shellcheck source=lib/harden.sh
+    source "${here}/lib/harden.sh"
+    HARDEN_SYSTEM_CONF_D="${wroot}/system.conf.d" HARDEN_WATCHDOG_SYS="${wroot}/sys" HARDEN_WORK="${wroot}/work"
+    HW_WATCHDOG="$1"
+    PATH="${hroot}/bin"
+    harden_watchdog
+  )
+}
+_wconf="${wroot}/system.conf.d/pi-fortress-watchdog.conf"
+: >"${hroot}/systemctl.log"
+wd_run auto >/dev/null 2>"${wroot}/err" || fail "harden_watchdog failed with no device: $(cat "${wroot}/err")"
+[[ ! -e "${_wconf}" && ! -s "${hroot}/systemctl.log" ]] || fail "HW_WATCHDOG=auto enabled the watchdog on a box with no watchdog device"
+# The Pi 5 device takes at most 15 s. A larger value fails in systemd.
+mkdir -p "${wroot}/sys/watchdog0"
+echo 15 >"${wroot}/sys/watchdog0/max_timeout"
+wd_run auto >/dev/null || fail "harden_watchdog failed with a device"
+for _l in '[Manager]' 'RuntimeWatchdogSec=15s' 'RebootWatchdogSec=15s'; do
+  grep -qxF "${_l}" "${_wconf}" || fail "the watchdog conf for a 15 s device lacks ${_l}"
+done
+grep -qx 'daemon-reexec' "${hroot}/systemctl.log" || fail "a new watchdog conf did not re-execute systemd"
+: >"${hroot}/systemctl.log"
+wd_run auto >/dev/null
+[[ ! -s "${hroot}/systemctl.log" ]] || fail "an unchanged watchdog conf re-executed systemd"
+echo 600 >"${wroot}/sys/watchdog0/max_timeout"
+wd_run auto >/dev/null
+for _l in RuntimeWatchdogSec=30s RebootWatchdogSec=120s; do
+  grep -qx "${_l}" "${_wconf}" || fail "a device with a long maximum did not get ${_l}"
+done
+# No maximum to read: 15 s, which each device takes.
+rm -f "${wroot}/sys/watchdog0/max_timeout"
+wd_run auto >/dev/null
+grep -qx 'RuntimeWatchdogSec=15s' "${_wconf}" || fail "a device with no max_timeout did not get 15 s"
+# 0 removes the conf and re-executes systemd one time.
+: >"${hroot}/systemctl.log"
+wd_run 0 >/dev/null || fail "HW_WATCHDOG=0 failed"
+[[ ! -e "${_wconf}" ]] || fail "HW_WATCHDOG=0 left the watchdog conf"
+grep -qx 'daemon-reexec' "${hroot}/systemctl.log" || fail "HW_WATCHDOG=0 did not re-execute systemd"
+: >"${hroot}/systemctl.log"
+wd_run 0 >/dev/null
+[[ ! -s "${hroot}/systemctl.log" ]] || fail "HW_WATCHDOG=0 with no conf re-executed systemd"
+_at="$(grep -n '^harden_watchdog$' "${apply}" | head -1 | cut -d: -f1)"
+[[ -n "${_at}" && "${_at}" -gt "${_local_exit}" ]] || fail "apply.sh does not run harden_watchdog on a full apply"
+grep -qx 'HW_WATCHDOG=auto' "${here}/net.env" || fail "net.env does not document HW_WATCHDOG"
+grep -qF "HW_WATCHDOG='\${HW_WATCHDOG}' is not auto, 0 or 1" "${apply}" || fail "apply.sh does not check HW_WATCHDOG"
+
 # Key-only SSH (harden_ssh). The sshd stub passes -t unless sshd.bad
 # exists, and prints sshd.T for -T. The ssh-keygen stub takes a file
 # that holds an ed25519 key line, as ssh-keygen -l does.
@@ -2753,6 +2804,11 @@ for _f in alert.offset alert-notice.offset alert.last; do
   grep -qF "\"/var/lib/pi-fortress/${_f}\"" "${here}/../../internal/alert/alert.go" ||
     fail "pf alert does not write /var/lib/pi-fortress/${_f}, which alert.service names"
 done
+# The pressure state is in the StateDirectory of alert. A rename needs a
+# directory that the unit can write.
+grep -qx 'StateDirectory=pi-fortress/alert' "${here}/alert.service" || fail "alert.service has no state directory for pressure.json"
+grep -qF 'DefaultStatePath = "/var/lib/pi-fortress/alert/pressure.json"' "${here}/../../internal/alert/pressure.go" ||
+  fail "pf alert keeps its pressure state outside the StateDirectory of alert.service"
 # apply makes the directory and the files before it starts the units.
 # provision.sh makes the directory too: it can start observe before the
 # first apply.

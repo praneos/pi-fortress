@@ -184,3 +184,45 @@ harden_ssh() {
     echo "pi-fortress: sshd still takes passwords: a line that sshd reads before ${conf} sets PasswordAuthentication yes (sudo sshd -T; ls ${HARDEN_SSHD_D})" >&2
   fi
 }
+
+# The hardware watchdog (HW_WATCHDOG in net.env). systemd (PID 1) feeds
+# the watchdog device. If the kernel hangs, or RAM is so short that PID 1
+# cannot run, the device resets the Pi. After the boot, pf alert posts the
+# unclean restart. auto enables it only when the kernel has a watchdog
+# device: a lab VM usually has none. The timeout is 30 s and 2 min at
+# reboot, but never above the maximum of the device. The Pi 5 watchdog
+# takes at most 15 s. With no maximum to read, both are 15 s. PID 1
+# reads system.conf only at start, so a change re-executes it.
+#
+# The paths come from the caller, as HARDEN_SYSTEM_CONF_D and
+# HARDEN_WATCHDOG_SYS (the watchdog class directory in sysfs).
+harden_watchdog() {
+  local conf="${HARDEN_SYSTEM_CONF_D}/pi-fortress-watchdog.conf" dev="${HARDEN_WATCHDOG_SYS}/watchdog0"
+  local on=0 max="" rt=15 rb=15
+  case "${HW_WATCHDOG:-auto}" in
+    1) on=1 ;;
+    auto) [[ -e "${dev}" ]] && on=1 ;;
+  esac
+  if [[ "${on}" == 0 ]]; then
+    if [[ -f "${conf}" ]]; then
+      rm -f "${conf}"
+      systemctl daemon-reexec || echo "pi-fortress: systemctl daemon-reexec failed; the hardware watchdog stays on until the next boot" >&2
+      echo "pi-fortress: the hardware watchdog is off (HW_WATCHDOG=${HW_WATCHDOG:-auto})"
+    fi
+    return 0
+  fi
+  if [[ ! -e "${dev}" ]]; then
+    echo "pi-fortress: HW_WATCHDOG=1, but the kernel has no watchdog device; systemd logs the failure and continues" >&2
+  fi
+  max="$(cat "${dev}/max_timeout" 2>/dev/null || true)"
+  if [[ "${max}" =~ ^[0-9]+$ && "${max}" -gt 0 ]]; then
+    rt=$((max < 30 ? max : 30))
+    rb=$((max < 120 ? max : 120))
+  fi
+  printf '%s\n' '# Written by pi-fortress apply.sh (HW_WATCHDOG in net.env); edits here are replaced on the next apply.' \
+    '[Manager]' "RuntimeWatchdogSec=${rt}s" "RebootWatchdogSec=${rb}s" >"${HARDEN_WORK}/pi-fortress-watchdog.conf"
+  if harden_put "${HARDEN_WORK}/pi-fortress-watchdog.conf" "${conf}"; then
+    systemctl daemon-reexec || echo "pi-fortress: systemctl daemon-reexec failed; the hardware watchdog starts at the next boot" >&2
+    echo "pi-fortress: the hardware watchdog is on: a hang of ${rt} s resets the Pi"
+  fi
+}
