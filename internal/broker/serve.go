@@ -105,6 +105,9 @@ type call struct {
 	// that it charges nothing twice.
 	spent   []string
 	charged int
+	// stopsSeen is budget.stopsLanded from before the slot snapshot. It
+	// tells a restored slot from one that this request saw before its stop.
+	stopsSeen uint64
 	// body counts a streamed request body while the copy occurs. body does
 	// not wrap a buffered body, on purpose. roundTrip replays those bytes on a
 	// redial. It uses a type switch to decide that it can replay, and a
@@ -427,6 +430,7 @@ func (b *Broker) gitPushRefuse(c *call) (done bool, err error) {
 // caller returns err as it is, nil or not.
 func (b *Broker) prepare(c *call) (strips []fence.StripEvent, stream *fence.StreamStrips, done bool, err error) {
 	if b.Store != nil {
+		c.stopsSeen = b.budget.stopsLanded()
 		c.slots, err = b.Store.Snapshot()
 		if err != nil {
 			if c.echo {
