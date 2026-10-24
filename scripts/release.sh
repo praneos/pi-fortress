@@ -149,6 +149,11 @@ pi_bundle() {
 	[ -n "$out" ] || die "usage: release.sh pi-bundle OUT SHA"
 	[ -n "${PI_SEED:-}" ] || die "PI_SEED is empty; run make pi-bundle, which passes the Makefile's PI_OWNED lists"
 	[ -x "$ROOT/vm/pi/pf" ] || die "no $ROOT/vm/pi/pf; make split-bin first"
+	# A race build (make pf RACE=1) is for the cloud lab only. It never ships.
+	# Capture, then match: under pipefail, grep -q can make the pipe fail.
+	case $(go version -m "$ROOT/vm/pi/pf" 2>/dev/null || true) in
+	*-race=true*) die "$ROOT/vm/pi/pf is a race build (cloud lab only); run make split-bin without RACE=1" ;;
+	esac
 	case $out in /*) ;; *) out=$PWD/$out ;; esac
 	tree=$(mktemp -d "${TMPDIR:-/tmp}/pf-pi-bundle.XXXXXX")
 	# shellcheck disable=SC2064
