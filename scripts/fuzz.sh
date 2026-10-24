@@ -13,7 +13,9 @@ for pkg in $("${go}" list "${pattern}"); do
   [[ -z "${targets}" ]] && continue
   for fz in ${targets}; do
     printf '%-32s %-30s ' "${pkg#pi-fortress/}" "${fz}"
-    if out="$("${go}" test "${pkg}" -run '^$' -fuzz "^${fz}\$" -fuzztime "${secs}s" 2>&1)"; then
+    # A new input is shrunk for up to 60 s by default, with no execs meanwhile.
+    # In a short run that is most of the time. 5000 calls is enough.
+    if out="$("${go}" test "${pkg}" -run '^$' -fuzz "^${fz}\$" -fuzztime "${secs}s" -fuzzminimizetime 5000x 2>&1)"; then
       # A target that calls f.Skip passes without a fuzz run, and prints no
       # progress line. Say so, and do not leave the row blank.
       line="$(echo "${out}" | grep -E '^fuzz: elapsed' | tail -1 | sed -E 's/.*execs: ([0-9]+).*new interesting: [0-9]+ \(total: ([0-9]+)\).*/execs=\1 corpus=\2/' || true)"
