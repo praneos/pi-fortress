@@ -84,6 +84,9 @@ type Alerter struct {
 	// postMu is held by the tail that posts. The other tail skips its flush,
 	// and does not wait on the network.
 	postMu sync.Mutex
+	// Pressure, when it is set, watches memory and CPU pressure beside the
+	// tails of Run. It posts through its own sender.
+	Pressure *Pressure
 }
 
 type pending struct {
@@ -835,6 +838,22 @@ func (a *Alerter) noticeTail() *tailer.Tail {
 }
 
 func (a *Alerter) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	defer cancel()
+	if p := a.Pressure; p != nil {
+		if p.Stdout == nil {
+			p.Stdout = a.out()
+		}
+		if p.Stderr == nil {
+			p.Stderr = a.errw()
+		}
+		s := newSender(p.Stdout, p.Stderr, func() string { return LoadURL(a.PolicyDirs) })
+		wg.Add(2)
+		go func() { defer wg.Done(); s.run(ctx) }()
+		go func() { defer wg.Done(); p.Run(ctx, s.put) }()
+	}
 	if a.NoticeLog == "" {
 		return a.tail().Run(ctx)
 	}

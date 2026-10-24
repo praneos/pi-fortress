@@ -257,12 +257,28 @@ func runAlert(args []string, _, stderr io.Writer) int {
 	policy := fs.String("policy", "", "directory containing alert.url")
 	ifname := fs.String("if", "wg0", "wireguard interface for alert wg")
 	maxAge := fs.Duration("max", 3*time.Minute, "handshake age that counts as down")
+	// The pressure watch of run (docs/user_guide/pi_setup.md "Pressure
+	// alerts"). alert.service reads PF_ALERT_FLAGS from
+	// /etc/pi-fortress/alert.env.
+	pr := alert.DefaultPressure()
+	pressure := fs.Bool("pressure", true, "run: also post on memory and CPU pressure")
+	fs.Float64Var(&pr.MemFullPct, "pressure-mem-full", pr.MemFullPct, "percent of time that all tasks wait on memory (PSI memory full)")
+	fs.Float64Var(&pr.MemAvailPct, "pressure-mem-avail", pr.MemAvailPct, "MemAvailable floor, percent of MemTotal")
+	fs.DurationVar(&pr.MemFor, "pressure-mem-for", pr.MemFor, "how long a memory condition must hold")
+	fs.Float64Var(&pr.CPUPct, "pressure-cpu", pr.CPUPct, "percent of time that a task waits on a CPU (PSI cpu some); without PSI, percent CPU busy")
+	fs.DurationVar(&pr.CPUFor, "pressure-cpu-for", pr.CPUFor, "how long the CPU condition must hold")
+	fs.Float64Var(&pr.LoadPerCPU, "pressure-load", pr.LoadPerCPU, "without PSI: load for each CPU that a busy CPU must also have")
+	fs.DurationVar(&pr.Repeat, "pressure-repeat", pr.Repeat, "minimum time between two posts while pressure stays")
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}
 	verb, code, ok := verbArgs(fs, stderr, alertUsage)
 	if !ok {
 		return code
+	}
+	if err := pr.Check(); err != nil {
+		fmt.Fprintln(stderr, "pf alert:", err)
+		return 2
 	}
 	a := alert.Defaults()
 	a.Stderr = stderr
@@ -290,6 +306,9 @@ func runAlert(args []string, _, stderr io.Writer) int {
 			return fail(stderr, err)
 		}
 	case "run":
+		if *pressure {
+			a.Pressure = pr
+		}
 		if err := a.Run(ctx); err != nil {
 			return fail(stderr, err)
 		}

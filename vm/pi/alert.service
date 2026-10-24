@@ -30,7 +30,10 @@ ProtectControlGroups=yes
 ProtectClock=yes
 ProtectHostname=yes
 ProtectProc=invisible
-ProcSubset=pid
+# No ProcSubset=pid: the pressure watch reads /proc/pressure, /proc/meminfo,
+# /proc/loadavg, /proc/stat and the boot ID. ProtectKernelTunables keeps
+# them read-only. The processes of other users stay hidden. The top lists
+# come from the cgroups of the units, not from /proc/<pid>.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictNamespaces=yes
 RestrictRealtime=yes
@@ -47,7 +50,11 @@ SystemCallFilter=~@privileged
 # apply. Then the sidecar cannot save its place until apply restarts it.
 ReadWritePaths=-/var/lib/pi-fortress/alert.offset -/var/lib/pi-fortress/alert-notice.offset -/var/lib/pi-fortress/alert.last
 InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine
-ExecStart=/usr/local/sbin/pf alert run
+# PF_ALERT_FLAGS: the -pressure-* thresholds, or -pressure=false
+# (docs/user_guide/pi_setup.md "Pressure alerts"). apply does not write
+# this file. The operator does, and then restarts the unit.
+EnvironmentFile=-/etc/pi-fortress/alert.env
+ExecStart=/usr/local/sbin/pf alert run $PF_ALERT_FLAGS
 
 [Install]
 WantedBy=multi-user.target
