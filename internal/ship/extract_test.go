@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"flag"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -236,7 +237,22 @@ func checkTree(t testing.TB, dst string, m *Manifest) {
 	}
 }
 
+// capMinimize sets -test.fuzzminimizetime to v when the command line did
+// not set it. The engine minimizes each input with new coverage for up to
+// 60 s by default, and counts no execs meanwhile. The minimizer is
+// quadratic in the input length, and a tar is at least one 512-byte
+// block. Thus each new input used the full 60 s, and the run showed
+// 0 execs/s.
+func capMinimize(v string) {
+	set := false
+	flag.Visit(func(fl *flag.Flag) { set = set || fl.Name == "test.fuzzminimizetime" })
+	if !set {
+		flag.Set("test.fuzzminimizetime", v)
+	}
+}
+
 func FuzzShipExtract(f *testing.F) {
+	capMinimize("5000x")
 	files := map[string]string{"a/b": "hello", "c": "x"}
 	m := manifestFor(5, files, "c")
 	f.Add(mkTar(f, &m, ent{name: "a/", typ: tar.TypeDir}, ent{name: "a/b", typ: tar.TypeReg, body: "hello"}, ent{name: "c", typ: tar.TypeReg, body: "x"}))
@@ -244,8 +260,15 @@ func FuzzShipExtract(f *testing.F) {
 	f.Add(mkTar(f, &m, ent{name: "../a/b", typ: tar.TypeReg, body: "hello"}))
 	f.Add([]byte{})
 	lim := Limits{MaxFile: 1 << 16, MaxTotal: 1 << 18, MaxFiles: 32, MaxManifest: 1 << 14}
+	// One base directory for the run. t.TempDir in each call cost more
+	// than Extract itself.
+	base := f.TempDir()
 	f.Fuzz(func(t *testing.T, data []byte) {
-		parent := t.TempDir()
+		parent, err := os.MkdirTemp(base, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer os.RemoveAll(parent)
 		dst := filepath.Join(parent, "new")
 		m, err := Extract(bytes.NewReader(data), dst, lim, 1)
 		ents, _ := os.ReadDir(parent)
