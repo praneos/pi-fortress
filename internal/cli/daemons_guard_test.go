@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -75,6 +77,70 @@ func TestAcceptCappedDropsPastMax(t *testing.T) {
 			t.Fatal("a freed slot did not take the next caller")
 		}
 		dial()
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// flakyListener fails Accept with EMFILE while fails is above zero, then
+// accepts on the real listener.
+type flakyListener struct {
+	net.Listener
+	fails atomic.Int32
+	calls atomic.Int32
+}
+
+func (l *flakyListener) Accept() (net.Conn, error) {
+	l.calls.Add(1)
+	if l.fails.Add(-1) >= 0 {
+		return nil, &net.OpError{Op: "accept", Net: "unix", Err: os.NewSyscallError("accept4", syscall.EMFILE)}
+	}
+	return l.Listener.Accept()
+}
+
+// A lasting accept error (EMFILE) does not spin the loop at full CPU and
+// flood the journal: it backs off. When the error passes, the loop serves
+// again.
+func TestAcceptCappedBacksOff(t *testing.T) {
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	sock := filepath.Join(t.TempDir(), "a.sock")
+	real, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := &flakyListener{Listener: real}
+	ln.fails.Store(1 << 30)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var served atomic.Int32
+	go func() {
+		defer close(done)
+		acceptCapped(ctx, ln, 2, "test", func(c net.Conn) error {
+			served.Add(1)
+			return c.Close()
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		ln.Close()
+		<-done
+	})
+	time.Sleep(300 * time.Millisecond)
+	// 5, 10, 20, 40, 80, 160 ms: about 7 calls in 300 ms.
+	if n := ln.calls.Load(); n > 15 {
+		t.Fatalf("%d accept calls in 300 ms; the loop does not back off", n)
+	}
+	ln.fails.Store(0)
+	c, err := net.Dial("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	deadline := time.Now().Add(3 * time.Second)
+	for served.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the loop did not serve after the error passed")
+		}
 		time.Sleep(5 * time.Millisecond)
 	}
 }
