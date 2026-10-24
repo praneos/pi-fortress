@@ -160,14 +160,18 @@ func ParseHosts(body string) []string {
 			continue
 		}
 		for _, name := range f[1:] {
-			// "0.0.0.0 0.0.0.0" and similar: an address is not a name,
-			// although four numeric labels satisfy the domain grammar.
-			if _, err := netip.ParseAddr(name); err == nil {
+			parsed, ok := parseToken(name, "domains")
+			if !ok {
 				continue
 			}
-			if parsed, ok := parseToken(name, "domains"); ok {
-				out = append(out, parsed)
+			// "0.0.0.0 0.0.0.0" and similar: an address is not a name,
+			// although four numeric labels satisfy the domain grammar.
+			// The check is on the parsed name, so "*.0.0.0.0" and
+			// "0.0.0.0." are also not names.
+			if _, err := netip.ParseAddr(parsed); err == nil {
+				continue
 			}
+			out = append(out, parsed)
 		}
 	}
 	return out
