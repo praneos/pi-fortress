@@ -287,9 +287,12 @@ The broker forwards only an origin-form target (`/...`), or `*` with
 - Thus `GET https://other.example/` with the Host of a core name would carry
   the credential of that name to a vhost that nobody judged.
 
-The broker also refuses `CONNECT` and an HTTP/1.1 request with no `Host`
-field. The result is `400`, and a strip row with `where=target` and the rule
-`request_target`, `connect`, or `no_host`.
+The broker also refuses `CONNECT`, an HTTP/1.1 request with no `Host`
+field, and a `Host` that is not a host and an optional port (RFC 9110
+§7.2: a DNS name, an IPv4 literal, or a bracketed IPv6 literal; a port of
+1 to 65535). The blocklist walks the labels of the `Host`, so it must see
+a clean name. The result is `400`, and a strip row with `where=target` and
+the rule `request_target`, `connect`, `no_host`, or `bad_host`.
 
 The broker skips every 1xx response, up to a bounded number. A 101 is an
 error, because nothing asked to upgrade. Thus a `103 Early Hints` cannot be

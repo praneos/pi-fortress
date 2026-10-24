@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"pi-fortress/internal/doh"
 	"pi-fortress/internal/fence"
+	"pi-fortress/internal/hello"
 	"pi-fortress/internal/httpwire"
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/preamble"
@@ -364,7 +366,8 @@ func (b *Broker) admit(c *call) (done bool, err error) {
 // cannot read into. An HTTP/1.1 request without a Host field, or with an
 // empty one, makes the routing of the origin a guess. Each origin can send
 // it to a different vhost than the one the SNI names. HTTP/1.0 has no
-// Host requirement, so there the decisions use the SNI.
+// Host requirement, so there the decisions use the SNI. A Host that is
+// there must be a host and port (validHost).
 func targetRefusal(req *httpwire.Request) string {
 	switch {
 	case req.Method == "CONNECT":
@@ -376,10 +379,45 @@ func targetRefusal(req *httpwire.Request) string {
 	case !strings.HasPrefix(req.Target, "/"):
 		return "request_target"
 	}
-	if req.Proto != "HTTP/1.0" && strings.Trim(req.Get("Host"), " \t") == "" {
+	host := strings.Trim(req.Get("Host"), " \t")
+	if req.Proto != "HTTP/1.0" && host == "" {
 		return "no_host"
 	}
+	if host != "" && !validHost(host) {
+		return "bad_host"
+	}
 	return ""
+}
+
+// validHost reports whether h is host[:port] (RFC 9110 §7.2): a DNS name,
+// an IPv4 literal or a bracketed IPv6 literal, then an optional port.
+// Blocked.Has walks labels. A Host such as "x@blocked.example" or
+// "[blocked.example]" has no label that the list holds, but an origin that
+// reads it loosely still routes it to the listed name.
+func validHost(h string) bool {
+	host := h
+	if i := strings.LastIndexByte(h, ':'); i >= 0 && !strings.HasSuffix(h, "]") {
+		n, err := strconv.Atoi(h[i+1:])
+		if err != nil || n < 1 || n > 65535 || strings.TrimLeft(h[i+1:], "0123456789") != "" {
+			return false
+		}
+		host = h[:i]
+	}
+	if ip, ok := strings.CutPrefix(host, "["); ok {
+		ip, ok = strings.CutSuffix(ip, "]")
+		a, err := netip.ParseAddr(ip)
+		return ok && err == nil && a.Is6() && a.Zone() == ""
+	}
+	name := strings.TrimSuffix(host, ".")
+	if name == "" || !hello.ValidHostName(host) {
+		return false
+	}
+	for label := range strings.SplitSeq(name, ".") {
+		if len(label) > 63 {
+			return false
+		}
+	}
+	return true
 }
 
 // paranoidRefuse is the destination deny of docs/paranoid_mode.md. When
