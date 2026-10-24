@@ -143,6 +143,7 @@ The TUI refuses a value that the gateway cannot use.
 | `HOUSE_CONN_PER_IP`, `HOUSE_NEW_PER_IP`, `HOUSE_CONN_TOTAL` | The same three limits for each device on the home network and for the full home network. A phone or a laptop stays well below them. A torrent client or a busy file server can need more. | `1024`, `100/500`, `32768` |
 | `HOUSE_NEW_TOTAL` | Number of new connections in one second that the full home network can open, for all of its devices or addresses. The format is `RATE/BURST`. Each closed connection keeps its slot in the table for 30 seconds. Thus this limit stops many devices together from filling the table. A household with several phones, laptops, and a TV that load pages at the same time stays below it. `0` disables it. The gateway refuses a value below 100 a second. | `1000/5000` |
 | `SEG_CONN_PER_IP`, `SEG_NEW_PER_IP`, `SEG_CONN_TOTAL` | The same three limits for each plain network that you add in step 8. The total is per network. They are the same as the limits of the agent network, because the agents run on the desktop on the desk network. A desktop browser with hundreds of open tabs can go above 128 connections. If pages start to fail, increase the per-device number for that network. | `128`, `50/200`, `4096` |
+| `HW_WATCHDOG` | The hardware watchdog of the Pi. `auto` enables it when the kernel has a watchdog device. `1` enables it always. `0` disables it. A full `pf apply` applies a change. Refer to [Pressure alerts and the hardware watchdog](#pressure-alerts-and-the-hardware-watchdog). | `auto` |
 | `SEG_NEW_TOTAL` | Number of new connections in one second that each plain network from step 8 can open as a whole, for all of its addresses. The format is `RATE/BURST`. Like `HOUSE_NEW_TOTAL`, it stops one network from filling the table with closed connections. It is the same as the new-connection total of the agent network. That total is fixed at `300/600`. A desk with one or two computers stays below it. The file of a network can set `NEW_TOTAL` to override it. `0` disables it. The gateway refuses a value below 100 a second. | `300/600` |
 
 ### Connection limits
@@ -192,6 +193,61 @@ sudo pf apply
 ```
 
 `--stdin` reads the token from standard input. Paste the token, push Enter, then push Ctrl-D. The token does not go into a shell argument or the shell history. `--value`, `--oat` and `--ort` still work, but mint then writes a warning. Then mint adds `gitlab.com GITLAB_TOKEN:PRIVATE-TOKEN` to `core.hosts.local` for each host that has the kind. If no host has the kind yet, mint refuses. You can never name these headers: `User-Agent`, `Referer`, `Origin`, `Cookie`, `Set-Cookie`, `Host`, `Via`, `Forwarded`, `X-Forwarded-*`, `X-Real-IP`, `Content-*`, `Transfer-Encoding`, `Connection`, `Keep-Alive`, `Upgrade`, `TE`, `Trailer` and `Proxy-*`. `pf apply` refuses a line that tries to name one.
+
+### Pressure alerts and the hardware watchdog
+
+A Pi with no swap can stop when its RAM is full or when its CPUs cannot do all the work. `pf alert run` watches memory and CPU pressure. It sends a message to your alert webhook before the Pi stops. If the Pi stops, the hardware watchdog restarts it. After the restart, you get a second message.
+
+The watch uses pressure stall information (PSI) from `/proc/pressure` when the kernel has it. PSI tells how much of the time tasks wait for memory or for a CPU. Without PSI, the watch reads MemAvailable, the load and the CPU time each 2 seconds. To see which one the gateway uses, run `journalctl -u pi-fortress-alert | grep 'pressure:'`.
+
+| Condition | Default |
+|---|---|
+| All tasks wait for memory (PSI memory full) for this percent of the time, for 4 seconds | 10% |
+| MemAvailable is below this percent of the RAM, for 4 seconds (3 reads) | 5% |
+| A task waits for a CPU (PSI cpu some) for this percent of the time, for 30 seconds | 80% |
+| Without PSI: the CPUs are busy for this percent of the time, and the load is above 2 for each CPU, for 30 seconds | 80% |
+
+The nightly feed refresh uses all the CPUs for some minutes. The defaults do not send a message for it.
+
+The messages:
+
+- `PRESSURE HIGH`: one message when a condition starts. It gives the values, MemAvailable, the load, the three units that use the most memory, and the three units that use the most CPU.
+- `PRESSURE STILL HIGH`: a maximum of one message each 10 minutes while the pressure continues.
+- `PRESSURE RECOVERED`: one message after one minute with no condition.
+- `OOM KILL`: the kernel stopped a process for lack of memory. The message names the unit and the number of stops. You get a maximum of one each 10 minutes.
+- `RESTART`: the Pi started again without a clean shutdown. The cause can be a power cut, a hang that the watchdog reset, or a kernel crash. The message gives the last values before the stop.
+
+A unit is a service, for example `pi-fortress-broker.service`, or a login session, for example `user-1000.slice`. To see its processes, run `systemctl status <unit>`. These messages have their own limits. They do not use the hourly maximum of the strip alerts.
+
+The alert service keeps resources for itself, so that the message can go out when other services cannot run:
+
+- The kernel OOM killer stops it last.
+- It keeps its memory in RAM.
+- It gets the CPU before the other services.
+- It finds the address of the webhook host at start and each 10 minutes. Thus a message does not need the DNS of the Pi at that time.
+
+To change a value, put the flags in `/etc/pi-fortress/alert.env`. Then restart the service:
+
+**Pi:**
+```
+echo 'PF_ALERT_FLAGS="-pressure-cpu 90 -pressure-cpu-for 60s"' | sudo tee /etc/pi-fortress/alert.env
+sudo systemctl restart pi-fortress-alert
+```
+
+| Flag | Meaning | Default |
+|---|---|---|
+| `-pressure-mem-full` | Percent of the time that all tasks wait for memory | `10` |
+| `-pressure-mem-avail` | MemAvailable floor, in percent of the RAM | `5` |
+| `-pressure-mem-for` | How long a memory condition must continue | `4s` |
+| `-pressure-cpu` | Percent of the time that a task waits for a CPU. Without PSI, the percent of busy CPU time | `80` |
+| `-pressure-cpu-for` | How long the CPU condition must continue | `30s` |
+| `-pressure-load` | Without PSI: the load for each CPU that must also be there | `2` |
+| `-pressure-repeat` | Minimum time between two messages while the pressure continues | `10m` |
+| `-pressure=false` | Disables the pressure watch. The strip alerts continue | on |
+
+The hardware watchdog: systemd sends a signal to the watchdog device of the Pi at regular intervals. If the Pi hangs and the signals stop for 30 seconds, the device resets the Pi. If the device accepts less time than that, the gateway uses the maximum of the device. During a reboot, the time is 2 minutes, with the same limit. `HW_WATCHDOG=auto` enables the watchdog when the kernel has a watchdog device. A lab VM usually has none.
+
+To disable the watchdog, add `HW_WATCHDOG=0` to `/etc/pi-fortress/net.env.local`. Then run `sudo pf apply`. To disable the pressure watch, use `-pressure=false` in `alert.env`.
 
 ## 5. Cable the agent
 
