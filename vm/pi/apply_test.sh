@@ -1613,6 +1613,37 @@ _at="$(grep -n '^harden_watchdog$' "${apply}" | head -1 | cut -d: -f1)"
 grep -qx 'HW_WATCHDOG=auto' "${here}/net.env" || fail "net.env does not document HW_WATCHDOG"
 grep -qF "HW_WATCHDOG='\${HW_WATCHDOG}' is not auto, 0 or 1" "${apply}" || fail "apply.sh does not check HW_WATCHDOG"
 
+# The kernel command line (harden_cmdline): the memory cgroup and PSI.
+croot="${tmp}/cmdroot"
+mkdir -p "${croot}"
+cl_run() {
+  (
+    # shellcheck source=lib/harden.sh
+    source "${here}/lib/harden.sh"
+    HARDEN_CMDLINE="${croot}/cmdline.txt" HARDEN_REBOOT_FLAG="${croot}/reboot-required"
+    harden_cmdline
+  )
+}
+printf 'console=tty1 root=PARTUUID=x rootwait  ' >"${croot}/cmdline.txt"
+cl_run >/dev/null || fail "harden_cmdline failed"
+[[ "$(cat "${croot}/cmdline.txt")" == 'console=tty1 root=PARTUUID=x rootwait cgroup_enable=memory psi=1' ]] ||
+  fail "harden_cmdline wrote '$(cat "${croot}/cmdline.txt")'"
+[[ "$(wc -l <"${croot}/cmdline.txt")" == 1 && -e "${croot}/reboot-required" ]] || fail "harden_cmdline left more than one line or no reboot flag"
+[[ "$(cat "${croot}/cmdline.txt.pi-fortress.bak")" == 'console=tty1 root=PARTUUID=x rootwait  ' ]] || fail "harden_cmdline kept no copy of the old line"
+rm -f "${croot}/reboot-required"
+cl_run >/dev/null
+[[ ! -e "${croot}/reboot-required" ]] || fail "harden_cmdline changed a line that already had both flags"
+printf 'root=x psi=0\n' >"${croot}/cmdline.txt"
+cl_run >/dev/null
+[[ "$(cat "${croot}/cmdline.txt")" == 'root=x psi=0 cgroup_enable=memory' ]] || fail "harden_cmdline overrode the psi= of the operator"
+printf 'root=x\nroot=y\n' >"${croot}/cmdline.txt"
+cl_run >/dev/null 2>&1
+[[ "$(cat "${croot}/cmdline.txt")" == $'root=x\nroot=y' ]] || fail "harden_cmdline edited a cmdline.txt of two lines"
+rm -f "${croot}/cmdline.txt"
+cl_run >/dev/null || fail "harden_cmdline failed with no cmdline.txt (a lab VM)"
+grep -qF 'HARDEN_CMDLINE=/boot/firmware/cmdline.txt HARDEN_REBOOT_FLAG=/var/run/reboot-required harden_cmdline' "${here}/provision.sh" ||
+  fail "provision.sh does not add the memory cgroup and PSI to the kernel command line"
+
 # Key-only SSH (harden_ssh). The sshd stub passes -t unless sshd.bad
 # exists, and prints sshd.T for -T. The ssh-keygen stub takes a file
 # that holds an ed25519 key line, as ssh-keygen -l does.

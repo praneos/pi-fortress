@@ -186,6 +186,12 @@ sysctl -e --system >/dev/null
 # Key-only SSH, but only after a usable key is installed (lib/harden.sh).
 harden_ssh
 
+# The memory cgroup and PSI on the kernel command line (lib/harden.sh).
+# Not in the lab: a VM boots with no cmdline.txt.
+if [[ "${PF_LAB:-}" != 1 ]]; then
+  HARDEN_CMDLINE=/boot/firmware/cmdline.txt HARDEN_REBOOT_FLAG=/var/run/reboot-required harden_cmdline
+fi
+
 # Raspberry Pi OS ships avahi enabled. The gateway must not announce itself
 # on the segments that it fences. Also, its own multicast loops back in on
 # each segment, and the input chain drops and logs it: 18 lines each

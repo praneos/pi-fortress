@@ -229,3 +229,29 @@ harden_watchdog() {
     echo "pi-fortress: the hardware watchdog is on: a hang of ${rt} s resets the Pi"
   fi
 }
+
+# The kernel command line of Raspberry Pi OS (HARDEN_CMDLINE, one line).
+# The firmware adds cgroup_disable=memory, so the MemoryMax, MemoryHigh and
+# MemoryMin of each pf unit do nothing, and the kernel has PSI off. This
+# adds cgroup_enable=memory and psi=1 when they are not there, keeps a
+# copy, and flags a reboot (HARDEN_REBOOT_FLAG), which pf doctor reports.
+# A psi= that the operator set stays as it is. provision.sh runs it on a
+# real Pi only; apply.sh does not touch the boot partition.
+harden_cmdline() {
+  local f="${HARDEN_CMDLINE}" old new
+  [[ -f "${f}" ]] || return 0
+  if (($(grep -c . "${f}") > 1)); then
+    echo "pi-fortress: ${f} has more than one line; add cgroup_enable=memory psi=1 to the first line by hand" >&2
+    return 0
+  fi
+  old="$(head -n1 "${f}")"
+  new="${old%"${old##*[![:space:]]}"}"
+  [[ " ${new} " == *" cgroup_enable=memory "* ]] || new="${new} cgroup_enable=memory"
+  [[ " ${new} " == *" psi="* ]] || new="${new} psi=1"
+  [[ "${new}" != "${old%"${old##*[![:space:]]}"}" ]] || return 0
+  cp "${f}" "${f}.pi-fortress.bak"
+  printf '%s\n' "${new}" >"${f}.tmp"
+  mv "${f}.tmp" "${f}"
+  touch "${HARDEN_REBOOT_FLAG}"
+  echo "pi-fortress: added cgroup_enable=memory and psi=1 to ${f} (copy: ${f}.pi-fortress.bak); reboot to apply them"
+}

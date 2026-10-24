@@ -202,14 +202,14 @@ The watch uses pressure stall information (PSI) from `/proc/pressure` when the k
 
 The Raspberry Pi OS kernel has PSI, but it is off by default: `/proc/pressure` does not exist. The firmware also puts `cgroup_disable=memory` on the kernel command line. Then `/sys/fs/cgroup/cgroup.controllers` has no `memory`. Without the memory controller, the `MemoryMax`, `MemoryHigh` and `MemoryMin` lines of the pi-fortress units have no effect, and systemd does not tell you. A leak in one unit can then fill the RAM of the Pi. The pressure alert also cannot name the unit that uses the memory.
 
-To turn on the two, add ` cgroup_enable=memory psi=1` to the end of the single line in `/boot/firmware/cmdline.txt`. Do not add a new line. This command adds each word only if it is not there:
+A new install (`install.sh`) turns on the two. It keeps a copy of the old file as `cmdline.txt.pi-fortress.bak`, and `pf doctor` then asks for a reboot. On a Pi that you installed before, add ` cgroup_enable=memory psi=1` to the end of the single line in `/boot/firmware/cmdline.txt`. Do not add a new line. This command adds each word only if it is not there:
 
 ```
 sudo sed -i '1{/cgroup_enable=memory/!s/$/ cgroup_enable=memory/;/psi=/!s/$/ psi=1/}' /boot/firmware/cmdline.txt
 cat /boot/firmware/cmdline.txt
 ```
 
-Make sure that the file is still one line. Then reboot. `pf apply` does not change this file. `pf doctor` reports the two: the `memory` rung warns when the memory controller is off, and the `psi` rung warns when PSI is off.
+Make sure that the file is still one line. Then reboot. `pf apply` and a ship do not change this file. `pf doctor` reports the two: the `memory` rung warns when the memory controller is off, and the `psi` rung warns when PSI is off.
 
 | Condition | Default |
 |---|---|
