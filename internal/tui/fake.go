@@ -19,9 +19,10 @@ type Fake struct {
 	// Hold makes ReadKey block, and not return io.EOF, after the script is
 	// consumed. It is for tests that end the loop a different way.
 	Hold bool
-	// Restore closes wake, as the real terminal does. A held ReadKey is a
-	// worker that waits in a terminal read. The app must be able to get it
-	// back before the app returns.
+	// Restore closes wake, and EnterRaw makes a new one after that, as the
+	// real terminal does. A held ReadKey is a worker that waits in a
+	// terminal read. The app must be able to get it back before the app
+	// returns.
 	wake chan struct{}
 	// inRead counts the goroutines inside ReadKey. A test uses it to see a
 	// leaked goroutine.
@@ -100,6 +101,13 @@ func (f *Fake) EnterRaw() error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.Raw = true
+	// A Restore closed wake. As the real terminal does, a new raw session
+	// gets a new one.
+	select {
+	case <-f.wake:
+		f.wake = make(chan struct{})
+	default:
+	}
 	return nil
 }
 
