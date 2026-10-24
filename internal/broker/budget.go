@@ -88,13 +88,16 @@ type slotWindow struct {
 	// said is when each threshold was last reported. Without it, a window
 	// that stays above a warn line would post one webhook per request.
 	said [kindCount]time.Time
-	// quarantined says that the stop threshold removed this slot. A
-	// quarantined slot substitutes nothing. Thus a later substitution of it
-	// can only mean that an operator restored it. A restore into a window
-	// that is still over the line would quarantine it again on the next
-	// request. Then the operator has no way back. Instead, the broker drops
-	// the window for that slot.
-	quarantined bool
+	// quarantined is the number of the stop that removed this slot, or
+	// zero. A quarantined slot substitutes nothing. Thus a substitution from
+	// a snapshot after that stop can only mean that an operator restored it.
+	// A restore into a window that is still over the line would quarantine
+	// it again on the next request. Then the operator has no way back.
+	// Instead, the broker drops the window for that slot. A request with an
+	// older snapshot still charges the slot, for its body or for a late
+	// substitution. That charge is part of the hour that caused the stop,
+	// and it must not drop it.
+	quarantined uint64
 }
 
 // budgetHit is one threshold a slot has crossed: what to tell the
@@ -118,17 +121,29 @@ func (h budgetHit) where() string {
 type budget struct {
 	mu    sync.Mutex
 	slots map[string]*slotWindow
+	// stops counts the stops that landed.
+	stops uint64
 }
 
-// charge adds one request to the hour of a slot. It returns each
-// threshold that this addition crossed. It quarantines nothing itself.
-// The quarantine writes a file, and a file write under this lock would
-// stall all other requests in the fence.
-func (bg *budget) charge(slot string, reqs, bytes int64, lim SlotBudget, now time.Time) []budgetHit {
+// stopsLanded is the count of stops that landed. A request reads it
+// before its snapshot of the slots. Thus a count at or above the number
+// of a stop says that the snapshot came after that quarantine.
+func (bg *budget) stopsLanded() uint64 {
+	bg.mu.Lock()
+	defer bg.mu.Unlock()
+	return bg.stops
+}
+
+// charge adds one request to the hour of a slot. seen is stopsLanded from
+// before the snapshot of the request. It returns each threshold that this
+// addition crossed. It quarantines nothing itself. The quarantine writes
+// a file, and a file write under this lock would stall all other
+// requests in the fence.
+func (bg *budget) charge(slot string, seen uint64, reqs, bytes int64, lim SlotBudget, now time.Time) []budgetHit {
 	bg.mu.Lock()
 	defer bg.mu.Unlock()
 	w := bg.window(slot)
-	if w.quarantined {
+	if w.quarantined != 0 && seen >= w.quarantined {
 		// The only way here is an operator restore; see the field.
 		*w = slotWindow{}
 	}
@@ -163,7 +178,8 @@ func (bg *budget) quarantined(h budgetHit, ok bool) {
 	defer bg.mu.Unlock()
 	w := bg.window(h.slot)
 	if ok {
-		w.quarantined = true
+		bg.stops++
+		w.quarantined = bg.stops
 		return
 	}
 	w.said[h.kind] = time.Time{}
@@ -271,7 +287,7 @@ func (b *Broker) chargeUpload(c *call) {
 }
 
 func (b *Broker) budgetCharge(c *call, slot string, reqs, bytes int64) {
-	for _, h := range b.budget.charge(slot, reqs, bytes, b.Budget, b.now()) {
+	for _, h := range b.budget.charge(slot, c.stopsSeen, reqs, bytes, b.Budget, b.now()) {
 		b.budgetHit(c, h)
 	}
 }

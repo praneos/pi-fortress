@@ -97,13 +97,13 @@ func TestBudgetWindowDropsTheBucketItReuses(t *testing.T) {
 	base := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	lim := SlotBudget{WarnRequests: 1000}
 	for i := range 60 {
-		bg.charge("s", 1, 10, lim, base.Add(time.Duration(i)*time.Minute))
+		bg.charge("s", 0, 1, 10, lim, base.Add(time.Duration(i)*time.Minute))
 	}
 	if got := bg.hour(base.Add(59 * time.Minute)); got["s"] != [2]int64{60, 600} {
 		t.Fatalf("an hour of one a minute: %v", got["s"])
 	}
 	// Minute 60 reuses bucket 0. The hour is now minutes 1..60.
-	bg.charge("s", 1, 10, lim, base.Add(60*time.Minute))
+	bg.charge("s", 0, 1, 10, lim, base.Add(60*time.Minute))
 	if got := bg.hour(base.Add(60 * time.Minute)); got["s"] != [2]int64{60, 600} {
 		t.Fatalf("after the wrap: %v", got["s"])
 	}
@@ -120,8 +120,8 @@ func TestBudgetWindowIgnoresStaleBuckets(t *testing.T) {
 	var bg budget
 	base := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	lim := SlotBudget{WarnRequests: 1000}
-	bg.charge("s", 5, 0, lim, base)
-	bg.charge("s", 1, 0, lim, base.Add(3*time.Hour))
+	bg.charge("s", 0, 5, 0, lim, base)
+	bg.charge("s", 0, 1, 0, lim, base.Add(3*time.Hour))
 	if got := bg.hour(base.Add(3 * time.Hour)); got["s"] != [2]int64{1, 0} {
 		t.Fatalf("three hours later: %v", got["s"])
 	}
@@ -133,17 +133,17 @@ func TestBudgetWarnFiresOnceAndRearms(t *testing.T) {
 	var bg budget
 	base := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	lim := SlotBudget{WarnRequests: 3}
-	if h := bg.charge("s", 3, 0, lim, base); len(h) != 1 || h[0].count != 3 || h[0].limit != 3 {
+	if h := bg.charge("s", 0, 3, 0, lim, base); len(h) != 1 || h[0].count != 3 || h[0].limit != 3 {
 		t.Fatalf("the crossing: %v", h)
 	}
 	for i := 1; i < 10; i++ {
-		if h := bg.charge("s", 1, 0, lim, base.Add(time.Duration(i)*time.Minute)); len(h) != 0 {
+		if h := bg.charge("s", 0, 1, 0, lim, base.Add(time.Duration(i)*time.Minute)); len(h) != 0 {
 			t.Fatalf("still above the line at minute %d: %v", i, h)
 		}
 	}
 	// The window has emptied; the next crossing is a new event.
 	at := base.Add(70 * time.Minute)
-	if h := bg.charge("s", 3, 0, lim, at); len(h) != 1 {
+	if h := bg.charge("s", 0, 3, 0, lim, at); len(h) != 1 {
 		t.Fatalf("re-armed after the window emptied: %v", h)
 	}
 }
@@ -157,15 +157,15 @@ func TestBudgetWarnRearmsWhenTheWindowDropsUnder(t *testing.T) {
 	var bg budget
 	base := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	lim := SlotBudget{WarnRequests: 3}
-	bg.charge("s", 2, 0, lim, base)
-	if h := bg.charge("s", 1, 0, lim, base.Add(5*time.Minute)); len(h) != 1 {
+	bg.charge("s", 0, 2, 0, lim, base)
+	if h := bg.charge("s", 0, 1, 0, lim, base.Add(5*time.Minute)); len(h) != 1 {
 		t.Fatalf("the first crossing: %v", h)
 	}
 	// At minute 61 the two from minute 0 have left the window.
-	if h := bg.charge("s", 0, 0, lim, base.Add(61*time.Minute)); len(h) != 0 {
+	if h := bg.charge("s", 0, 0, 0, lim, base.Add(61*time.Minute)); len(h) != 0 {
 		t.Fatalf("under the line again: %v", h)
 	}
-	if h := bg.charge("s", 2, 0, lim, base.Add(61*time.Minute)); len(h) != 1 {
+	if h := bg.charge("s", 0, 2, 0, lim, base.Add(61*time.Minute)); len(h) != 1 {
 		t.Fatalf("the second crossing: %v", h)
 	}
 }
@@ -179,7 +179,7 @@ func TestBudgetWarnRepeatsAfterAnHourAboveTheLine(t *testing.T) {
 	lim := SlotBudget{WarnRequests: 10}
 	said := 0
 	for i := range 130 {
-		said += len(bg.charge("s", 1, 0, lim, base.Add(time.Duration(i)*time.Minute)))
+		said += len(bg.charge("s", 0, 1, 0, lim, base.Add(time.Duration(i)*time.Minute)))
 	}
 	if said != 3 {
 		t.Fatalf("over two hours above the line: %d alerts, want 3", said)
@@ -190,16 +190,16 @@ func TestBudgetZeroThresholdsCountNothing(t *testing.T) {
 	var bg budget
 	base := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	var lim SlotBudget
-	if h := bg.charge("s", 1_000_000, 1<<40, lim, base); len(h) != 0 {
+	if h := bg.charge("s", 0, 1_000_000, 1<<40, lim, base); len(h) != 0 {
 		t.Fatalf("a threshold of zero fired: %v", h)
 	}
 	// One armed threshold does not arm the other three.
 	var only budget
 	lim = SlotBudget{WarnBytes: 100}
-	if h := only.charge("s", 1_000_000, 50, lim, base); len(h) != 0 {
+	if h := only.charge("s", 0, 1_000_000, 50, lim, base); len(h) != 0 {
 		t.Fatalf("requests fired with no request threshold: %v", h)
 	}
-	if h := only.charge("s", 0, 50, lim, base); len(h) != 1 || h[0].where() != whereUpload {
+	if h := only.charge("s", 0, 0, 50, lim, base); len(h) != 1 || h[0].where() != whereUpload {
 		t.Fatalf("the bytes threshold: %v", h)
 	}
 }
@@ -209,9 +209,9 @@ func TestBudgetSlotsAreIndependent(t *testing.T) {
 	base := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	lim := SlotBudget{WarnRequests: 5}
 	for range 5 {
-		bg.charge("one", 1, 7, lim, base)
+		bg.charge("one", 0, 1, 7, lim, base)
 	}
-	if h := bg.charge("two", 1, 7, lim, base); len(h) != 0 {
+	if h := bg.charge("two", 0, 1, 7, lim, base); len(h) != 0 {
 		t.Fatalf("the second slot inherited the first's hour: %v", h)
 	}
 	got := bg.hour(base)
@@ -227,21 +227,24 @@ func TestBudgetStopNotAppliedIsRetried(t *testing.T) {
 	var bg budget
 	base := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	lim := SlotBudget{StopRequests: 2}
-	h := bg.charge("s", 2, 0, lim, base)
+	h := bg.charge("s", 0, 2, 0, lim, base)
 	if len(h) != 1 || !h[0].stop() {
 		t.Fatalf("the stop: %v", h)
 	}
 	bg.quarantined(h[0], false)
-	again := bg.charge("s", 1, 0, lim, base)
+	again := bg.charge("s", 0, 1, 0, lim, base)
 	if len(again) != 1 || !again[0].stop() {
 		t.Fatalf("a stop that did not land was not retried: %v", again)
 	}
 	bg.quarantined(again[0], true)
 	// When the stop is applied, the broker drops the window at the next
-	// substitution for the slot. That can occur only after an operator
-	// restored the slot.
-	if third := bg.charge("s", 1, 0, lim, base); len(third) != 0 {
+	// substitution from a later snapshot. That can occur only after an
+	// operator restored the slot.
+	if third := bg.charge("s", bg.stopsLanded(), 1, 0, lim, base); len(third) != 0 {
 		t.Fatalf("a restored slot was stopped again at once: %v", third)
+	}
+	if got := bg.hour(base); got["s"] != [2]int64{1, 0} {
+		t.Fatalf("the restore did not drop the hour: %v", got["s"])
 	}
 }
 
@@ -292,6 +295,35 @@ func TestBudgetStopQuarantinesAndTheNextRequestIsRefused(t *testing.T) {
 	// The refused request substituted nothing, so it spent no budget.
 	if h := b.budget.hour(b.now()); h[budgetSlot][0] != 2 {
 		t.Fatalf("the refused request was counted: %v", h)
+	}
+}
+
+// The request that crosses the stop line then charges its body. That
+// request took its snapshot before the stop. Thus its second charge is
+// not a restore, and the hour that stopped the slot must stay. Only a
+// request after the restore of the operator drops the hour.
+func TestBudgetStopKeepsTheHourUntilARestore(t *testing.T) {
+	b, _, _ := budgetBroker(t, SlotBudget{StopRequests: 1})
+	spendBody(t, b, budgetSlot, 100)
+	off, err := b.Store.Disabled()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if off[budgetSlot] == 0 {
+		t.Fatalf("the slot was not quarantined: %v", off)
+	}
+	if h := b.budget.hour(b.now()); h[budgetSlot][0] != 1 || h[budgetSlot][1] < 100 {
+		t.Fatalf("the hour that stopped the slot was lost: %v", h)
+	}
+	if err := b.Store.Restore(budgetSlot); err != nil {
+		t.Fatal(err)
+	}
+	b.Budget = SlotBudget{}
+	if body := spend(t, b, budgetSlot); body != "ok" {
+		t.Fatalf("the restored slot was not served: %q", body)
+	}
+	if h := b.budget.hour(b.now()); h[budgetSlot] != [2]int64{1, 0} {
+		t.Fatalf("the restore did not drop the hour: %v", h)
 	}
 }
 
