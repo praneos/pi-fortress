@@ -120,8 +120,8 @@ func FuzzUpstreamReply(f *testing.F) {
 				t.Fatal("stripOPT: ARCOUNT is not one less")
 			}
 		}
-		if bareOK && parsesAll(reply) {
-			if !parsesAll(bare) {
+		if bareOK && readable(reply) {
+			if !readable(bare) {
 				t.Fatalf("stripOPT made a message that does not parse:\n in %x\nout %x", reply, bare)
 			}
 			if hasOPT(bare) {
@@ -138,8 +138,8 @@ func FuzzUpstreamReply(f *testing.F) {
 		if len(withOPT) != len(bare) && len(withOPT) != len(bare)+11 {
 			t.Fatalf("withCallerOPT: %d bytes from %d", len(withOPT), len(bare))
 		}
-		if end, ok := walkEnd(bare); ok && end == len(bare) && parsesAll(bare) && !hasOPT(bare) && len(withOPT) > len(bare) {
-			if !parsesAll(withOPT) || !hasOPT(withOPT) {
+		if end, ok := walkEnd(bare); ok && end == len(bare) && readable(bare) && !hasOPT(bare) && len(withOPT) > len(bare) {
+			if !readable(withOPT) || !hasOPT(withOPT) {
 				t.Fatalf("withCallerOPT made a message that does not parse: %x", withOPT)
 			}
 		}
@@ -166,26 +166,6 @@ func aOwners(msg []byte) []string {
 			return out
 		}
 	}
-}
-
-// parsesAll reports whether dnsmessage reads every record that the header
-// counts, with the bodies of the types it knows.
-func parsesAll(msg []byte) bool {
-	var p dnsmessage.Parser
-	if _, err := p.Start(msg); err != nil {
-		return false
-	}
-	if _, err := p.AllQuestions(); err != nil {
-		return false
-	}
-	if _, err := p.AllAnswers(); err != nil {
-		return false
-	}
-	if _, err := p.AllAuthorities(); err != nil {
-		return false
-	}
-	_, err := p.AllAdditionals()
-	return err == nil
 }
 
 func hasOPT(msg []byte) bool {

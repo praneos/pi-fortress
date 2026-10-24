@@ -697,9 +697,36 @@ func stripOPT(msg []byte) ([]byte, bool) {
 		out := make([]byte, start)
 		copy(out, msg[:start])
 		binary.BigEndian.PutUint16(out[10:12], uint16(ar-1))
+		// A name in the rdata of an earlier record can read into the OPT
+		// bytes: a compression pointer to them, or a label that runs past
+		// its rdlength. After the cut, no client can read that name. Refuse
+		// such a message, as when the OPT is not last.
+		if !readable(out) {
+			return msg, false
+		}
 		return out, true
 	}
 	return msg, true
+}
+
+// readable reports whether a parser reads each record that the header of
+// msg counts, with the rdata of each type that it knows.
+func readable(msg []byte) bool {
+	var p dnsmessage.Parser
+	if _, err := p.Start(msg); err != nil {
+		return false
+	}
+	if _, err := p.AllQuestions(); err != nil {
+		return false
+	}
+	if _, err := p.AllAnswers(); err != nil {
+		return false
+	}
+	if _, err := p.AllAuthorities(); err != nil {
+		return false
+	}
+	_, err := p.AllAdditionals()
+	return err == nil
 }
 
 // withCallerOPT returns msg with an OPT record for a caller that asked in
