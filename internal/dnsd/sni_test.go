@@ -762,3 +762,38 @@ func TestSNILateVerdictLeavesANewFlowAlone(t *testing.T) {
 		t.Fatalf("blocked.example on the new flow: %+v", v)
 	}
 }
+
+// The name lookups of the check are bounded: a flow that comes when all
+// slots are in use is refused at once. run returns only after the
+// lookups that it started are done.
+func TestSNIJudgesAreBoundedAndAwaited(t *testing.T) {
+	q := newFakeQueue()
+	dst := "203.0.113.9"
+	release := make(chan struct{})
+	c := newSNICheck(q, func(context.Context, netip.Addr, string) ([]netip.Addr, bool, error) {
+		<-release
+		return []netip.Addr{netip.MustParseAddr(dst)}, false, nil
+	}, nil)
+	c.slots = make(chan struct{}, 1)
+	ctx := context.Background()
+	c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4(dst, 1000, clientHello(t, "a.example"))})
+	q.none(t, 1)
+	second := tcp4(dst, 2000, clientHello(t, "b.example"))
+	second[21]++ // another source port: a second flow
+	c.packet(ctx, nfq.Packet{ID: 2, Payload: second})
+	if v := q.wait(t, 2); v.mark&sniBits != sniBad {
+		t.Fatalf("flow over the cap: %+v", v)
+	}
+	ran := make(chan struct{})
+	go func() { c.run(ctx); close(ran) }() // Recv fails at once
+	select {
+	case <-ran:
+		t.Fatal("run returned while a lookup was in progress")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	<-ran
+	if v := q.wait(t, 1); v.mark&sniBits != sniOK {
+		t.Fatalf("first flow: %+v", v)
+	}
+}
