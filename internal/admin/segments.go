@@ -64,9 +64,17 @@ func (c *Config) Segments() []Segment {
 var SegmentFixed = []string{"IF", "NET", "IP"}
 
 // SegmentKeys are the keys that a seat can write, in screen order. The
-// three DHCP keys come after PARANOID, so the rows above them keep their
-// positions.
-var SegmentKeys = []string{"ADMIN", "SSH_TO", "BLOCK_DIRECT_IP", "PARANOID", "DHCP", "DHCP_START", "DHCP_END"}
+// three DHCP keys come after PARANOID, and the connection keys come after
+// them, so the rows above them keep their positions.
+var SegmentKeys = append([]string{"ADMIN", "SSH_TO", "BLOCK_DIRECT_IP", "PARANOID", "DHCP", "DHCP_START", "DHCP_END"}, SegmentConnKeys...)
+
+// SegmentConnKeys are the connection budget of one plain segment. Each key
+// that the file does not have takes the SEG_ value of net.env (render,
+// segConnBudget). Thus for these keys, an empty value removes the line and
+// does not write it. render reads a line that is present and empty as 0,
+// and 0 turns the limit off. That is the opposite of what the operator
+// asked for.
+var SegmentConnKeys = []string{"CONN_PER_IP", "NEW_PER_IP", "CONN_TOTAL", "NEW_TOTAL"}
 
 // SegmentDHCPRange is set as one edit, as HouseDoT is. pf render refuses
 // each end without the other. Thus on a segment with no range yet, a
@@ -75,8 +83,10 @@ var SegmentDHCPRange = []string{"DHCP_START", "DHCP_END"}
 
 // SegmentDefaults is what an absent line means. pf render fills in the
 // same value for itself. A row shows the value and says that it is the
-// default.
-var SegmentDefaults = map[string]string{"ADMIN": "no", "SSH_TO": "", "BLOCK_DIRECT_IP": "on", "PARANOID": "off", "DHCP": "off", "DHCP_START": "", "DHCP_END": ""}
+// default. For the connection keys, the default is empty: the value then
+// comes from net.env, and a screen reads it there.
+var SegmentDefaults = map[string]string{"ADMIN": "no", "SSH_TO": "", "BLOCK_DIRECT_IP": "on", "PARANOID": "off", "DHCP": "off", "DHCP_START": "", "DHCP_END": "",
+	"CONN_PER_IP": "", "NEW_PER_IP": "", "CONN_TOTAL": "", "NEW_TOTAL": ""}
 
 // SegmentToggle are the keys that Enter changes with one press. Each has
 // its two values, with the default first. They are not one pair of words.
@@ -97,6 +107,29 @@ var segmentKeys = map[string]func(string) error{
 	// directory. This is the same as the AGENT_NET check of SSH_TO.
 	"DHCP_START": checkAddr,
 	"DHCP_END":   checkAddr,
+	// The same check as the SEG_ key of net.env, as render does it. Empty is
+	// correct here: setSegmentLines removes the line. The candidate render
+	// checks a per-device value against the total of the segment.
+	"CONN_PER_IP": checkSegConn("CONN_PER_IP"),
+	"NEW_PER_IP":  checkSegConn("NEW_PER_IP"),
+	"CONN_TOTAL":  checkSegConn("CONN_TOTAL"),
+	"NEW_TOTAL":   checkSegConn("NEW_TOTAL"),
+}
+
+func checkSegConn(key string) func(string) error {
+	return func(v string) error { return render.CheckConnLimit("SEG_"+key, v) }
+}
+
+// SegmentConnInherited is the value of one of SegmentConnKeys for a
+// segment file that does not have the key. It is the SEG_ value of net,
+// the map that NetEnv gives. When net does not set it either, it is the
+// default of render, and def is true. Thus a row shows the number that
+// applies, and where it comes from.
+func SegmentConnInherited(net map[string]string, key string) (v string, def bool) {
+	if v := net["SEG_"+key]; v != "" {
+		return v, false
+	}
+	return render.ConnLimitDefault("SEG_" + key), true
 }
 
 // reSegName is a copy of the one in render, not an export, for the same
@@ -259,9 +292,9 @@ func (c *Config) SetSegmentEnvKeys(name string, kv map[string]string) (string, e
 	}
 	// Bare, never quoted: pf render parses these files and does not source
 	// them. Thus a quote would stay as part of the value. Also, none of the
-	// three editable values can hold a space.
+	// editable values can hold a space.
 	if err := c.withEditLock(func() error {
-		return setEnvLines(path, kv, keys, neverQuote)
+		return setSegmentLines(path, kv, keys)
 	}); err != nil {
 		return "", err
 	}
@@ -310,9 +343,33 @@ func (c *Config) candidateSegments(name string, kv map[string]string, keys []str
 			return "", err
 		}
 	}
-	if err := setEnvLines(filepath.Join(dir, name+".env"), kv, keys, neverQuote); err != nil {
+	if err := setSegmentLines(filepath.Join(dir, name+".env"), kv, keys); err != nil {
 		os.RemoveAll(dir)
 		return "", err
 	}
 	return dir, nil
+}
+
+// setSegmentLines is setEnvLines for a segments.d file, with one
+// difference: an empty value of a connection key removes each line of that
+// key (SegmentConnKeys). The file keeps its comments and the order of the
+// other lines. It reads and writes the file one time, so an edit of more
+// than one key is never half written.
+func setSegmentLines(path string, kv map[string]string, keys []string) error {
+	lines, err := readLines(path)
+	if err != nil {
+		return err
+	}
+	var set []string
+	for _, k := range keys {
+		if kv[k] != "" || !slices.Contains(SegmentConnKeys, k) {
+			set = append(set, k)
+			continue
+		}
+		lines = slices.DeleteFunc(lines, func(l string) bool {
+			name, _, cut := strings.Cut(l, "=")
+			return cut && strings.TrimSpace(name) == k
+		})
+	}
+	return writeLines(path, editEnvLines(lines, kv, set, neverQuote))
 }

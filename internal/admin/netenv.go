@@ -262,6 +262,13 @@ func setEnvLines(path string, kv map[string]string, keys []string, quote func(st
 	if err != nil {
 		return err
 	}
+	return writeLines(path, editEnvLines(lines, kv, keys, quote))
+}
+
+// editEnvLines is setEnvLines on lines that are already in memory. Thus a
+// writer that must also remove lines (setSegmentLines) reads and writes the
+// file one time.
+func editEnvLines(lines []string, kv map[string]string, keys []string, quote func(string) bool) []string {
 	value := func(k string) string {
 		if quote(k) {
 			return k + "='" + kv[k] + "'"
@@ -279,5 +286,5 @@ func setEnvLines(path string, kv map[string]string, keys []string, quote func(st
 			lines = append(lines, value(k))
 		}
 	}
-	return writeLines(path, lines)
+	return lines
 }

@@ -178,6 +178,31 @@ func atoiStrict(s string) (int, bool) {
 	return n, true
 }
 
+// ConnLimitDefault is the value that render uses for one of ConnLimitKeys
+// when net.env does not set it, in the form of the key ("128", "50/200").
+// It is empty for a key that is not one of them. Thus a screen can show the
+// number that applies, not only the word "default".
+func ConnLimitDefault(key string) string {
+	class, suffix, _ := strings.Cut(key, "_")
+	d, ok := connDefaults[class]
+	if !ok {
+		return ""
+	}
+	switch suffix {
+	case "CONN_PER_IP":
+		return strconv.Itoa(d.PerIP)
+	case "NEW_PER_IP":
+		return strconv.Itoa(d.Rate) + "/" + strconv.Itoa(d.Burst)
+	case "CONN_TOTAL":
+		return strconv.Itoa(d.Total)
+	case "NEW_TOTAL":
+		if d.NewTotal > 0 {
+			return strconv.Itoa(d.NewTotal) + "/" + strconv.Itoa(d.NewBurst)
+		}
+	}
+	return ""
+}
+
 // CheckConnLimit validates the value of one key the same way as Load reads
 // it. For each key, empty is the default and "0" is off.
 func CheckConnLimit(key, v string) error {

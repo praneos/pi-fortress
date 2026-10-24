@@ -105,6 +105,10 @@ var segmentSettings = map[string]setting{
 	"DHCP":            {"DHCP", "DHCP server", "on: the Pi hands out addresses here from the range below, as on the house. Set the range first. On a house-cable VLAN the AP's own DHCP must be off."},
 	"DHCP_START":      {"DHCP_START", "DHCP range start", "First address handed to a new device, inside this network. Enter asks for both ends; the Pi's own address may not fall inside."},
 	"DHCP_END":        {"DHCP_END", "DHCP range end", "Last address handed to a new device. Enter asks for both ends. Fixed addresses go in the reservations file, inside the range or not."},
+	"CONN_PER_IP":     {"CONN_PER_IP", "Flows per device", "Live connections one address on this network may hold. 0 off. Empty (- clears): the Segments value in System > Settings. A browser with hundreds of tabs can need 512."},
+	"NEW_PER_IP":      {"NEW_PER_IP", "New flows per device", "New connections a second one address on this network may open, RATE/BURST, e.g. 50/200. 0 off. Empty (- clears): the Segments value in System > Settings."},
+	"CONN_TOTAL":      {"CONN_TOTAL", "Flows in total", "Live connections this whole network may hold. 0 off. Empty (- clears): the Segments value in System > Settings."},
+	"NEW_TOTAL":       {"NEW_TOTAL", "New flows in total", "New TCP connections a second this whole network may open, RATE/BURST, e.g. 300/600. 0 off. Empty (- clears): the Segments value in System > Settings."},
 }
 
 const setFmt = "  %-28s %s"
@@ -145,7 +149,7 @@ func (a *App) houseSettings() []row {
 			rows = append(rows, a.settingRow(s.label, houseValue(s.key, env[s.key]), setTarget{key: s.key, help: s.help}))
 		}
 	}
-	return rows
+	return append(rows, a.connBudgetRows("HOUSE_")...)
 }
 
 // houseValue names a default as a default, and says what an empty key
@@ -213,9 +217,11 @@ func isConnKey(key string) bool {
 	return strings.HasSuffix(key, "_CONN_PER_IP") || strings.HasSuffix(key, "_NEW_PER_IP") || strings.HasSuffix(key, "_CONN_TOTAL") || strings.HasSuffix(key, "_NEW_TOTAL")
 }
 
-// agentSettings has nothing to edit. Apart from the resolver, the rules of
-// the agent network are the fence, and that is its purpose. The rows say
-// what the fence does, and where the knobs that do exist are.
+// agentSettings has nothing to edit but the connection budget. Apart from
+// the resolver and the budget, the rules of the agent network are the
+// fence, and that is its purpose. The rows say what the fence does, and
+// where the knobs that do exist are. The new flows in total of the agent
+// is not a row: it is a constant in render (agentNewTotal), not a key.
 func (a *App) agentSettings() []row {
 	env := get[map[string]string](a, "net.env.get", admin.Args{})
 	dns := env["DNS_UPSTREAM"]
@@ -226,8 +232,8 @@ func (a *App) agentSettings() []row {
 	if env["AGENT_DNS"] != "forward" {
 		dns = "fake-IP from " + netValue("FAKEIP_NET", env["FAKEIP_NET"]) + "; the broker asks " + dns + " on connect"
 	}
-	return []row{
-		{text: "Fixed by the fence; nothing here is editable."},
+	rows := []row{
+		{text: "Fixed by the fence; only the connection budget is editable."},
 		{text: ""},
 		{text: fmt.Sprintf(setFmt, "DNS", dns+"  (System > Settings)")},
 		{text: fmt.Sprintf(setFmt, "Direct-IP connections", "blocked; exceptions: Filtering")},
@@ -235,12 +241,14 @@ func (a *App) agentSettings() []row {
 		{text: fmt.Sprintf(setFmt, "IPv6, QUIC, own DNS", "blocked")},
 		{text: fmt.Sprintf(setFmt, "API keys", "only to their own service (Keys)")},
 	}
+	return append(rows, a.connBudgetRows("AGENT_")...)
 }
 
 // segmentSettingRows is one plain segment: its location, read-only, and
 // the keys that a seat can write.
 func (a *App) segmentSettingRows(seg string) []row {
 	env := get[map[string]string](a, "segment.env", admin.Args{Name: seg})
+	netEnv := get[map[string]string](a, "net.env.get", admin.Args{})
 	rows := []row{{text: "Saved to " + filepath.Join(a.cfg.SegmentsDir, seg+".env") + "; takes effect at the next apply (A)"}, {text: ""}}
 	for _, k := range admin.SegmentFixed {
 		rows = append(rows, row{text: fmt.Sprintf(setFmt, segmentSettings[k].label, env[k])})
@@ -248,7 +256,14 @@ func (a *App) segmentSettingRows(seg string) []row {
 	rows = append(rows, row{text: "  (" + strings.Join(admin.SegmentFixed, ", ") + " move the segment: edit the file and reboot)"}, row{text: ""})
 	for _, k := range admin.SegmentKeys {
 		s := segmentSettings[k]
-		rows = append(rows, a.settingRow(s.label, segmentValue(k, env[k]), setTarget{key: k, seg: seg, help: s.help}))
+		if k == admin.SegmentConnKeys[0] {
+			rows = append(rows, row{text: ""}, row{text: "Connection budget"})
+		}
+		v := segmentValue(k, env[k])
+		if slices.Contains(admin.SegmentConnKeys, k) {
+			v = segmentConnValue(env[k], netEnv, k)
+		}
+		rows = append(rows, a.settingRow(s.label, v, setTarget{key: k, seg: seg, help: s.help}))
 		// The one setting here that removes something and says so
 		// nowhere else. Off leaves the segment with the blacklist and the
 		// sinkhole, and with no gate at all on an address that it was never
@@ -279,6 +294,49 @@ func segmentValue(key, v string) string {
 		return "(none)"
 	}
 	return v + " (default)"
+}
+
+// segmentConnValue is the value column of a connection key of a plain
+// segment. For a key that the file does not have, it shows the value that
+// applies, and that the value comes from System > Settings. An empty
+// column here would hide that the segment still has a limit.
+func segmentConnValue(v string, netEnv map[string]string, key string) string {
+	if v == "0" {
+		return "0 (off)"
+	}
+	if v != "" {
+		return v
+	}
+	v, def := admin.SegmentConnInherited(netEnv, key)
+	switch {
+	case v == "0":
+		return "0 (off, from System > Settings)"
+	case def:
+		return v + " (default, from System > Settings)"
+	}
+	return v + " (from System > Settings)"
+}
+
+// connBudgetRows are the net.env budget rows of one segment class, AGENT_
+// or HOUSE_, for the Settings of that segment. They are the rows of the
+// System Settings, with the same target. Thus an edit goes through netEdit
+// and the checks of net.env.set, as it does there. The three classes then
+// have their budget on their own screen: a plain segment has its own keys.
+func (a *App) connBudgetRows(prefix string) []row {
+	env := get[map[string]string](a, "net.env.get", admin.Args{})
+	rows := []row{{text: ""}, {text: "Connection budget, in " + a.cfg.NetEnvLocal + " (also in System > Settings)"}}
+	for _, g := range netGroups {
+		for _, s := range g.items {
+			if !isConnKey(s.key) || !strings.HasPrefix(s.key, prefix) {
+				continue
+			}
+			// "Agent: flows per device" is "Flows per device" here.
+			_, label, _ := strings.Cut(s.label, ": ")
+			label = strings.ToUpper(label[:1]) + label[1:]
+			rows = append(rows, a.settingRow(label, netValue(s.key, env[s.key]), setTarget{key: s.key, net: true, help: s.help}))
+		}
+	}
+	return rows
 }
 
 // settingHelp is the explanation of the selected row, wrapped to the lines
