@@ -124,6 +124,7 @@ func TestPressureReaderNoPSI(t *testing.T) {
 
 func testPressure() *Pressure {
 	p := DefaultPressure()
+	p.StatePath = ""
 	return p
 }
 

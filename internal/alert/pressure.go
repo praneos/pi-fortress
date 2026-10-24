@@ -2,6 +2,7 @@ package alert
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -38,10 +39,13 @@ type Pressure struct {
 	// Repeat is the minimum time between two posts while pressure stays.
 	Repeat time.Duration
 	// Calm is how long all conditions must be off before "recovered".
-	Calm   time.Duration
-	Stdout io.Writer
-	Stderr io.Writer
-	Now    func() time.Time
+	Calm time.Duration
+	// StatePath keeps the last sample and a clean-stop mark across a hard
+	// stop of the Pi. Empty is no state file.
+	StatePath string
+	Stdout    io.Writer
+	Stderr    io.Writer
+	Now       func() time.Time
 	// newWaiter is the wait of the loop. Tests give a script.
 	newWaiter func(ctx context.Context, r *procReader) waiter
 }
@@ -68,6 +72,10 @@ const (
 	oomRescan = 5 * time.Minute
 	// sendQueue bounds the posts that wait on the sender.
 	sendQueue = 8
+	// stateEvery is the interval of the state file.
+	stateEvery = 30 * time.Second
+	// DefaultStatePath is in the StateDirectory of alert.service.
+	DefaultStatePath = "/var/lib/pi-fortress/alert/pressure.json"
 )
 
 func DefaultPressure() *Pressure {
@@ -81,6 +89,7 @@ func DefaultPressure() *Pressure {
 		LoadPerCPU:  DefaultLoadPerCPU,
 		Repeat:      defaultRepeat,
 		Calm:        defaultCalm,
+		StatePath:   DefaultStatePath,
 	}
 }
 
@@ -168,6 +177,8 @@ type detector struct {
 	fired  [nRes]time.Time
 	window [nRes]time.Duration
 	high   bool
+	// lastOn is the last set of resources that were on.
+	lastOn [nRes]bool
 	highAt time.Time
 	postAt time.Time
 	calmAt time.Time
@@ -235,6 +246,9 @@ func (d *detector) step(s *sample, fired uint32, now time.Time) (verdict, [nRes]
 			on[r] = true
 			anyOn = true
 		}
+	}
+	if anyOn {
+		d.lastOn = on
 	}
 	switch {
 	case !d.high && anyOn:
@@ -434,6 +448,30 @@ func (p *Pressure) Run(ctx context.Context, post func(string)) {
 	)
 	r.read(&s)
 	oom.step(s.oomKills, r.unitOOMKills, p.clock(), p.Repeat)
+	bootID := r.bootID()
+	var states *stateWriter
+	if p.StatePath != "" {
+		if prev, ok := readState(p.StatePath); ok {
+			if msg := uncleanRestart(prev, bootID); msg != "" {
+				post(msg)
+			}
+		}
+		states = newStateWriter(p.StatePath, p.errw())
+		go states.run()
+		defer func() {
+			st := d.state(bootID, &s, p.clock())
+			st.Clean = true
+			states.finish(st)
+		}()
+	}
+	var savedAt time.Time
+	save := func(now time.Time) {
+		if states != nil && (savedAt.IsZero() || now.Sub(savedAt) >= stateEvery) {
+			states.put(d.state(bootID, &s, now))
+			savedAt = now
+		}
+	}
+	save(p.clock())
 	for {
 		every := pollEvery
 		if w.triggers() && !d.active() {
@@ -455,7 +493,142 @@ func (p *Pressure) Run(ctx context.Context, post func(string)) {
 		if msg := oom.step(s.oomKills, r.unitOOMKills, now, p.Repeat); msg != "" {
 			post(msg + " " + s.text() + ".")
 		}
+		save(now)
 	}
+}
+
+// pressureState is the state file. It outlives a hard stop of the Pi. A
+// stop of the unit (SIGTERM, also at each shutdown and reboot) writes
+// Clean. A file without Clean from an earlier boot is a boot that did not
+// shut down: a power cut, a hang that the hardware watchdog reset, or a
+// kernel crash.
+type pressureState struct {
+	BootID   string    `json:"boot_id"`
+	Clean    bool      `json:"clean"`
+	At       time.Time `json:"at"`
+	High     string    `json:"high,omitempty"`
+	Snapshot string    `json:"snapshot"`
+}
+
+func (d *detector) state(bootID string, s *sample, now time.Time) pressureState {
+	st := pressureState{BootID: bootID, At: now.UTC(), Snapshot: s.text()}
+	if d.high {
+		st.High = onText(d.lastOn)
+	}
+	return st
+}
+
+// uncleanRestart is the post for a boot that did not shut down, or "".
+// The boot ID must differ: a crash of this unit alone is not a restart of
+// the Pi.
+func uncleanRestart(prev pressureState, bootID string) string {
+	if prev.Clean || prev.BootID == "" || bootID == "" || prev.BootID == bootID {
+		return ""
+	}
+	msg := "RESTART: the Pi started again without a clean shutdown (a power cut, a hang that the hardware watchdog reset, or a kernel crash)."
+	when := "Last pressure"
+	if !prev.At.IsZero() {
+		when += " at " + prev.At.UTC().Format("2006-01-02 15:04:05 UTC")
+	}
+	msg += " " + when + ": " + prev.Snapshot + "."
+	if prev.High != "" {
+		msg += " Pressure was HIGH on " + prev.High + " then."
+	}
+	return msg
+}
+
+func readState(path string) (pressureState, bool) {
+	var st pressureState
+	f, err := os.Open(path)
+	if err != nil {
+		return st, false
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, 8<<10))
+	if err != nil || json.Unmarshal(raw, &st) != nil {
+		return st, false
+	}
+	return st, true
+}
+
+// writeState replaces the file in one rename. A torn file after a power
+// cut is then the old file or the new file, never a part. Only the clean
+// mark waits for the disk: the periodic write is small, and the kernel
+// commits it within seconds.
+func writeState(path string, st pressureState) error {
+	raw, err := json.Marshal(st)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err = f.Write(append(raw, '\n')); err == nil && st.Clean {
+		err = f.Sync()
+	}
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// stateWriter writes the state file in its own goroutine. A disk that is
+// slow under pressure then never delays the watch. Only the newest state
+// waits: put replaces a state that is not written yet.
+type stateWriter struct {
+	path   string
+	errw   io.Writer
+	ch     chan pressureState
+	done   chan struct{}
+	failed bool
+}
+
+func newStateWriter(path string, errw io.Writer) *stateWriter {
+	return &stateWriter{path: path, errw: errw, ch: make(chan pressureState, 1), done: make(chan struct{})}
+}
+
+func (w *stateWriter) run() {
+	defer close(w.done)
+	for st := range w.ch {
+		if err := writeState(w.path, st); err != nil && !w.failed {
+			// One line, not one each 30 s.
+			fmt.Fprintf(w.errw, "pressure: state file not written: %v\n", err)
+			w.failed = true
+		}
+	}
+}
+
+// put and finish are called from the loop goroutine only.
+func (w *stateWriter) put(st pressureState) {
+	select {
+	case w.ch <- st:
+		return
+	default:
+	}
+	select {
+	case <-w.ch:
+	default:
+	}
+	select {
+	case w.ch <- st:
+	default:
+	}
+}
+
+// finish writes st as the last state and waits for it.
+func (w *stateWriter) finish(st pressureState) {
+	select {
+	case <-w.ch:
+	default:
+	}
+	w.ch <- st
+	close(w.ch)
+	<-w.done
 }
 
 // Check refuses a value that would make the watch fire always or never.

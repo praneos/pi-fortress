@@ -66,6 +66,10 @@ SystemCallFilter=~@privileged
 # before it starts the unit. A "-" lets the unit start before the first
 # apply. Then the sidecar cannot save its place until apply restarts it.
 ReadWritePaths=-/var/lib/pi-fortress/alert.offset -/var/lib/pi-fortress/alert-notice.offset -/var/lib/pi-fortress/alert.last
+# The pressure state file (pressure.json). systemd makes this directory,
+# owned by pf-sidecar, and makes it writable. The state is replaced with a
+# rename, and a rename needs a directory that the unit can write.
+StateDirectory=pi-fortress/alert
 InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine
 # PF_ALERT_FLAGS: the -pressure-* thresholds, or -pressure=false
 # (docs/user_guide/pi_setup.md "Pressure alerts"). apply does not write
