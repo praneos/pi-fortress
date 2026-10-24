@@ -42,3 +42,20 @@ func TestRunJoinsTheKeyReader(t *testing.T) {
 		})
 	}
 }
+
+// A terminal can enter raw mode again after a Restore, as the real one
+// does. A second Run on the same terminal also joins its key reader.
+func TestRunTwiceOnOneTerminal(t *testing.T) {
+	c, _ := testConfig(t)
+	f := NewFake(80, 24)
+	f.Hold = true
+	for i := 0; i < 2; i++ {
+		f.Type("q")
+		if err := New(c, f).Run(); err != nil {
+			t.Fatal(err)
+		}
+		if n := f.InRead(); n != 0 || f.Raw {
+			t.Fatalf("run %d: %d reader(s) left, raw %v", i, n, f.Raw)
+		}
+	}
+}
