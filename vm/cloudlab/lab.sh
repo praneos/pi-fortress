@@ -162,6 +162,16 @@ cmd_up() {
       vagrant provision gw
     fi
   fi
+  # The same for a client that already runs: up does not copy the tree,
+  # and a provision from an empty /vagrant fails or is marked done.
+  for vm in "${rest[@]}"; do
+    created "${vm}" || continue
+    if vagrant ssh "${vm}" -c true >/dev/null 2>&1 && ! vagrant ssh "${vm}" -c 'test -d /vagrant/vm' >/dev/null 2>&1; then
+      echo "lab.sh: ${vm} has no checkout at /vagrant; rsync and provision again"
+      vagrant rsync "${vm}"
+      vagrant provision "${vm}"
+    fi
+  done
   # Clients start in parallel. Each client waits for the gateway itself.
   ((${#rest[@]} == 0)) || vagrant up --provider=libvirt "${rest[@]}"
   cmd_ssh_config >/dev/null
