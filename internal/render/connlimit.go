@@ -310,8 +310,10 @@ func (c *Config) loadConnLimits() error {
 func (c *Config) segConnBudget(s *Segment, file string) error {
 	b := c.connBudgets[connSeg]
 	for _, suffix := range []string{"CONN_PER_IP", "NEW_PER_IP", "CONN_TOTAL", "NEW_TOTAL"} {
+		// An empty value is the SEG_ value, as an empty SEG_ key is the
+		// default. It is not "0", which turns the limit off.
 		v, ok := s.ConnLimits[suffix]
-		if !ok {
+		if !ok || v == "" {
 			continue
 		}
 		n, m, err := parseConnValue(connSeg+"_"+suffix, v, 0, 0)
