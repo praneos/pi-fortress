@@ -82,7 +82,7 @@ func CheckPrefix(p netip.Prefix) error {
 // case, no trailing dot. DNS names are case-insensitive, and the trailing
 // dot is the root. So both spellings are one name, and must get one address.
 func Normalise(name string) (string, error) {
-	n := strings.ToLower(strings.TrimSuffix(name, "."))
+	n := strings.TrimSuffix(name, ".")
 	// A second trailing dot is an empty label. If n kept it, the journal
 	// reader would normalise n again, get a different name, and skip the
 	// line. The address would then go to the next name after a restart.
@@ -97,7 +97,9 @@ func Normalise(name string) (string, error) {
 			return "", ErrName
 		}
 	}
-	return n, nil
+	// Lowercase after the check: strings.ToLower folds some non-ASCII
+	// letters (the Kelvin sign) to ASCII ones.
+	return strings.ToLower(n), nil
 }
 
 // The pool gives out host .1 to .254 of each /24 in the prefix, never .0
