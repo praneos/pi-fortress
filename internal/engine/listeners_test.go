@@ -3,9 +3,13 @@ package engine
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
 	"net"
 	"net/netip"
+	"os"
+	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -134,5 +138,87 @@ func TestInspectListenerHasItsOwnPerSourceCap(t *testing.T) {
 	}
 	if held(dialFrom(t, "127.0.0.1", agent.Addr().String())) {
 		t.Fatal("second agent connection admitted over MaxPerSource=1")
+	}
+}
+
+// flakyListener fails Accept with EMFILE while fails is above zero, then
+// accepts on the real listener.
+type flakyListener struct {
+	net.Listener
+	fails atomic.Int32
+	calls atomic.Int32
+}
+
+func (l *flakyListener) Accept() (net.Conn, error) {
+	l.calls.Add(1)
+	if l.fails.Add(-1) >= 0 {
+		return nil, &net.OpError{Op: "accept", Net: "tcp", Err: os.NewSyscallError("accept4", syscall.EMFILE)}
+	}
+	return l.Listener.Accept()
+}
+
+// An accept error that can pass (EMFILE, ENOBUFS) does not stop the
+// engine. The loop waits, accepts again and serves the next agent.
+func TestAcceptErrorIsRetried(t *testing.T) {
+	agent, desk := twoListeners(t)
+	ln := &flakyListener{Listener: agent}
+	ln.fails.Store(3)
+	logs := &syncBuf{}
+	e := &Engine{
+		CA:      testStore(t),
+		OrigDst: func(net.Conn) (netip.AddrPort, error) { return netip.MustParseAddrPort("192.0.2.24:443"), nil },
+		Log:     log.New(logs, "", 0),
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { errc <- e.Serve(ctx, ln, desk) }()
+	c, err := net.DialTimeout("tcp", agent.Addr().String(), time.Second)
+	if err != nil {
+		t.Fatalf("dial after the accept errors: %v", err)
+	}
+	defer c.Close()
+	if !held(c) {
+		t.Fatalf("the connection after the accept errors was not served; log:\n%s", logs)
+	}
+	waitLog(t, logs, "too many open files")
+	c.Close()
+	cancel()
+	select {
+	case err := <-errc:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Serve: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return after cancel")
+	}
+}
+
+// A lasting accept error does not spin the loop: it backs off. A cancel
+// during the backoff still stops Serve at once.
+func TestAcceptErrorBacksOff(t *testing.T) {
+	agent, desk := twoListeners(t)
+	ln := &flakyListener{Listener: agent}
+	ln.fails.Store(1 << 30)
+	e := &Engine{CA: testStore(t), Log: log.New(io.Discard, "", 0)}
+	ctx, cancel := context.WithCancel(context.Background())
+	errc := make(chan error, 1)
+	go func() { errc <- e.Serve(ctx, ln, desk) }()
+	select {
+	case err := <-errc:
+		t.Fatalf("Serve returned on an accept error: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	// 5, 10, 20, 40, 80, 160 ms: about 7 calls in 300 ms.
+	if n := ln.calls.Load(); n > 15 {
+		t.Fatalf("%d accept calls in 300 ms; the loop does not back off", n)
+	}
+	cancel()
+	select {
+	case err := <-errc:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Serve: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Serve did not return after cancel during the backoff")
 	}
 }

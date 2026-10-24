@@ -144,8 +144,8 @@ var testHookLeaf atomic.Pointer[func(sni string)]
 // Serve accepts on ln, the agent address, and on inspect, the address of
 // each segment with INSPECT=on. All listeners share MaxConns. The cap for
 // each source is MaxPerSource on ln and InspectMaxPerSource on inspect.
-// Serve returns when the context ends or when one listener fails. Then it
-// closes all of them.
+// Serve returns when the context ends or when one listener is closed. Then
+// it closes all of them. Other accept errors are retried with a backoff.
 func (e *Engine) Serve(ctx context.Context, ln net.Listener, inspect ...net.Listener) error {
 	if ln == nil {
 		return errors.New("engine: no listener")
@@ -206,15 +206,41 @@ func (e *Engine) Serve(ctx context.Context, ln net.Listener, inspect ...net.List
 	return err
 }
 
+// Backoff after a failed accept, as in net/http: 5 ms, then double up to 1 s.
+const (
+	acceptBackoffMin = 5 * time.Millisecond
+	acceptBackoffMax = time.Second
+)
+
 func (e *Engine) accept(ctx context.Context, ln net.Listener, perSrc *srclimit.PerSource, inspect bool) error {
+	var delay time.Duration
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
-			return err
+			// A closed listener never accepts again, and a retry would only
+			// spin. Return, and Serve stops the others: systemd restarts
+			// the whole engine.
+			if errors.Is(err, net.ErrClosed) {
+				return err
+			}
+			// Other errors (EMFILE, ENFILE, ENOBUFS, ENOMEM, ECONNABORTED)
+			// can pass. A return here would cut each live splice, so wait
+			// and accept again.
+			delay = min(max(2*delay, acceptBackoffMin), acceptBackoffMax)
+			e.logf("accept: %v; retry in %v", err, delay)
+			t := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return nil
+			case <-t.C:
+			}
+			continue
 		}
+		delay = 0
 		// The ceiling is measured from here, not from the first byte of
 		// the relay. All that the connection costs the gateway starts at
 		// accept. A client that stalls the handshake must not buy
