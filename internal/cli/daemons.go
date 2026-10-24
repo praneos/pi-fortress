@@ -467,18 +467,37 @@ const adminMaxConns = 16
 // on its own goroutine, at most max at one time. It closes and logs one
 // more connection past that limit immediately. A caller that retries gets
 // in when a slot becomes free. A flood costs an accept and a close, not a
-// goroutine.
+// goroutine. A failed accept waits 5 ms, then double up to 1 s, as in
+// net/http. So a lasting EMFILE does not spin the CPU and flood the journal.
 func acceptCapped(ctx context.Context, ln net.Listener, max int, what string, serve func(net.Conn) error) {
 	sem := make(chan struct{}, max)
+	var delay time.Duration
 	for {
 		c, err := ln.Accept()
 		if err != nil {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Print(err)
+			// A closed listener never accepts again. Stop, do not spin.
+			if errors.Is(err, net.ErrClosed) {
+				log.Printf("%s: %v", what, err)
+				return
+			}
+			delay = min(2*delay, time.Second)
+			if delay == 0 {
+				delay = 5 * time.Millisecond
+			}
+			log.Printf("%s: %v; retry in %v", what, err, delay)
+			t := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				return
+			case <-t.C:
+			}
 			continue
 		}
+		delay = 0
 		select {
 		case sem <- struct{}{}:
 		default:
