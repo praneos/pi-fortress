@@ -353,3 +353,14 @@ func TestAssignRefusesAnAddress(t *testing.T) {
 	}
 	assign(t, p, "203.0.114.9.example", t0)
 }
+
+// A non-ASCII letter that lowercases to an ASCII one is refused, not
+// folded into another name.
+func TestNormaliseRefusesKelvinSign(t *testing.T) {
+	if n, err := Normalise("Kx.example"); err == nil {
+		t.Fatalf("got %q, want ErrName", n)
+	}
+	if n, err := Normalise("KX.Example."); err != nil || n != "kx.example" {
+		t.Fatalf("got %q, %v", n, err)
+	}
+}
