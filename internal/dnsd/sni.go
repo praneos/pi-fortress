@@ -83,8 +83,7 @@ type sniHeld struct {
 
 type sniFlow struct {
 	segs     map[uint32][]byte // TCP sequence number -> payload
-	first    uint32            // sequence number of the first data byte
-	syn      bool              // first is known from the SYN, not guessed
+	first    uint32            // sequence number of the first data byte, from the SYN
 	bytes    int
 	held     []sniHeld
 	deciding bool
@@ -257,28 +256,35 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 		delete(c.done, key)
 	}
 	f := c.flows[key]
-	if f == nil && (len(payload) > 0 || flags&tcpSYN != 0) {
+	// The SYN is in the queue too (the gate marks the flow on it). Only the
+	// SYN gives the exact start of the data. Data with no flow and no live
+	// verdict has no known start: the check did not see the SYN, or it
+	// forgot a verdict that no packet carried. A segment from the middle of
+	// the stream could hold a ClientHello that the check accepts, while the
+	// server reads the bytes before it. Thus the data is refused.
+	if f == nil && !syn && len(payload) > 0 {
+		f = &sniFlow{held: []sniHeld{{p.ID, p.Mark}}}
+		c.flows[key] = f
+		c.mu.Unlock()
+		c.decide(key, f, sniBad, "data with no SYN before it")
+		return
+	}
+	if f == nil && syn {
 		if len(c.flows) >= sniMaxFlows {
 			c.mu.Unlock()
 			c.verdict(p.ID, nfq.Drop, nil)
 			return
 		}
-		nf := &sniFlow{segs: map[uint32][]byte{}, first: seq}
+		nf := &sniFlow{segs: map[uint32][]byte{}, first: seq + 1}
 		c.flows[key] = nf
 		nf.timer = time.AfterFunc(c.wait, func() { c.decide(key, nf, sniBad, c.timeoutWhy(nf)) })
 		f = nf
 	}
-	// The SYN is in the queue too (the gate marks the flow on it). The SYN
-	// gives the exact start of the data. Thus the check does not read a
-	// second segment that arrives before the first as the start of the
-	// stream. Only the first SYN, before any data, sets it. The server
-	// ignores a later SYN with a different sequence number. If the check took
-	// it, it would read the stream from a different place. Thus it is refused.
+	// The server ignores a later SYN with a different sequence number. If the
+	// check took it, it would read the stream from a different place. Thus
+	// it is refused.
 	if syn {
-		switch {
-		case !f.syn && f.bytes == 0:
-			f.first, f.syn = seq+1, true
-		case !f.syn || seq+1 != f.first:
+		if seq+1 != f.first {
 			c.mu.Unlock()
 			c.decide(key, f, sniBad, "SYN moves the start of the stream")
 			c.verdict(p.ID, nfq.Drop, nil)
@@ -315,9 +321,6 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 	if !dup || len(payload) > len(old) {
 		f.segs[seq] = append([]byte(nil), payload...)
 		f.bytes += len(payload) - len(old)
-		if !f.syn && seqBefore(seq, f.first) {
-			f.first = seq
-		}
 	}
 	if f.deciding {
 		c.mu.Unlock()
@@ -419,7 +422,9 @@ func (c *sniCheck) decide(key sniFlowKey, f *sniFlow, mark uint32, why string) {
 		return
 	}
 	delete(c.flows, key)
-	f.timer.Stop()
+	if f.timer != nil { // nil: data refused before it had a flow
+		f.timer.Stop()
+	}
 	now := c.now()
 	if len(c.done) >= sniMaxDone || now.Sub(c.swept) >= sniSweep {
 		c.sweepDone(now)
