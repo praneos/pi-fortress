@@ -160,6 +160,7 @@ func TestSNIAcceptsANameThatResolvesToTheAddress(t *testing.T) {
 	r := &fakeResolve{ans: map[string][]netip.Addr{"news.ycombinator.com": hn}}
 	c, q := newTestCheck(t, r)
 	ctx := context.Background()
+	c.packet(ctx, nfq.Packet{ID: 100, Payload: tcp4f("209.216.230.207", 999, tcpSYN, nil)})
 	c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4("209.216.230.207", 1000, nil)})
 	if v := q.wait(t, 1); v.v != nfq.Accept || v.set {
 		t.Fatalf("a pending flow's empty ACK: %+v, want a plain accept", v)
@@ -201,6 +202,7 @@ func TestSNIHoldsASplitClientHello(t *testing.T) {
 	}
 	// And with only the first half, the check makes no decision yet.
 	c2, q2 := newTestCheck(t, r)
+	c2.packet(ctx, nfq.Packet{ID: 19, Payload: tcp4f("172.66.147.243", 6999, tcpSYN, nil)})
 	c2.packet(ctx, nfq.Packet{ID: 20, Payload: tcp4("172.66.147.243", 7000, hello[:cut])})
 	q2.none(t, 20)
 	c2.packet(ctx, nfq.Packet{ID: 21, Payload: tcp4("172.66.147.243", 7000+uint32(cut), hello[cut:])})
@@ -233,6 +235,7 @@ func TestSNIKeepsTheLongerRetransmit(t *testing.T) {
 	// server does not get.
 	c2, q2 := newTestCheck(t, r)
 	first := clientHello(t, "evil.example")[:cut]
+	c2.packet(ctx, nfq.Packet{ID: 19, Payload: tcp4f("172.66.147.243", 6999, tcpSYN, nil)})
 	c2.packet(ctx, nfq.Packet{ID: 20, Payload: tcp4("172.66.147.243", 7000, first)})
 	q2.none(t, 20)
 	c2.packet(ctx, nfq.Packet{ID: 21, Payload: tcp4("172.66.147.243", 7000, hello)})
@@ -430,6 +433,7 @@ func TestSNIRefuses(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, q := newTestCheck(t, r)
+			c.packet(ctx, nfq.Packet{ID: 100, Payload: tcp4f(tc.dst, 0, tcpSYN, nil)})
 			c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4(tc.dst, 1, tc.data)})
 			if v := q.wait(t, 1); v.v != nfq.Repeat || v.mark != tc.want {
 				t.Fatalf("verdict %+v, want mark %#x", v, tc.want)
@@ -463,6 +467,7 @@ func TestSNIOpaqueRanges(t *testing.T) {
 			if tc.opaque {
 				c.opaque = []netip.Prefix{netip.MustParsePrefix("57.144.0.0/14")}
 			}
+			c.packet(ctx, nfq.Packet{ID: 100, Payload: tcp4f(tc.dst, 0, tcpSYN, nil)})
 			c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4(tc.dst, 1, tc.data)})
 			if v := q.wait(t, 1); v.v != nfq.Repeat || v.mark != tc.want {
 				t.Fatalf("verdict %+v, want mark %#x", v, tc.want)
@@ -476,6 +481,7 @@ func TestSNIOpaqueRanges(t *testing.T) {
 func TestSNIGivesUpOnAnUnfinishedHello(t *testing.T) {
 	c, q := newTestCheck(t, &fakeResolve{})
 	hello := clientHello(t, "example.com")
+	c.packet(context.Background(), nfq.Packet{ID: 100, Payload: tcp4f("198.51.100.7", 0, tcpSYN, nil)})
 	c.packet(context.Background(), nfq.Packet{ID: 1, Payload: tcp4("198.51.100.7", 1, hello[:100])})
 	q.none(t, 1)
 	if v := q.wait(t, 1); v.mark != sniBad {
@@ -775,14 +781,23 @@ func TestSNIJudgesAreBoundedAndAwaited(t *testing.T) {
 		return []netip.Addr{netip.MustParseAddr(dst)}, false, nil
 	}, nil)
 	c.slots = make(chan struct{}, 1)
+	var why string // the decide that logs is synchronous here
+	c.logf = func(format string, args ...any) { why = fmt.Sprintf(format, args...) }
 	ctx := context.Background()
+	c.packet(ctx, nfq.Packet{ID: 100, Payload: tcp4f(dst, 999, tcpSYN, nil)})
 	c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4(dst, 1000, clientHello(t, "a.example"))})
 	q.none(t, 1)
-	second := tcp4(dst, 2000, clientHello(t, "b.example"))
-	second[21]++ // another source port: a second flow
+	// Another source port: a second flow.
+	secondSYN, second := tcp4f(dst, 1999, tcpSYN, nil), tcp4(dst, 2000, clientHello(t, "b.example"))
+	secondSYN[21]++
+	second[21]++
+	c.packet(ctx, nfq.Packet{ID: 101, Payload: secondSYN})
 	c.packet(ctx, nfq.Packet{ID: 2, Payload: second})
 	if v := q.wait(t, 2); v.mark&sniBits != sniBad {
 		t.Fatalf("flow over the cap: %+v", v)
+	}
+	if !strings.Contains(why, "too many name lookups") {
+		t.Fatalf("refused for %q, want the lookup cap", why)
 	}
 	ran := make(chan struct{})
 	go func() { c.run(ctx); close(ran) }() // Recv fails at once
@@ -795,5 +810,36 @@ func TestSNIJudgesAreBoundedAndAwaited(t *testing.T) {
 	<-ran
 	if v := q.wait(t, 1); v.mark&sniBits != sniOK {
 		t.Fatalf("first flow: %+v", v)
+	}
+}
+
+// Only the SYN gives the start of a stream. A flow that timed out with no
+// data held gave its verdict to no packet. After the check forgets that
+// verdict, a segment from the middle of the stream must not start a new
+// flow there: the server would read the bytes before it, which the check
+// never saw.
+func TestSNIRefusesDataWithNoSYN(t *testing.T) {
+	dst := "209.216.230.207"
+	c, q := newTestCheck(t, &fakeResolve{ans: map[string][]netip.Addr{"news.ycombinator.com": hn}})
+	clk := &volClock{t: time.Date(2026, 10, 24, 10, 0, 0, 0, time.UTC)}
+	c.now = clk.now
+	c.wait = 10 * time.Millisecond
+	ctx := context.Background()
+	c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4f(dst, 999, tcpSYN, nil)})
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(time.Millisecond) {
+		c.mu.Lock()
+		n := len(c.flows)
+		c.mu.Unlock()
+		if n == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the flow did not time out")
+		}
+	}
+	clk.add(sniDone + time.Second)
+	c.packet(ctx, nfq.Packet{ID: 2, Payload: tcp4(dst, 1300, clientHello(t, "news.ycombinator.com"))})
+	if v := q.wait(t, 2); v.mark != sniBad {
+		t.Fatalf("data from the middle of the stream: %+v, want the bad mark", v)
 	}
 }
