@@ -473,6 +473,8 @@ When the segment exists, `sudo pf tui` has a menu entry for it. The entry has th
 - **Filtering** shows the lists of the agent network, read-only. A segment resolves with these lists.
 - In **Settings**, Enter changes the value of `ADMIN`, `BLOCK_DIRECT_IP`, `PARANOID`, and `DHCP`. For `SSH_TO`, Enter asks for a value.
 - Enter on one end of the DHCP range asks for the two ends, because apply refuses one end without the other. Thus set the range before you set `DHCP` to on.
+- **Connection budget** has the `CONN_PER_IP`, `NEW_PER_IP`, `CONN_TOTAL`, and `NEW_TOTAL` of this segment only. For a key that the file does not have, the row shows the `SEG_` value that applies, from **System > Settings**. Type `-` to remove the key from the file. Then the segment uses the `SEG_` value again. `0` disables one limit.
+- The **Settings** of the agent network and of the home network also have their connection budget, the `AGENT_` and `HOUSE_` keys from step 4. These rows change `net.env.local`, as the rows in **System > Settings** do.
 - The TUI refuses a value that apply would refuse. It then does not change the file.
 - With `DHCP` on, the row below it gives the name of the reservations file. You edit this file manually.
 - `A` runs the `apply --local` that makes the change take effect.

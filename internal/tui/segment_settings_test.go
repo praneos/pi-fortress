@@ -167,3 +167,67 @@ func TestSettingsEditsASegmentsSSHToThroughThePrompt(t *testing.T) {
 		t.Fatalf("the refusal does not say why:\n%s", f.Last())
 	}
 }
+
+// The budget of one plain segment is on its own screen. An absent key
+// shows the value that applies and where it comes from, not a blank. The
+// prompt writes the key, and "-" removes the line again, so that the
+// segment takes the System value.
+func TestSettingsSetsASegmentsOwnConnectionBudget(t *testing.T) {
+	c, path := segSettings(t)
+	last := run(t, c, NewFake(120, 48).Type(segmentDown("CONN_PER_IP"))).Last()
+	for _, want := range []string{"Connection budget", "[CONN_PER_IP]", "Segments value in System > Settings"} {
+		if !strings.Contains(last, want) {
+			t.Fatalf("no %q on the desk's settings:\n%s", want, last)
+		}
+	}
+	if got := lineWith(last, "Flows per device"); !strings.Contains(got, "128 (default, from System > Settings)") {
+		t.Fatalf("an absent CONN_PER_IP does not show the inherited default: %q", got)
+	}
+	if err := os.WriteFile(c.NetEnvLocal, []byte("SEG_CONN_TOTAL='0'\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	f := run(t, c, NewFake(120, 48).Type(segmentDown("CONN_PER_IP")).Press(KeyEnter).Type("512").Press(KeyEnter))
+	if raw, _ := os.ReadFile(path); !strings.Contains(string(raw), "CONN_PER_IP=512\n") {
+		t.Fatalf("the prompt did not write the budget:\n%s", raw)
+	}
+	if got := lineWith(f.Last(), "Flows per device"); !strings.Contains(got, "512") || strings.Contains(got, "System") {
+		t.Fatalf("a set CONN_PER_IP does not show as its own value: %q", got)
+	}
+	if got := lineWith(f.Last(), "Flows in total"); !strings.Contains(got, "0 (off, from System > Settings)") {
+		t.Fatalf("an inherited 0 does not show as off: %q", got)
+	}
+	// The prompt opens on the current value, "512". Thus clear it first.
+	clear3 := func(f *Fake) *Fake { return f.Press(KeyBackspace).Press(KeyBackspace).Press(KeyBackspace) }
+	f = run(t, c, clear3(NewFake(120, 48).Type(segmentDown("CONN_PER_IP")).Press(KeyEnter)).Type("8").Press(KeyEnter))
+	if raw, _ := os.ReadFile(path); !strings.Contains(string(raw), "CONN_PER_IP=512\n") {
+		t.Fatalf("a cap under the floor went in:\n%s", raw)
+	}
+	if !strings.Contains(f.Last(), "CONN_PER_IP") {
+		t.Fatalf("the refusal does not name the key:\n%s", f.Last())
+	}
+	run(t, c, clear3(NewFake(120, 48).Type(segmentDown("CONN_PER_IP")).Press(KeyEnter)).Type("-").Press(KeyEnter))
+	if raw, _ := os.ReadFile(path); strings.Contains(string(raw), "CONN_PER_IP") {
+		t.Fatalf("- did not remove the line:\n%s", raw)
+	}
+}
+
+// The agent and the house have their budget on their own screens too. The
+// rows edit net.env.local, as the rows in System > Settings do.
+func TestSettingsShowsTheAgentAndHouseBudgetOnTheirOwnScreens(t *testing.T) {
+	c, _ := testConfig(t)
+	run(t, c, NewFake(120, 48).Type(keys(netAgent, secSettings)).Press(KeyEnter).Type("256").Press(KeyEnter))
+	raw, err := os.ReadFile(c.NetEnvLocal)
+	if err != nil || !strings.Contains(string(raw), "AGENT_CONN_PER_IP='256'") {
+		t.Fatalf("the agent screen did not write AGENT_CONN_PER_IP: %v\n%s", err, raw)
+	}
+	n := 0
+	for _, g := range houseGroups {
+		n += len(g.items)
+	}
+	last := run(t, c, NewFake(120, 60).Type(keys(netHouse, secSettings)+strings.Repeat("j", n))).Last()
+	for _, want := range []string{"Connection budget", "[HOUSE_CONN_PER_IP]", "New flows in total"} {
+		if !strings.Contains(last, want) {
+			t.Fatalf("no %q on the house's settings:\n%s", want, last)
+		}
+	}
+}
