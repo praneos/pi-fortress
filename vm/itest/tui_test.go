@@ -135,6 +135,10 @@ var tuiHouseSettings = []struct{ key, label string }{
 	{"HOUSE_DHCP_START", "DHCP range start"},
 	{"HOUSE_DHCP_END", "DHCP range end"},
 	{"HOUSE_ADMIN_IP", "Admin machine"},
+	{"HOUSE_CONN_PER_IP", "Flows per device"},
+	{"HOUSE_NEW_PER_IP", "New flows per device"},
+	{"HOUSE_CONN_TOTAL", "Flows in total"},
+	{"HOUSE_NEW_TOTAL", "New flows in total"},
 }
 
 // tuiHouseGroups head the house rows, in order.
@@ -750,7 +754,7 @@ func tuiFooterTests(t *testing.T) {
 	at["house/Settings"].must(t, "house Settings hint", "Enter edit  A apply"+tuiFocusHint)
 	at["agent/Activity"].must(t, "agent Activity hint", "Tab next view  j/k scroll"+tuiFocusHint)
 	at["agent/Keys"].must(t, "Keys hint", "u unlock  L lock  c claim"+"  x disable  R restore  p purge  d delete"+tuiFocusHint)
-	at["agent/Settings"].must(t, "the agent network's Settings are read-only", "Fixed by the fence", "j/k scroll"+tuiFocusHint)
+	at["agent/Settings"].must(t, "the agent network's Settings edit only the connection budget", "only the connection budget is editable", "Enter edit  A apply"+tuiFocusHint)
 	at["system/Actions"].must(t, "Actions hint", "Enter run"+tuiFocusHint)
 	at["system/Feeds"].must(t, "Feeds hint", "e enable/disable"+tuiFocusHint)
 	for _, p := range box.plain {
