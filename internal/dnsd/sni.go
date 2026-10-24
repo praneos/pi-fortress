@@ -303,6 +303,16 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 		c.verdict(p.ID, nfq.Drop, nil)
 		return
 	}
+	// The ClientHello is at the start of the stream. A segment that is not
+	// all in the first sniMaxBytes after the SYN is not part of it. In that
+	// window the compare of two sequence numbers does not wrap. It wraps when
+	// they are 2^31 apart.
+	if off := seq - f.first; off >= sniMaxBytes || uint32(len(payload)) > sniMaxBytes-off {
+		c.mu.Unlock()
+		c.decide(key, f, sniBad, "segment outside the start of the stream")
+		c.verdict(p.ID, nfq.Drop, nil)
+		return
+	}
 	// A retransmit can repeat bytes that the check holds, from the same or a
 	// different sequence number, and can carry more: the client joins the
 	// segments that are not yet acknowledged. Which copy of a repeated byte a

@@ -843,3 +843,25 @@ func TestSNIRefusesDataWithNoSYN(t *testing.T) {
 		t.Fatalf("data from the middle of the stream: %+v, want the bad mark", v)
 	}
 }
+
+// Two sequence numbers 2^31 apart compare as before each other both ways.
+// A segment far from the start of the stream is refused before the check
+// compares it with the held data.
+func TestSNIRefusesASegmentFarFromTheStart(t *testing.T) {
+	dst := "198.51.100.7"
+	for _, seq := range []uint32{1 + 1<<31, 1 + sniMaxBytes, 0, 1 + sniMaxBytes - 4} {
+		c, q := newTestCheck(t, &fakeResolve{})
+		ctx := context.Background()
+		c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4f(dst, 0, tcpSYN, nil)})
+		c.packet(ctx, nfq.Packet{ID: 2, Payload: tcp4(dst, seq, []byte("12345678"))})
+		// Data at the start, at once. The flow is gone, so this is late data
+		// of a refused flow. Before, it was compared with the far segment.
+		c.packet(ctx, nfq.Packet{ID: 3, Payload: tcp4(dst, 1, []byte("x"))})
+		if v := q.wait(t, 2); v.v != nfq.Drop {
+			t.Fatalf("segment at %#x: %+v, want a drop", seq, v)
+		}
+		if v := q.wait(t, 3); v.mark != sniBad {
+			t.Fatalf("after the segment at %#x: %+v", seq, v)
+		}
+	}
+}
