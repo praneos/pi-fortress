@@ -297,6 +297,20 @@ func TestJournalSkipsMappedAddress(t *testing.T) {
 	}
 }
 
+// A name with two trailing dots is refused. Its journal line would not
+// read back, so its address would go to another name after a restart.
+func TestAssignRefusesDoubleTrailingDot(t *testing.T) {
+	p := open(t, pool24, journal(t))
+	for _, name := range []string{"a.example..", "..", "a.."} {
+		if _, err := p.Assign(name, t0); !errors.Is(err, ErrName) {
+			t.Fatalf("%q: err %v, want ErrName", name, err)
+		}
+	}
+	if n, err := Normalise("a.example."); err != nil || n != "a.example" {
+		t.Fatalf("one trailing dot: %q %v", n, err)
+	}
+}
+
 func TestConcurrentAssignName(t *testing.T) {
 	path := journal(t)
 	p := open(t, pool24, path)

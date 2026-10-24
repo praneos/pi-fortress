@@ -83,7 +83,10 @@ func CheckPrefix(p netip.Prefix) error {
 // dot is the root. So both spellings are one name, and must get one address.
 func Normalise(name string) (string, error) {
 	n := strings.ToLower(strings.TrimSuffix(name, "."))
-	if n == "" || len(n) > maxName {
+	// A second trailing dot is an empty label. If n kept it, the journal
+	// reader would normalise n again, get a different name, and skip the
+	// line. The address would then go to the next name after a restart.
+	if n == "" || len(n) > maxName || strings.HasSuffix(n, ".") {
 		return "", ErrName
 	}
 	// The journal is space separated and newline terminated. So a name
