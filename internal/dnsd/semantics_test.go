@@ -103,6 +103,30 @@ func TestStripOPTRefusesAnOPTThatIsNotLast(t *testing.T) {
 	}
 }
 
+// A CNAME whose target reads into the OPT bytes parses while the OPT is
+// there. After the cut, the target is past the end, and no client can
+// read the message. stripOPT refuses it, so the cache does not keep it.
+func TestStripOPTRefusesANameThatReadsIntoTheOPT(t *testing.T) {
+	for name, rdata := range map[string][]byte{
+		// The label "b" ends with the root byte of the OPT name.
+		"label runs past rdlength": {1, 'b'},
+		// A pointer to the OPT name at offset 38.
+		"pointer forward to the OPT": {0xC0, 38},
+	} {
+		msg := []byte{0, 7, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 1,
+			1, 'a', 4, 't', 'e', 's', 't', 0, 0, 1, 0, 1, // a.test A IN
+			0xC0, 12, 0, 5, 0, 1, 0, 0, 0, 60, 0, 2} // CNAME, rdlength 2
+		msg = append(msg, rdata...)
+		msg = append(msg, 0, 0, 41, 0x04, 0xD0, 0, 0, 0, 0, 0, 0) // OPT at 38
+		if !readable(msg) {
+			t.Fatalf("%s: the fixture does not parse with its OPT", name)
+		}
+		if out, ok := stripOPT(msg); ok {
+			t.Errorf("%s: stripped to %x, which does not parse", name, out)
+		}
+	}
+}
+
 // A message with no OPT at all goes through without a change. There is
 // nothing to remove.
 func TestStripOPTLeavesAMessageWithoutOne(t *testing.T) {
