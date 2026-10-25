@@ -3,6 +3,7 @@ package backup
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -226,12 +227,13 @@ func (a *Archive) Plan(etcDir, policyDir string) (*Plan, error) {
 	}
 	sort.Strings(names)
 	for _, n := range names {
-		dest, err := p.dest(n)
+		top, rel, err := p.split(n)
 		if err != nil {
 			return nil, err
 		}
+		dest := filepath.Join(top, rel)
 		kind := "new"
-		if cur, err := os.ReadFile(dest); err == nil {
+		if cur, err := readUnder(top, rel); err == nil {
 			kind = "changed"
 			if string(cur) == string(a.Body[n]) {
 				kind = "same"
@@ -244,13 +246,36 @@ func (a *Archive) Plan(etcDir, policyDir string) (*Plan, error) {
 }
 
 func (p *Plan) dest(name string) (string, error) {
+	top, rel, err := p.split(name)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(top, rel), nil
+}
+
+// split gives the target root of an archive name (PolicyDir or EtcDir)
+// and the path of the file below that root. Apply writes each file
+// through an os.Root that it opens on that root.
+func (p *Plan) split(name string) (top, rel string, err error) {
 	if rest, ok := strings.CutPrefix(name, "policy/"); ok {
-		return filepath.Join(p.PolicyDir, rest), nil
+		return p.PolicyDir, filepath.FromSlash(rest), nil
 	}
 	if rest, ok := strings.CutPrefix(name, "etc/"); ok {
-		return filepath.Join(p.EtcDir, filepath.FromSlash(rest)), nil
+		return p.EtcDir, filepath.FromSlash(rest), nil
 	}
-	return "", fmt.Errorf("%w: %q", ErrPath, name)
+	return "", "", fmt.Errorf("%w: %q", ErrPath, name)
+}
+
+// readUnder reads rel below the root top. It does not follow a symlink
+// out of top. So the diff in Plan describes the file that Apply would
+// replace, and not a file in some other location.
+func readUnder(top, rel string) ([]byte, error) {
+	r, err := os.OpenRoot(top)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	return r.ReadFile(rel)
 }
 
 // warnings compares the archive with the box where it is about to land.
@@ -299,9 +324,24 @@ func (p *Plan) Changed() []Change {
 // because the restore said that it wrote. So each staged file is flushed
 // before the rename, and each touched directory once at the end. pf uses
 // the same order for the secrets store.
+//
+// Each write goes through an os.Root on EtcDir or PolicyDir. A directory
+// below that root can be a symlink. If it points out of the root, the
+// write fails and nothing is written there. The root directories are the
+// choice of the operator, so they are opened as they are.
 func (p *Plan) Apply() ([]Change, error) {
 	done := []Change{}
-	dirs := []string{}
+	roots := map[string]*os.Root{}
+	defer func() {
+		for _, r := range roots {
+			r.Close()
+		}
+	}()
+	type dirRef struct {
+		root     *os.Root
+		top, rel string
+	}
+	dirs := []dirRef{}
 	seenDir := map[string]bool{}
 	for _, c := range p.Changed() {
 		mode := fs.FileMode(0644)
@@ -311,46 +351,72 @@ func (p *Plan) Apply() ([]Change, error) {
 			}
 		}
 		mode = restoreMode(c.Name, mode)
-		if err := os.MkdirAll(filepath.Dir(c.Path), 0755); err != nil {
-			return done, err
-		}
-		tmp, err := os.CreateTemp(filepath.Dir(c.Path), ".pf-restore-")
+		top, rel, err := p.split(c.Name)
 		if err != nil {
 			return done, err
 		}
-		_, werr := tmp.Write(p.Archive.Body[c.Name])
-		if werr == nil {
-			werr = tmp.Sync()
+		r, ok := roots[top]
+		if !ok {
+			if err := os.MkdirAll(top, 0755); err != nil {
+				return done, err
+			}
+			if r, err = os.OpenRoot(top); err != nil {
+				return done, err
+			}
+			roots[top] = r
 		}
-		cerr := tmp.Close()
-		if werr == nil {
-			werr = cerr
-		}
-		if werr == nil {
-			werr = os.Chmod(tmp.Name(), mode)
-		}
-		if werr == nil {
-			werr = os.Rename(tmp.Name(), c.Path)
-		}
-		if werr != nil {
-			os.Remove(tmp.Name())
-			return done, werr
+		if err := writeUnder(r, rel, p.Archive.Body[c.Name], mode); err != nil {
+			return done, err
 		}
 		if testHookSynced != nil {
 			testHookSynced(c.Path)
 		}
-		if d := filepath.Dir(c.Path); !seenDir[d] {
+		if d := filepath.Join(top, filepath.Dir(rel)); !seenDir[d] {
 			seenDir[d] = true
-			dirs = append(dirs, d)
+			dirs = append(dirs, dirRef{root: r, top: top, rel: filepath.Dir(rel)})
 		}
 		done = append(done, c)
 	}
 	for _, d := range dirs {
-		if err := syncDir(d); err != nil {
+		if err := syncDir(d.root, d.top, d.rel); err != nil {
 			return done, err
 		}
 	}
 	return done, nil
+}
+
+// writeUnder stages body beside rel in the root r, flushes it, and
+// renames it over rel. All of the steps use the root, so none of them
+// follows a symlink out of it.
+func writeUnder(r *os.Root, rel string, body []byte, mode fs.FileMode) error {
+	dir := filepath.Dir(rel)
+	if err := r.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	tmp := filepath.Join(dir, ".pf-restore-"+rand.Text())
+	f, err := r.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	_, werr := f.Write(body)
+	if werr == nil {
+		werr = f.Chmod(mode)
+	}
+	if werr == nil {
+		werr = f.Sync()
+	}
+	cerr := f.Close()
+	if werr == nil {
+		werr = cerr
+	}
+	if werr == nil {
+		werr = r.Rename(tmp, rel)
+	}
+	if werr != nil {
+		r.Remove(tmp)
+		return werr
+	}
+	return nil
 }
 
 // restoreMode clamps the mode that an archive asks for. The archive is a
@@ -371,9 +437,11 @@ func restoreMode(name string, archived fs.FileMode) fs.FileMode {
 
 // syncDir flushes a directory, so the renames in it are on the medium and
 // not only in the page cache. A restore reports how many files it wrote.
-// Without this, that count describes the cache.
-func syncDir(dir string) error {
-	d, err := os.Open(dir)
+// Without this, that count describes the cache. The directory is rel in
+// the root r, and top is the path of that root.
+func syncDir(r *os.Root, top, rel string) error {
+	dir := filepath.Join(top, rel)
+	d, err := r.Open(rel)
 	if err != nil {
 		return err
 	}
