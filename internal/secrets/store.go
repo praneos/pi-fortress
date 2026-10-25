@@ -644,6 +644,13 @@ func (s *Store) writeMerged(lines []string, updates map[string]string) error {
 		stripped := strings.TrimSpace(raw)
 		if stripped != "" && !strings.HasPrefix(stripped, "#") && strings.Contains(raw, "=") {
 			key := strings.TrimSpace(strings.SplitN(raw, "=", 2)[0])
+			// The update keys come from EnvKey, with a lower-case slot.
+			// parseStoreLine also reads a slot in upper case. Thus the
+			// file key gets the same form before the lookup. Otherwise
+			// the old row stays and the update adds a second row.
+			if id, kind, ok := ParseEnvKey(key); ok {
+				key = EnvKey(id, kind)
+			}
 			if v, ok := updates[key]; ok {
 				out = append(out, key+"="+v)
 				seen[key] = struct{}{}

@@ -193,3 +193,30 @@ func TestHarvestReadErrorKeepsStore(t *testing.T) {
 		t.Fatalf("a store with no file: %v", err)
 	}
 }
+
+// The store reads a slot with upper-case hex as the same slot. Thus a
+// harvest replaces that row. It does not add a second row for the slot,
+// and the old value does not stay in the file.
+func TestHarvestReplacesUpperCaseSlotRow(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.env")
+	slot := "a1b2c3d4e5f67890"
+	other := EnvKey("b0b1b2b3b4b5b6b7", "GITHUB_TOKEN") + "=ghp_other"
+	if err := os.WriteFile(path, []byte(strings.ToUpper(slot)+"_CLAUDE_OAT=sk-ant-oat01-old\n"+other+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	st := Open(path)
+	if err := st.Harvest(slot, func(cur []Slot) ([]Slot, error) {
+		return []Slot{{ID: slot, Kind: "CLAUDE_OAT", Live: "sk-ant-oat01-new"}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := EnvKey(slot, "CLAUDE_OAT") + "=sk-ant-oat01-new\n" + other + "\n"
+	if string(raw) != want {
+		t.Fatalf("store %q, want %q", raw, want)
+	}
+}
