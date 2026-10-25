@@ -447,7 +447,7 @@ func (a *App) handle(k Key) {
 	}
 	switch k.Kind {
 	case KeyCtrlC:
-		a.quit = true
+		a.askQuit()
 	case KeyEsc:
 		if !a.closeDetail() {
 			a.focus = false
@@ -466,7 +466,7 @@ func (a *App) handle(k Key) {
 			case a.focus:
 				a.focus = false
 			default:
-				a.quit = true
+				a.askQuit()
 			}
 		case k.Rune == '?':
 			a.help = true
@@ -486,6 +486,22 @@ func (a *App) handle(k Key) {
 			a.menuKey(k)
 		}
 	}
+}
+
+// askQuit is q on the menu and Ctrl-C. With saved edits that no apply
+// took, it asks first and names the count. A silent quit leaves the
+// operator sure of a change that never took effect.
+func (a *App) askQuit() {
+	n := len(a.edits)
+	if n == 0 {
+		a.quit = true
+		return
+	}
+	what := "1 saved edit was never applied"
+	if n > 1 {
+		what = fmt.Sprintf("%d saved edits were never applied", n)
+	}
+	a.confirm(what+"; quit anyway", func() { a.quit = true })
 }
 
 // open shows menu entry i at the section where the operator last left it.
