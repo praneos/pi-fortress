@@ -162,8 +162,9 @@ func signBundle(t *testing.T, release, bundle string) {
 }
 
 // piApply is pi for a command that runs pf apply, sometimes two times. An
-// install whose doctor fails waits for the 90 s settle window, then does a
-// rollback and applies again, much longer than the 45 s of pi.
+// install whose doctor fails waits for the settle window (90 s by
+// default), then does a rollback and applies again, much longer than the
+// 45 s of pi.
 func piApply(t *testing.T, cmd string) string {
 	t.Helper()
 	out, err := ssh(t, 8*time.Minute, "pi", cmd)
@@ -330,7 +331,11 @@ func lifecycleTests(t *testing.T) {
 		before := shipVersion(t)
 		b := buildBrokenBundle(t, arch)
 		signBundle(t, release, b)
-		out := shipInstall(t, b, "")
+		// The unit does not exist, so the doctor cannot pass in any
+		// window. A 10 s window gives the same result as 90 s, but
+		// sooner. The good builds keep the 90 s default, so a slow
+		// unit start does not roll them back.
+		out := shipInstall(t, b, "-post-upgrade-settle 10s")
 		after := shipVersion(t)
 		if after != before {
 			t.Fatalf("a build that breaks DNS raised the version instead of reverting:\n%s", out)

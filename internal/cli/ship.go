@@ -107,6 +107,7 @@ func runShipInstall(args []string, _, stderr io.Writer) int {
 	fs.StringVar(&in.EtcDir, "etc-dir", "/etc/pi-fortress", "snapshotted into state.tar")
 	fs.StringVar(&in.LibDir, "lib-dir", "/var/lib/pi-fortress", "snapshotted into state.tar")
 	skipDoctor := fs.Bool("skip-post-upgrade-doctor", false, "do not run pf doctor --post-upgrade after apply, and do not arm the confirm timer (testing only)")
+	settleFor := postUpgradeSettleFlag(fs)
 	pf := fs.String("pf", "/usr/local/sbin/pf", "pf binary that runs apply")
 	if code, ok := parse(fs, args); !ok {
 		return code
@@ -132,7 +133,7 @@ func runShipInstall(args []string, _, stderr io.Writer) int {
 		// operator runs pf doctor by hand (docs/signed_ship.md,
 		// "Confirm or revert").
 		in.PostUpgradeCheck = func() error {
-			cmd := exec.Command(applyPF(in.Dir, *pf), "doctor", "--post-upgrade")
+			cmd := exec.Command(applyPF(in.Dir, *pf), postUpgradeArgs(*settleFor)...)
 			cmd.Stdout, cmd.Stderr = stderr, stderr
 			return cmd.Run()
 		}
@@ -165,6 +166,25 @@ func runShipInstall(args []string, _, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// postUpgradeSettleFlag adds -post-upgrade-settle to the ship install
+// flags. It is for tests and labs. A short window makes a bad build
+// roll back sooner. On a real box, a short window can roll back a good
+// build whose units start slowly. Keep the default there.
+func postUpgradeSettleFlag(fs *flag.FlagSet) *time.Duration {
+	return fs.Duration("post-upgrade-settle", postUpgradeSettle, "settle window that pf doctor --post-upgrade gets after apply (tests and labs only)")
+}
+
+// postUpgradeArgs is the doctor command line that ship install runs
+// after apply. It gives --settle only when the window is not the
+// default. Thus the production command line does not change.
+func postUpgradeArgs(settle time.Duration) []string {
+	args := []string{"doctor", "--post-upgrade"}
+	if settle != postUpgradeSettle {
+		args = append(args, "--settle", settle.String())
+	}
+	return args
 }
 
 // shipAlert posts a ship row to the alert webhook.

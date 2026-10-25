@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,5 +162,31 @@ func TestRunShipLint(t *testing.T) {
 	}
 	if code := runShipLint([]string{filepath.Join(dir, "absent.tar")}, nil, &errb); code != 1 {
 		t.Fatalf("missing file: code %d", code)
+	}
+}
+
+// pf ship install gives -post-upgrade-settle to pf doctor --post-upgrade
+// as --settle. With no flag, the window stays 90 s and the doctor
+// command line has no --settle.
+func TestShipInstallPostUpgradeSettleReachesDoctor(t *testing.T) {
+	if postUpgradeSettle != 90*time.Second {
+		t.Fatalf("default settle window = %v, want 90s", postUpgradeSettle)
+	}
+	for _, c := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "doctor --post-upgrade"},
+		{[]string{"-post-upgrade-settle", "90s"}, "doctor --post-upgrade"},
+		{[]string{"-post-upgrade-settle", "10s"}, "doctor --post-upgrade --settle 10s"},
+	} {
+		fs := newFlags("ship install", io.Discard)
+		d := postUpgradeSettleFlag(fs)
+		if err := fs.Parse(c.args); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Join(postUpgradeArgs(*d), " "); got != c.want {
+			t.Errorf("flags %q: doctor args = %q, want %q", c.args, got, c.want)
+		}
 	}
 }
