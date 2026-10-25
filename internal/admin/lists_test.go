@@ -161,3 +161,30 @@ func TestAllowDomainsRefusesLeadingDot(t *testing.T) {
 		t.Fatalf("file changed: %q", raw)
 	}
 }
+
+// The screen shows a hand-written line as it is in the file. The delete
+// normalises the token. Thus the delete compares each line in its normal
+// form too. If not, it deleted nothing and the screen said "deleted".
+// Comments and blank lines stay.
+func TestListRemoveMatchesTheNormalForm(t *testing.T) {
+	cases := []struct {
+		list, before, value, want string
+	}{
+		{"blacklist.domains", "# .ads.example\n.ads.example\nkeep.example\n", ".ads.example", "# .ads.example\nkeep.example\n"},
+		{"blacklist.domains", "*.ads.example # why\n\nkeep.example\n", "ads.example", "\nkeep.example\n"},
+		{"house.domains", "ADS.Example.\nkeep.example\n", "ads.example", "keep.example\n"},
+		{"blacklist.ips", "# 8.8.8.8\n8.8.8.8/32\n", "8.8.8.8", "# 8.8.8.8\n"},
+		{"blacklist.domains", "not a name\nads.example\n", "ads.example", "not a name\n"},
+	}
+	for _, tc := range cases {
+		c := &Config{PolicyDir: t.TempDir()}
+		path := filepath.Join(c.PolicyDir, tc.list)
+		write(t, path, tc.before)
+		if err := c.ListRemove(tc.list, tc.value); err != nil {
+			t.Fatalf("%s: ListRemove(%q) = %v", tc.list, tc.value, err)
+		}
+		if raw, _ := os.ReadFile(path); string(raw) != tc.want {
+			t.Errorf("%s: remove %q from %q gave %q, want %q", tc.list, tc.value, tc.before, raw, tc.want)
+		}
+	}
+}

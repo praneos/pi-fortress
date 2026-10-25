@@ -146,7 +146,7 @@ func (c *Config) ListRemove(name, value string) error {
 				if err != nil {
 					return err
 				}
-				return writeLines(c.listPath(name), removeToken(lines, tok, lineKey(kindDNSTypes)))
+				return writeLines(c.listPath(name), removeToken(lines, tok, lineKey(name)))
 			})
 		}
 	}
@@ -178,18 +178,21 @@ func removeToken(lines []string, tok string, key func(string) string) []string {
 	return slices.DeleteFunc(lines, func(l string) bool { return key(l) == tok })
 }
 
-// lineKey is the form of a file line that the code compares to a token. For
-// a one-word list, that is the line without its comment. People write a
-// dns_types.allow line by hand as often as the seat writes it. Thus
-// "Example.com  txt" must match the "example.com TXT" that the check gives
-// back. If not, a delete of the row on the screen would delete nothing.
-func lineKey(kind string) func(string) string {
+// lineKey is the form of a file line that the code compares to a token: the
+// line without its comment, in the form that ValidateToken gives back. People
+// write a line by hand as often as the seat writes it. Thus ".ads.example",
+// "*.ads.example" and "ADS.example." must match the "ads.example" that the
+// check gives back, and "Example.com  txt" must match "example.com TXT". If
+// not, a delete of the row on the screen would delete nothing. A line that
+// the check refuses stays as it is written.
+func lineKey(list string) func(string) string {
 	return func(l string) string {
 		tok := policycompile.StripLine(l)
-		if kind == kindDNSTypes && tok != "" {
-			if canon, err := CheckDNSTypesLine(tok); err == nil {
-				return canon
-			}
+		if tok == "" {
+			return ""
+		}
+		if canon, err := ValidateToken(list, tok); err == nil {
+			return canon
 		}
 		return tok
 	}
@@ -198,8 +201,7 @@ func lineKey(kind string) func(string) string {
 // listEdit writes the file again, one line at a time. Comments, blank lines
 // and the order of all lines that the edit does not touch stay the same.
 func (c *Config) listEdit(name, value string, fn func([]string, string, func(string) string) []string) error {
-	kind, known := listKind(name)
-	if !known {
+	if !knownList(name) {
 		return errList
 	}
 	tok, err := ValidateToken(name, value)
@@ -211,7 +213,7 @@ func (c *Config) listEdit(name, value string, fn func([]string, string, func(str
 		if err != nil {
 			return err
 		}
-		return writeLines(c.listPath(name), fn(lines, tok, lineKey(kind)))
+		return writeLines(c.listPath(name), fn(lines, tok, lineKey(name)))
 	})
 }
 
