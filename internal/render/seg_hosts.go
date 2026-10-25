@@ -34,7 +34,7 @@ func (h SegHost) String() string {
 // is not <name>.hosts, because a segment can have the name core or
 // dns-agent-go, and apply already writes .hosts files for those names.
 func SegmentHostsPath(segmentsDir, name string) string {
-	return filepath.Join(filepath.Dir(segmentsDir), "dhcp."+name+".hosts")
+	return filepath.Join(segmentsParent(segmentsDir), "dhcp."+name+".hosts")
 }
 
 // reHostName is the hostnameRE of internal/admin, which the reservations

@@ -55,6 +55,16 @@ func TestParanoidSegmentEnvFileCarriesTheCheckedPath(t *testing.T) {
 	}
 }
 
+// apply.sh seeds the allowlist in the parent of --segments-dir. render
+// must look in the same place when the flag ends in a slash.
+func TestParanoidSegmentAllowlistWithTrailingSlash(t *testing.T) {
+	segs := paranoidDesk(t)
+	env := load(t, Options{Net: lab, SegmentsDir: segs + "/"}).EnvFile()
+	if want := "SEG_ALLOW=('" + filepath.Join(filepath.Dir(segs), "allow.desk.domains") + "' '')\n"; !strings.Contains(env, want) {
+		t.Fatalf("apply.env lacks %q:\n%s", want, env)
+	}
+}
+
 // The shipped seed is a usable allowlist alone. A desk armed with the
 // unedited seed renders, so Claude Code continues to work on the desk.
 func TestParanoidSegmentAcceptsTheShippedSeed(t *testing.T) {
