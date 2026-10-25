@@ -354,6 +354,9 @@ func (c *client) get(rawURL, ua string, timeout time.Duration) (page, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return page{}, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
+	if !framed(resp) {
+		return page{}, fmt.Errorf("answer has no Content-Length and is not chunked, so its end cannot be checked")
+	}
 	// One byte past the cap, so the code can tell a body that reaches the cap
 	// from a body that stops just under it. LimitReader alone gives back an
 	// ordinary EOF at the boundary, and then a truncated feed looks like a
@@ -370,6 +373,26 @@ func (c *client) get(rawURL, ua string, timeout time.Duration) (page, error) {
 		return page{}, fmt.Errorf("feed is larger than %d bytes", maxBody)
 	}
 	return page{body: string(b), final: resp.Request.URL.String()}, nil
+}
+
+// framed says if the answer marks where its body ends, so that net/http
+// can tell a whole body from one that the connection cut.
+//
+// An HTTP/1.1 body with no Content-Length and no chunked encoding ends when
+// the server closes the connection. crypto/tls gives a clean io.EOF for a
+// TCP close at a TLS record boundary, also when no close_notify came first.
+// The client does not show if close_notify came. So such a body that a
+// dropped connection cuts reads as whole, with no error. The cut can land
+// at a line end, and then each line parses. fetch thus requires framing:
+//   - Content-Length: net/http gives io.ErrUnexpectedEOF for a body that
+//     is shorter.
+//   - chunked: the body must end with the last chunk of size 0.
+//   - gzip that the Transport decoded (Uncompressed): the gzip trailer has
+//     the length and the CRC of the data, and a cut gives an error. The
+//     Transport removes Content-Length in this case.
+//   - HTTP/2 and later: each stream ends with an END_STREAM flag.
+func framed(resp *http.Response) bool {
+	return resp.ContentLength >= 0 || slices.Contains(resp.TransferEncoding, "chunked") || resp.Uncompressed || resp.ProtoMajor >= 2
 }
 
 func parseDomain(token string) (string, bool) {
