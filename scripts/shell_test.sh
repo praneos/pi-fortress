@@ -120,6 +120,11 @@ bare=(env -u PF_RELEASE_URL -u PF_BUNDLE -u PF_VERSION PF_TEST_SKIP_ROOT=1 PF_TE
 install_case "with no release on GitHub yet" "no published release found" \
   "${bare[@]}" PF_TEST_LATEST_URL="${gh}/releases" bash install.sh
 
+# The same refusal tells the user to build from source and where the
+# steps are.
+install_case "with no release on GitHub yet, the next step" "Build the bundle from source at the latest signed tag and install it with PF_BUNDLE; the steps are at https://pi-fortress.praneos.ai/pi_setup/" \
+  "${bare[@]}" PF_TEST_LATEST_URL="${gh}/releases" bash install.sh
+
 install_case "with a newest tag that is a path" "is not a release tag" \
   "${bare[@]}" PF_TEST_LATEST_URL="${gh}/releases/tag/../v1" bash install.sh
 
