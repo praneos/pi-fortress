@@ -237,6 +237,78 @@ func aRecords(msg []byte) ([]netip.Addr, uint32, bool) {
 	return addrs, ttl, true
 }
 
+// maxNegTTL is the longest time that the cache keeps a negative answer.
+const maxNegTTL = 300
+
+// negTTL is the cache time of a negative answer: NXDOMAIN, or NODATA
+// (success with no answer records). RFC 2308 section 5 gives it as the
+// smaller of the SOA record TTL and the SOA MINIMUM field, from the
+// authority section. negTTL caps it at maxNegTTL. The bool is false when
+// msg is not a negative answer, has no SOA, or cannot be read to its end.
+// Without an SOA, the reply gives no negative TTL, and the cache keeps
+// nothing.
+func negTTL(msg []byte) (uint32, bool) {
+	var p dnsmessage.Parser
+	hdr, err := p.Start(msg)
+	if err != nil {
+		return 0, false
+	}
+	if hdr.RCode != dnsmessage.RCodeSuccess && hdr.RCode != dnsmessage.RCodeNameError {
+		return 0, false
+	}
+	if p.SkipAllQuestions() != nil {
+		return 0, false
+	}
+	if _, err := p.AnswerHeader(); !errors.Is(err, dnsmessage.ErrSectionDone) {
+		return 0, false
+	}
+	ttl, seen := uint32(0), false
+	for {
+		h, err := p.AuthorityHeader()
+		if errors.Is(err, dnsmessage.ErrSectionDone) {
+			break
+		}
+		if err != nil {
+			return 0, false
+		}
+		if h.Type != dnsmessage.TypeSOA {
+			if p.SkipAuthority() != nil {
+				return 0, false
+			}
+			continue
+		}
+		soa, err := p.SOAResource()
+		if err != nil {
+			return 0, false
+		}
+		t := min(h.TTL, soa.MinTTL)
+		if !seen || t < ttl {
+			ttl, seen = t, true
+		}
+	}
+	// The top bits of the rcode are in the OPT record. A value there makes
+	// the rcode a different one than the header shows.
+	for {
+		h, err := p.AdditionalHeader()
+		if errors.Is(err, dnsmessage.ErrSectionDone) {
+			break
+		}
+		if err != nil {
+			return 0, false
+		}
+		if h.Type == dnsmessage.TypeOPT && h.TTL>>24 != 0 {
+			return 0, false
+		}
+		if p.SkipAdditional() != nil {
+			return 0, false
+		}
+	}
+	if !seen {
+		return 0, false
+	}
+	return min(ttl, maxNegTTL), true
+}
+
 // localV4 is what --stop-dns-rebind refused beyond what netip already
 // names: this network, CGNAT, the benchmark range and class E.
 var localV4 = []netip.Prefix{

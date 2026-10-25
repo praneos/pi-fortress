@@ -16,6 +16,8 @@ import (
 //
 //   - rrTTLs, chainNames or aRecords return more items than the message
 //     has room for;
+//   - negTTL gives a TTL over maxNegTTL, or accepts a reply with an
+//     address;
 //   - aRecords gives an address whose owner name chainNames does not give.
 //     The forwarder judges the names of chainNames and admits the
 //     addresses of aRecords, so an owner outside that list is an address
@@ -59,6 +61,15 @@ func FuzzUpstreamReply(f *testing.F) {
 				if o != "" && !judged[o] {
 					t.Fatalf("address of %q is not in the chain %q", o, names)
 				}
+			}
+		}
+		// negTTL: a negative answer only, and never over the cap.
+		if neg, ok := negTTL(reply); ok {
+			if neg > maxNegTTL {
+				t.Fatalf("negTTL: %d, over the cap %d", neg, maxNegTTL)
+			}
+			if addrsOK && len(addrs) > 0 {
+				t.Fatalf("negTTL accepted a reply with %d addresses", len(addrs))
 			}
 		}
 		if !bytes.Equal(reply, orig) {

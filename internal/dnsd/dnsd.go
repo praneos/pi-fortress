@@ -935,6 +935,14 @@ func (s *Server) answer(ctx context.Context, seg *Segment, src netip.Addr, req [
 		raw = capTTLs(raw, uint32(left/time.Second))
 		ttl = min(ttl, uint32(left/time.Second))
 	}
+	// A negative answer has no answer records, so ttl is 0. Its cache time
+	// comes from the SOA (negTTL). It gives no address to the gate set, so
+	// left does not limit it. The SOA TTL in the reply goes down to the same
+	// time. Thus the client and a later cache hit count down from one value.
+	if neg, ok := negTTL(raw); ok {
+		raw = capTTLs(raw, neg)
+		ttl = neg
+	}
 	// A truncated answer is a stub, not an answer. A cached stub would go to
 	// each later asker. That includes the TCP retry, which exists to get past
 	// the stub.
