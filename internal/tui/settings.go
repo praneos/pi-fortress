@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"pi-fortress/internal/admin"
 )
@@ -517,17 +518,25 @@ const (
 )
 
 // saved records an edit that waits for an apply. The wider scope wins: a
-// list edit after a house.env edit still needs the full apply.
+// list edit after a house.env edit still needs the full apply. Each caller
+// sets msg to the result of the save just before, so msg names the edit:
+// "KEY=value", "added name", "f1 toggled".
 func (a *App) saved(scope string) {
-	a.edits++
+	what, _, _ := strings.Cut(a.msg, " -- ")
+	a.edits = append(a.edits, strings.TrimSuffix(what, " saved"))
 	if scope == applyFull || a.pending == "" {
 		a.pending = scope
 	}
 	a.msg += "; A applies"
 }
 
+// confirmWidth is the label width that keeps a y/N prompt, with its
+// " [y/N]: _", inside 80 columns.
+const confirmWidth = 71
+
 // applyPending is A: confirm, then run the apply that the saved edits need
-// on System > Actions, where its output streams.
+// on System > Actions, where its output streams. The confirm names the
+// newest edits, so that the y is about a list, not about a habit.
 func (a *App) applyPending() {
 	scope := a.pending
 	if scope == "" {
@@ -537,7 +546,41 @@ func (a *App) applyPending() {
 	if scope == applyLocal {
 		label = "run pf apply --local now"
 	}
+	if len(a.edits) > 0 {
+		label = editsLine(a.edits, confirmWidth-len(label)-2) + "; " + label
+	}
 	a.confirm(label, func() { a.runApply(scope) })
+}
+
+// editsLine names the saved edits in n columns or fewer: the count, then
+// the newest edits that fit, oldest of them first. "..." shows that older
+// edits do not fit. One edit that is too long for the line is clipped.
+func editsLine(edits []string, n int) string {
+	head := fmt.Sprintf("%d edits: ", len(edits))
+	if len(edits) == 1 {
+		head = "1 edit: "
+	}
+	if all := head + strings.Join(edits, ", "); utf8.RuneCountInString(all) <= n {
+		return all
+	}
+	const more = "..., "
+	used := utf8.RuneCountInString(head + more)
+	var shown []string
+	for i := len(edits) - 1; i >= 0; i-- {
+		w := utf8.RuneCountInString(edits[i])
+		if len(shown) > 0 {
+			w += 2
+		}
+		if used+w > n {
+			break
+		}
+		shown = append([]string{edits[i]}, shown...)
+		used += w
+	}
+	if len(shown) == 0 {
+		return clip(head+edits[len(edits)-1], n)
+	}
+	return head + more + strings.Join(shown, ", ")
 }
 
 func (a *App) runApply(scope string) {
@@ -552,7 +595,7 @@ func (a *App) runApply(scope string) {
 	a.goTo(netSystem, secActions)
 	a.stream(title, "apply", args)
 	if a.paneBusy {
-		a.applying = &applyRun{scope: scope, edits: a.edits}
+		a.applying = &applyRun{scope: scope, edits: len(a.edits)}
 	}
 }
 

@@ -95,10 +95,12 @@ type App struct {
 	// --local covers it, "full" when it needs the full apply. A is the key
 	// that runs it, and the footer says so until it has run.
 	pending string
-	// edits counts saved edits. applying is the scope of the A apply that
-	// streams now, with the count at its start. The code clears pending only
-	// when that apply finishes cleanly and no save occurred in that time.
-	edits    int
+	// edits are the saved edits that wait for an apply, oldest first, each
+	// named as its save message names it. The A confirm shows them. applying
+	// is the scope of the A apply that streams now, with the count at its
+	// start. The code clears pending and edits only when that apply finishes
+	// cleanly and no save occurred in that time.
+	edits    []string
 	applying *applyRun
 	pr       *prompt
 
@@ -315,8 +317,8 @@ func (a *App) finishApply(done error) bool {
 	a.applying = nil
 	if _, ok := done.(doneMarker); ok {
 		a.pane = append(a.pane, "done")
-		if run != nil && run.edits == a.edits && (run.scope == applyFull || a.pending == applyLocal) {
-			a.pending = ""
+		if run != nil && run.edits == len(a.edits) && (run.scope == applyFull || a.pending == applyLocal) {
+			a.pending, a.edits = "", nil
 		}
 	} else {
 		a.pane = append(a.pane, "error: "+done.Error())
