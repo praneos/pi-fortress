@@ -48,8 +48,7 @@ func TestCleanFeedsDoNotWarn(t *testing.T) {
 }
 
 // The operator reads the Status screen first. Thus the fetch state is a
-// row there. It is not only a title-bar note that yields to msg and can
-// scroll away with the next action.
+// row there. It is not only a title-bar note.
 func TestStatusScreenShowsTheFeedWarning(t *testing.T) {
 	c, _ := testConfig(t)
 	writeReport(t, c.PolicyDir, "FAIL f1: dial: no route to host\n", time.Hour)
@@ -71,25 +70,55 @@ func TestStatusScreenShowsCleanFeedCounts(t *testing.T) {
 	}
 }
 
-// msg is the result of the last operator action, and must win the one
-// slot. If not, an error disappears behind a standing condition.
-func TestMessageOutranksTheWarning(t *testing.T) {
+// msg is the result of the last operator action. The warning is a
+// standing condition. Neither one hides the other: the warning stays on the
+// title bar, and msg goes in the footer. When they used one slot, one Esc
+// on a prompt removed the warning from all screens.
+func TestMessageDoesNotHideTheWarning(t *testing.T) {
 	c, _ := testConfig(t)
 	writeReport(t, c.PolicyDir, "FAIL f1: dial: no route to host\n", time.Hour)
+	f := run(t, c, NewFake(100, 24).Type(keys(netHouse, secFiltering)+"a").Press(KeyEsc))
+	last := f.Last()
+	if !strings.Contains(firstLine(last), "! feeds:") {
+		t.Fatalf("Esc on a prompt removed the warning:\n%s", last)
+	}
+	if foot := lastLine(last); !strings.HasPrefix(foot, "cancelled") || !strings.Contains(foot, "? help") {
+		t.Fatalf("footer: %q", foot)
+	}
+
 	a := New(c, NewFake(100, 24))
 	a.reload()
-	if a.warn == "" {
-		t.Fatal("no warning to outrank")
-	}
 	a.msg = "error: something the operator just did"
 	a.draw()
-	last := a.t.(*Fake).Last()
-	if title := firstLine(last); !strings.Contains(title, "something the operator just did") || strings.Contains(title, "feeds:") {
-		t.Fatalf("title bar:\n%s", firstLine(last))
+	last = a.t.(*Fake).Last()
+	if !strings.Contains(firstLine(last), "! feeds:") || strings.Contains(firstLine(last), "operator just did") {
+		t.Fatalf("title bar: %q", firstLine(last))
+	}
+	if foot := lastLine(last); !strings.HasPrefix(foot, a.msg) || !strings.Contains(foot, "? help") {
+		t.Fatalf("footer: %q", foot)
+	}
+}
+
+// A long message keeps its whole text. The keys of the screen give way
+// first, then the state. "? help" stays.
+func TestALongMessageKeepsItsTextAndHelp(t *testing.T) {
+	c, _ := testConfig(t)
+	a := New(c, NewFake(80, 24))
+	a.reload()
+	a.cur, a.focus, a.pending = view{netHouse, secFiltering}, true, "local"
+	a.msg = "error: " + strings.Repeat("x", 30) + " the part that says what to do"
+	a.draw()
+	foot := strings.TrimRight(lastLine(a.t.(*Fake).Last()), " ")
+	if !strings.HasPrefix(foot, a.msg) || !strings.HasSuffix(foot, "? help") {
+		t.Fatalf("footer: %q", foot)
 	}
 }
 
 func firstLine(s string) string {
 	line, _, _ := strings.Cut(s, "\n")
 	return line
+}
+
+func lastLine(s string) string {
+	return s[strings.LastIndex(s, "\n")+1:]
 }

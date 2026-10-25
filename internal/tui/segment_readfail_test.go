@@ -21,9 +21,9 @@ func TestSegmentToggleSavesNothingWhenTheFileCannotBeRead(t *testing.T) {
 		if got, _ := os.ReadFile(path); string(got) != body {
 			t.Fatalf("%s: Enter wrote the file it could not read:\n%s", key, got)
 		}
-		title := strings.SplitN(f.Last(), "\n", 2)[0]
-		if !strings.Contains(title, "error:") || strings.Contains(title, "saved") {
-			t.Fatalf("%s: the read error is not on screen: %q", key, title)
+		foot := lastLine(f.Last())
+		if !strings.Contains(foot, "error:") || strings.Contains(foot, "saved") {
+			t.Fatalf("%s: the read error is not on screen: %q", key, foot)
 		}
 	}
 }

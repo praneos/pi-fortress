@@ -810,14 +810,11 @@ func (a *App) draw() {
 	b.line(0, 0, b.w, title, reverse)
 	// A stale blocklist is a standing fault with no other symptom. All
 	// screens continue to say ok while the lists decay. The warning goes on
-	// the title bar, so the operator sees it from all locations. It yields
-	// to msg, which is about the last operator action.
-	note := a.msg
-	if note == "" && a.warn != "" {
-		note = "! " + a.warn
-	}
-	if note != "" {
-		b.put(min(len(title)+2, b.w), 0, clip(note, b.w-len(title)-2), reverse)
+	// the title bar, so the operator sees it from all locations. The title
+	// bar holds only the warning. msg goes in the footer (drawFooter). When
+	// the two used one slot, one Esc on a prompt removed the warning.
+	if a.warn != "" {
+		b.put(min(len(title)+2, b.w), 0, clip("! "+a.warn, b.w-len(title)-2), reverse)
 	}
 	x := 0
 	// The claim overlay uses the full width. Its command carries a
@@ -1163,10 +1160,37 @@ func (a *App) drawFooter(b *buffer) {
 	if a.pending != "" && !a.paneBusy {
 		prefix = "A applies saved changes  "
 	}
+	if a.msg != "" {
+		a.drawMessage(b, y, prefix, hint)
+		return
+	}
 	if a.focus {
 		hint = footerHint(a.viewHint(), commonKeys, b.w-len(prefix))
 	}
 	b.line(0, y, b.w, clip(prefix+hint, b.w), reverse)
+}
+
+// drawMessage puts msg at the start of the footer, then the state and the
+// keys in the space that stays. When the space is short, the keys of the
+// screen go first, then the state. "? help" stays. The code cuts msg only
+// when "? help" alone does not leave space for it.
+func (a *App) drawMessage(b *buffer, y int, prefix, hint string) {
+	const help = "  ? help"
+	n := utf8.RuneCountInString(a.msg)
+	if a.focus {
+		hint = footerHint(a.viewHint(), commonKeys, b.w-n-2-len(prefix))
+	}
+	tail := help
+	for _, t := range []string{"  " + prefix + hint, "  " + prefix + strings.TrimPrefix(help, "  "), help} {
+		if n+len(t) <= b.w {
+			tail = t
+			break
+		}
+	}
+	msg := clip(a.msg, b.w-len(tail))
+	b.line(0, y, b.w, "", reverse)
+	b.put(0, y, msg, reverse)
+	b.put(utf8.RuneCountInString(msg), y, tail, reverse)
 }
 
 // commonKeys are the three keys that all screens share. An operator cannot
