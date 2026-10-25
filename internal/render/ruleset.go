@@ -899,6 +899,13 @@ func (f *fragments) segments() {
 			if s.DHCP == "on" {
 				f.SegGate += in("ip daddr 255.255.255.255 udp sport 68 udp dport 67 accept")
 			}
+			// ssh_allow.ips is a list of addresses, not names. Thus the resolver
+			// did not give them, and the gate would drop them. The accept is for
+			// TCP 22 only and ends only this chain. forward then accepts it
+			// (below). Other ports to these addresses still meet the gate.
+			if f.SSHAllow != "" {
+				f.SegGate += in("tcp dport 22 ip daddr @ssh_allow_v4 accept")
+			}
 			for _, gate := range gates {
 				f.SegGate += in(gate+logRate+"\"pi-fortress "+s.Name+"-directip: \" level info") + in(gate+" counter drop")
 			}
