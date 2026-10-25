@@ -155,26 +155,46 @@ fi
 # PF_POLICY points apply at another policy tree (the TUI's -policy).
 POLICY="${PF_POLICY:-${POLICY}}"
 
-# With a checkout, the lists come from the checkout. An edit of the copy
-# in /etc/pi-fortress has no effect. Tell the operator which tree is used
-# and which lists differ. Say nothing when the copies are equal or when
-# /etc/pi-fortress has no copy. PF_TEST_ETC is the apply_test stand-in
+# With a checkout, the lists come from the checkout. pf tui edits the
+# checkout, and provision seeds /etc/pi-fortress only once. So a copy in
+# /etc/pi-fortress that differs from the checkout copy is usually only an
+# old seed. Name a list only when its copy in /etc/pi-fortress is newer
+# than the checkout copy: a hand edit there that has no effect. Below,
+# this apply copies the lists in the case pattern into /etc/pi-fortress
+# (doh.*, git_push.allow, allow.domains, dns_types.allow). For these, the
+# line says that apply replaces the edit. Keep the two sets the same. One
+# line, at most 5 names per part. PF_TEST_ETC is the apply_test stand-in
 # for /etc/pi-fortress.
 _etc="${PF_TEST_ETC:-/etc/pi-fortress}"
 if [[ -n "${TREE}" && "${POLICY}" -ef "${TREE}/vm/policy" && ! "${POLICY}" -ef "${_etc}" ]]; then
-  _diff=()
+  _keep=()
+  _repl=()
   for _f in "${POLICY}"/*.domains "${POLICY}"/*.ips "${POLICY}"/*.allow; do
     _n="${_f##*/}"
-    if [[ -f "${_f}" && -f "${_etc}/${_n}" ]] && ! cmp -s "${_f}" "${_etc}/${_n}"; then
-      _diff+=("${_n}")
+    if [[ -f "${_f}" && -f "${_etc}/${_n}" && "${_etc}/${_n}" -nt "${_f}" ]] && ! cmp -s "${_f}" "${_etc}/${_n}"; then
+      case "${_n}" in
+        allow.domains | dns_types.allow | doh.ips | doh.domains | git_push.allow) _repl+=("${_n}") ;;
+        *) _keep+=("${_n}") ;;
+      esac
     fi
   done
-  if [[ "${#_diff[@]}" -gt 0 ]]; then
-    _more=""
-    if [[ "${#_diff[@]}" -gt 5 ]]; then
-      _more=" (+$((${#_diff[@]} - 5)) more)"
+  # Prints the first 5 names of its arguments, and the count of the rest.
+  _names() {
+    local more=""
+    if [[ "$#" -gt 5 ]]; then
+      more=" (+$(($# - 5)) more)"
     fi
-    echo "pi-fortress: lists come from ${POLICY}, not ${_etc}; these differ: ${_diff[*]:0:5}${_more}" >&2
+    printf '%s' "${*:1:5}${more}"
+  }
+  _msg=""
+  if [[ "${#_keep[@]}" -gt 0 ]]; then
+    _msg="; edits there have no effect: $(_names "${_keep[@]}")"
+  fi
+  if [[ "${#_repl[@]}" -gt 0 ]]; then
+    _msg+="; this apply replaces edits there: $(_names "${_repl[@]}")"
+  fi
+  if [[ -n "${_msg}" ]]; then
+    echo "pi-fortress: lists come from ${POLICY}, not ${_etc}${_msg}" >&2
   fi
 fi
 
