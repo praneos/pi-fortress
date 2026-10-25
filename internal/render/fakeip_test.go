@@ -312,3 +312,31 @@ func TestFakeIPOverlapNamesTheEnvFile(t *testing.T) {
 		t.Fatalf("with EnvSrc: err=%v", err)
 	}
 }
+
+// Each net.env refusal names the file only when the caller gave it. Without
+// EnvSrc, no refusal has empty brackets.
+func TestNetEnvRefusalsWithoutEnvSrc(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		edit func(*Net)
+		want string
+	}{
+		{"agent net", func(n *Net) { n.AgentNet = "10.77.0.0" }, "AGENT_NET='10.77.0.0' is not an IPv4 CIDR"},
+		{"host bits", func(n *Net) { n.AgentNet = "10.77.0.1/24" }, "write the network itself, 10.77.0.0/24"},
+		{"pi ip empty", func(n *Net) { n.PiIP = "" }, "PI_IP is empty"},
+		{"pi ip outside", func(n *Net) { n.PiIP = "10.78.0.1" }, "PI_IP=10.78.0.1 is not inside AGENT_NET"},
+		{"shared address", func(n *Net) { n.AgentIP = n.PiIP }, "the agent and the Pi cannot share an address"},
+		{"upstream", func(n *Net) { n.DNSUpstream = "dns.quad9.net" }, "it is the resolver the Pi forwards to"},
+		{"agent dns", func(n *Net) { n.AgentDNS = "both" }, "AGENT_DNS='both' is not"},
+		{"uplink value", func(n *Net) { n.UntrustedUplink = "yes" }, "UNTRUSTED_UPLINK='yes' is not 0 or 1"},
+		{"conn value", func(n *Net) { n.ConnLimits = map[string]string{"AGENT_CONN_TOTAL": "lots"} }, "AGENT_CONN_TOTAL='lots'"},
+		{"conn cap", func(n *Net) { n.ConnLimits = map[string]string{"AGENT_CONN_PER_IP": "512", "AGENT_CONN_TOTAL": "256"} }, "the per-device cap could never be reached"},
+	} {
+		net := lab
+		tc.edit(&net)
+		_, err := Load(Options{Net: net, HouseEnv: "/nonexistent/house.env", SegmentsDir: "/nonexistent"})
+		if err == nil || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "()") {
+			t.Errorf("%s: err=%v", tc.name, err)
+		}
+	}
+}

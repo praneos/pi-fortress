@@ -587,11 +587,11 @@ func (c *Config) envSrc() string {
 // --live: a render on a laptop writes the same nftables.conf that a Pi loads.
 func (c *Config) checkNet(o Options) error {
 	if !reCIDR4.MatchString(c.AgentNet) {
-		return fmt.Errorf("AGENT_NET='%s' is not an IPv4 CIDR (%s)", c.AgentNet, c.EnvSrc)
+		return fmt.Errorf("AGENT_NET='%s' is not an IPv4 CIDR%s", c.AgentNet, c.envSrc())
 	}
 	p, err := netip.ParsePrefix(c.AgentNet)
 	if err != nil {
-		return fmt.Errorf("AGENT_NET='%s' is not an IPv4 CIDR (%s)", c.AgentNet, c.EnvSrc)
+		return fmt.Errorf("AGENT_NET='%s' is not an IPv4 CIDR%s", c.AgentNet, c.envSrc())
 	}
 	// nft and the NAT rule use the prefix verbatim. For a reader, 10.77.0.1/24
 	// is the same network. For each comparison below, it is a different
@@ -599,7 +599,7 @@ func (c *Config) checkNet(o Options) error {
 	// mask it. An operator who wrote the host address had a reason
 	// for it.
 	if masked := p.Masked(); masked != p {
-		return fmt.Errorf("AGENT_NET=%s carries a host address; write the network itself, %s (%s)", c.AgentNet, masked, c.EnvSrc)
+		return fmt.Errorf("AGENT_NET=%s carries a host address; write the network itself, %s%s", c.AgentNet, masked, c.envSrc())
 	}
 	// The widest private range, 10.0.0.0/8, is a /8. A wider AGENT_NET always
 	// holds public addresses, and a /0 holds all of them. Thus no FAKEIP_NET
@@ -616,17 +616,17 @@ func (c *Config) checkNet(o Options) error {
 			if x.key == "AGENT_IP" {
 				continue
 			}
-			return fmt.Errorf("PI_IP is empty; it is the address the agent segment reaches the Pi on (%s)", c.EnvSrc)
+			return fmt.Errorf("PI_IP is empty; it is the address the agent segment reaches the Pi on%s", c.envSrc())
 		}
 		if !reIPv4.MatchString(x.val) {
-			return fmt.Errorf("%s='%s' is not an IPv4 address (%s)", x.key, x.val, c.EnvSrc)
+			return fmt.Errorf("%s='%s' is not an IPv4 address%s", x.key, x.val, c.envSrc())
 		}
 		if !netHas(c.AgentNet, x.val) {
-			return fmt.Errorf("%s=%s is not inside AGENT_NET=%s, so no packet on the agent segment can carry it (%s)", x.key, x.val, c.AgentNet, c.EnvSrc)
+			return fmt.Errorf("%s=%s is not inside AGENT_NET=%s, so no packet on the agent segment can carry it%s", x.key, x.val, c.AgentNet, c.envSrc())
 		}
 	}
 	if c.AgentIP != "" && c.AgentIP == c.PiIP {
-		return fmt.Errorf("AGENT_IP=%s is PI_IP; the agent and the Pi cannot share an address (%s)", c.AgentIP, c.EnvSrc)
+		return fmt.Errorf("AGENT_IP=%s is PI_IP; the agent and the Pi cannot share an address%s", c.AgentIP, c.envSrc())
 	}
 	// The forward goes to apply as DNS_FORWARD in the dnsmasq server= form:
 	// an address or address#port. apply.sh changes the second form into
@@ -635,25 +635,25 @@ func (c *Config) checkNet(o Options) error {
 	// refuses a typo in the file. It does not keep the typo until the
 	// day that DoT is disabled again.
 	if err := checkForward(c.DNSUpstream); err != nil {
-		return fmt.Errorf("DNS_UPSTREAM='%s' %s; it is the resolver the Pi forwards to (%s)", c.DNSUpstream, err, c.EnvSrc)
+		return fmt.Errorf("DNS_UPSTREAM='%s' %s; it is the resolver the Pi forwards to%s", c.DNSUpstream, err, c.envSrc())
 	}
 	// Absent means fakeip (above). A box that must keep real answers sets
 	// AGENT_DNS=forward in net.env.local. forward renders exactly the same
 	// ruleset as before (vm/pi/testdata/nft.no-house.forward.golden).
 	setDefault(&c.AgentDNS, AgentDNSFakeIP)
 	if c.AgentDNS != AgentDNSForward && c.AgentDNS != AgentDNSFakeIP {
-		return fmt.Errorf("AGENT_DNS='%s' is not %s or %s (%s)", c.AgentDNS, AgentDNSForward, AgentDNSFakeIP, c.EnvSrc)
+		return fmt.Errorf("AGENT_DNS='%s' is not %s or %s%s", c.AgentDNS, AgentDNSForward, AgentDNSFakeIP, c.envSrc())
 	}
 	setDefault(&c.FakeIPNet, DefaultFakeIPNet)
 	if err := CheckFakeIPNet(c.FakeIPNet); err != nil {
-		return fmt.Errorf("FAKEIP_NET='%s' %v (%s)", c.FakeIPNet, err, c.EnvSrc)
+		return fmt.Errorf("FAKEIP_NET='%s' %v%s", c.FakeIPNet, err, c.envSrc())
 	}
 	// This is the same grammar as for the interfaces in house.env and
 	// segments.d. These two go into the ruleset inside quoted iifname
 	// matches. Without --live, nothing else examines them.
 	for _, x := range []declaredIF{{"INT_IF", o.IntIF}, {"WAN_IF", o.WanIF}} {
 		if x.val != "" && !reIface.MatchString(x.val) {
-			return fmt.Errorf("%s='%s' is not an interface name (%s)", x.key, x.val, c.EnvSrc)
+			return fmt.Errorf("%s='%s' is not an interface name%s", x.key, x.val, c.envSrc())
 		}
 	}
 	return nil
@@ -695,7 +695,7 @@ func (c *Config) checkUplink(have map[string]bool, w io.Writer) error {
 		return nil
 	case "1":
 	default:
-		return fmt.Errorf("UNTRUSTED_UPLINK='%s' is not 0 or 1 (%s)", c.UntrustedUplink, c.EnvSrc)
+		return fmt.Errorf("UNTRUSTED_UPLINK='%s' is not 0 or 1%s", c.UntrustedUplink, c.envSrc())
 	}
 	var paths []declaredIF
 	if c.HouseIF != "" && c.HouseAdminIP != "" {
@@ -723,10 +723,16 @@ func (c *Config) checkUplink(have map[string]bool, w io.Writer) error {
 		}
 		names = append(names, p.key+"="+p.val)
 	}
+	// Here the source is part of the sentence. Without EnvSrc, the code
+	// names the file, not its path.
+	src := c.EnvSrc
+	if src == "" {
+		src = "net.env"
+	}
 	return fmt.Errorf(`UNTRUSTED_UPLINK=1 is about to close SSH on WAN_IF=%s, and the only admin way in, %s, is not an interface on this box (check ip -br link).
   Applying this would leave nothing to reach the Pi on: a headless box would need a monitor and a keyboard to get back.
   Plug the adapter in, or set %s in %s to the name the kernel actually gave it (a Pi 5 USB NIC usually comes up as enx<mac>, not eth1), or set UNTRUSTED_UPLINK=0 in %s to leave SSH open on the uplink.
-  Nothing was changed.`, c.WanIF, strings.Join(names, " and "), paths[0].key, houseSrc(paths[0].key), c.EnvSrc)
+  Nothing was changed.`, c.WanIF, strings.Join(names, " and "), paths[0].key, houseSrc(paths[0].key), src)
 }
 
 // declaredIF is an interface that a config asked for, with the key that
