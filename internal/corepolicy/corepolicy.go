@@ -90,8 +90,7 @@ func (p *Policy) load(path string) error {
 		if len(bits) == 0 {
 			continue
 		}
-		suffix := strings.HasPrefix(bits[0], "*.")
-		host := normHost(strings.TrimPrefix(bits[0], "*."))
+		host, suffix := hostEntry(bits[0])
 		if host == "" {
 			continue
 		}
@@ -132,6 +131,18 @@ func (p *Policy) load(path string) error {
 		}
 	}
 	return sc.Err()
+}
+
+// hostEntry reads the host column of a core.hosts line: the host, and if
+// the line is a "*." line. One leading dot goes, and the line is for the
+// exact host. It does not become a "*." line: that would give the
+// credential to all names below the host. Before, the dotted key matched
+// no name. Load and LoadForward both read the column with it.
+func hostEntry(tok string) (string, bool) {
+	if strings.HasPrefix(tok, "*.") {
+		return normHost(tok[2:]), true
+	}
+	return normHost(strings.TrimPrefix(tok, ".")), false
 }
 
 // DefaultHeaders carry all kinds that a host binds: Bearer and Basic

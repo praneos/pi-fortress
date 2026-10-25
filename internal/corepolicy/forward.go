@@ -60,8 +60,7 @@ func LoadForward(allowPath, corePath string) (*Forward, error) {
 		if len(bits) == 0 {
 			continue
 		}
-		suffix := strings.HasPrefix(bits[0], "*.")
-		host := normHost(strings.TrimPrefix(bits[0], "*."))
+		host, suffix := hostEntry(bits[0])
 		if host == "" {
 			continue
 		}

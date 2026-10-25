@@ -300,11 +300,17 @@ func parseIPv4(token string, min int) (string, bool) {
 	return p.Addr().String(), true
 }
 
+// ParseDomain gives the name that a list line blocks or shields. A dnsmasq
+// line and a suffix match cover the name and all names below it. Thus
+// "*.example.com" and ".example.com" are the same as "example.com". Only one
+// "*." or one dot goes.
 func ParseDomain(token string) (string, bool) {
 	name := strings.ToLower(strings.TrimSpace(token))
 	name = strings.TrimRight(name, ".")
 	if strings.HasPrefix(name, "*.") {
 		name = name[2:]
+	} else {
+		name = strings.TrimPrefix(name, ".")
 	}
 	if len(name) > 253 || !domainRe.MatchString(name) {
 		return "", false

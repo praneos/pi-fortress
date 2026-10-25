@@ -52,3 +52,38 @@ func TestCanaryOnlyWhereNamed(t *testing.T) {
 		t.Fatalf("got %v", got)
 	}
 }
+
+// A leading dot in core.hosts is the exact host, as if the dot were not
+// there. It is not a "*." line: the line binds the name, not the names
+// below it. Before, the dotted key matched no name. The host then got no
+// credential, but the compiler still shielded it from the block list.
+func TestLeadingDotIsTheExactHost(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "core.hosts")
+	if err := os.WriteFile(path, []byte(".api.anthropic.com CLAUDE_OAT\n..bad.example GITHUB_TOKEN\n*.ghe.example GITHUB_TOKEN\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.HostAllowed("api.anthropic.com") || !KindAllowed("CLAUDE_OAT", p.KindsFor("api.anthropic.com")) {
+		t.Fatal("dotted line binds nothing")
+	}
+	if p.HostAllowed("x.api.anthropic.com") || len(p.KindsFor("x.api.anthropic.com")) != 0 {
+		t.Fatal("dotted line reads as a suffix line")
+	}
+	if got := p.HostsWithKind("CLAUDE_OAT"); !reflect.DeepEqual(got, []string{"api.anthropic.com"}) {
+		t.Fatalf("got %v", got)
+	}
+	if p.HostAllowed("bad.example") {
+		t.Fatal("two leading dots read as the host")
+	}
+	if !p.HostAllowed("x.ghe.example") || !p.HostAllowed("ghe.example") {
+		t.Fatal("suffix line")
+	}
+	// The paranoid forward set reads the column the same way.
+	f := testForward(t, "", ".api.anthropic.com CLAUDE_OAT\n")
+	if !f.Allowed("api.anthropic.com", false) || f.Allowed("x.api.anthropic.com", false) {
+		t.Fatal("forward set reads the dotted line in a different way")
+	}
+}

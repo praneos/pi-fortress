@@ -100,6 +100,22 @@ func TestParseDomainWildcard(t *testing.T) {
 	}
 }
 
+// A leading dot reads as "*.": the name and all names below it. Before, the
+// parser refused ".example.com", and the line compiled to nothing with no
+// warning. Only one dot goes.
+func TestParseDomainLeadingDot(t *testing.T) {
+	for in, want := range map[string]string{".example.com": "example.com", ".Evil.Example.": "evil.example"} {
+		if got, ok := ParseDomain(in); !ok || got != want {
+			t.Errorf("ParseDomain(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+	for _, bad := range []string{"..example.com", "*..example.com", ".*.example.com", ".", ".com"} {
+		if got, ok := ParseDomain(bad); ok {
+			t.Errorf("ParseDomain(%q) accepted as %q", bad, got)
+		}
+	}
+}
+
 func TestParseDomainLengthLimits(t *testing.T) {
 	if _, ok := ParseDomain(strings.Repeat("a", 64) + ".example.com"); ok {
 		t.Fatal("label over 63 accepted")
