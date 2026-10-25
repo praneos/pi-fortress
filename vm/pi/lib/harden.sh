@@ -12,6 +12,7 @@
 # The paths come from the caller, as HARDEN_SYSCTL_D, HARDEN_APT_D,
 # HARDEN_SSHD_D, HARDEN_HOME and HARDEN_WORK (a scratch directory). Thus
 # the path rewrite of apply.sh in the appliance test also reaches them.
+# HARDEN_OS_RELEASE is optional (default /etc/os-release); the tests set it.
 # The package installs stay in provision.sh. apply.sh only tells the
 # operator when a package that a step needs is missing.
 
@@ -81,20 +82,49 @@ harden_sysctl_load() {
     echo "pi-fortress: some values of ${HARDEN_SYSCTL_D}/99-pi-fortress.conf did not apply now; the file applies at the next boot" >&2
 }
 
+# harden_os_id prints the ID= value of os-release (HARDEN_OS_RELEASE,
+# default /etc/os-release), with no quotes. Raspberry Pi OS gives debian.
+# With no file, it prints nothing.
+harden_os_id() {
+  local f="${HARDEN_OS_RELEASE:-/etc/os-release}" line id=""
+  if [[ -r "${f}" ]]; then
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+      [[ "${line}" == ID=* ]] && id="${line#ID=}"
+    done <"${f}"
+  fi
+  id="${id//\"/}"
+  printf '%s\n' "${id//\'/}"
+}
+
 # Security updates from the distribution, with no automatic reboot.
 # The package itself is installed by provision.sh. Without it, the files
-# below do nothing, and this step says so.
+# below do nothing, and this step says so. The origins come from the OS:
+# Ubuntu (an amd64 gateway) gets its security pocket and the ESM security
+# pockets. An ESM pocket that the box does not use matches nothing. Each
+# other OS gets the Debian and Raspberry Pi origins.
 harden_apt() {
   cat >"${HARDEN_WORK}/20auto-upgrades" <<'EOF'
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
-  cat >"${HARDEN_WORK}/52-pi-fortress-upgrades" <<'EOF'
+  if [[ "$(harden_os_id)" == ubuntu ]]; then
+    cat >"${HARDEN_WORK}/52-pi-fortress-upgrades" <<'EOF'
+Unattended-Upgrade::Origins-Pattern {
+  "origin=Ubuntu,archive=${distro_codename}-security";
+  "origin=UbuntuESMApps,archive=${distro_codename}-apps-security";
+  "origin=UbuntuESM,archive=${distro_codename}-infra-security";
+};
+EOF
+  else
+    cat >"${HARDEN_WORK}/52-pi-fortress-upgrades" <<'EOF'
 Unattended-Upgrade::Origins-Pattern {
   "origin=Debian,codename=${distro_codename},label=Debian-Security";
   "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
   "origin=Raspberry Pi Foundation,codename=${distro_codename}";
 };
+EOF
+  fi
+  cat >>"${HARDEN_WORK}/52-pi-fortress-upgrades" <<'EOF'
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
 Unattended-Upgrade::Automatic-Reboot "false";
 EOF

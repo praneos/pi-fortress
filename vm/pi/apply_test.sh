@@ -1640,6 +1640,7 @@ harden_run() {
     # shellcheck source=lib/harden.sh
     source "${here}/lib/harden.sh"
     HARDEN_SYSCTL_D="${hroot}/sysctl.d" HARDEN_APT_D="${hroot}/apt.conf.d" HARDEN_WORK="${hroot}/work"
+    HARDEN_OS_RELEASE="${hroot}/os-release"
     PATH="${hroot}/bin"
     if [[ "${1:-}" == uu ]]; then
       PATH="${PATH}:${hroot}/uubin"
@@ -1649,6 +1650,7 @@ harden_run() {
     harden_apt
   )
 }
+printf 'PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"\nID=debian\nVERSION_CODENAME=bookworm\n' >"${hroot}/os-release"
 harden_run uu 2>"${hroot}/err" || fail "the hardening steps failed: $(cat "${hroot}/err")"
 cp "${hroot}/sysctl.d/99-pi-fortress.conf" "${tmp}/sysctl.conf"
 for _l in kernel.kptr_restrict=2 kernel.yama.ptrace_scope=2 fs.protected_regular=2 net.ipv4.tcp_syncookies=1; do
@@ -1670,6 +1672,33 @@ harden_run uu 2>/dev/null
 # A box without the package: one warning, the files still written.
 harden_run 2>"${hroot}/err" || fail "the hardening failed without unattended-upgrades"
 grep -q 'unattended-upgrades is not installed' "${hroot}/err" || fail "no warning when unattended-upgrades is missing"
+# The origins follow the OS. Debian and Raspberry Pi OS (ID=debian) keep
+# the Debian and Raspberry Pi lines, the same bytes as before.
+_uu="${hroot}/apt.conf.d/52-pi-fortress-upgrades"
+cp "${_uu}" "${tmp}/uu.debian"
+for _l in '"origin=Debian,codename=${distro_codename},label=Debian-Security";' \
+  '"origin=Debian,codename=${distro_codename}-security,label=Debian-Security";' \
+  '"origin=Raspberry Pi Foundation,codename=${distro_codename}";' \
+  'Unattended-Upgrade::Remove-Unused-Dependencies "true";' 'Unattended-Upgrade::Automatic-Reboot "false";'; do
+  grep -qxF "  ${_l}" "${_uu}" || grep -qxF "${_l}" "${_uu}" || fail "52-pi-fortress-upgrades on Debian lacks ${_l}"
+done
+grep -q 'Ubuntu' "${_uu}" && fail "52-pi-fortress-upgrades on Debian names an Ubuntu origin"
+# Ubuntu: its security pocket and the ESM security pockets, no Debian line.
+printf 'NAME="Ubuntu"\nID=ubuntu\nID_LIKE=debian\nVERSION_ID="24.04"\n' >"${hroot}/os-release"
+harden_run uu 2>"${hroot}/err" || fail "the hardening failed on Ubuntu: $(cat "${hroot}/err")"
+for _l in '"origin=Ubuntu,archive=${distro_codename}-security";' \
+  '"origin=UbuntuESMApps,archive=${distro_codename}-apps-security";' \
+  '"origin=UbuntuESM,archive=${distro_codename}-infra-security";' 'Unattended-Upgrade::Automatic-Reboot "false";'; do
+  grep -qF "${_l}" "${_uu}" || fail "52-pi-fortress-upgrades on Ubuntu lacks ${_l}"
+done
+grep -qE 'origin=(Debian|Raspberry)' "${_uu}" && fail "52-pi-fortress-upgrades on Ubuntu keeps a Debian origin"
+# A quoted ID, or no os-release at all: quotes do not count; no file is Debian.
+printf 'ID="ubuntu"\n' >"${hroot}/os-release"
+harden_run uu 2>/dev/null
+grep -qF '"origin=Ubuntu,archive=${distro_codename}-security";' "${_uu}" || fail "a quoted ID=\"ubuntu\" did not give the Ubuntu origins"
+mv "${hroot}/os-release" "${hroot}/os-release.off"
+harden_run uu 2>/dev/null || fail "the hardening failed with no os-release"
+cmp -s "${_uu}" "${tmp}/uu.debian" || fail "with no os-release, 52-pi-fortress-upgrades is not the Debian file"
 # Only on a full apply, after the --local exit, and from provision.sh.
 _local_exit="$(grep -n '^if \[\[ "${LOCAL_ONLY}" -eq 1 \]\]; then$' "${apply}" | tail -1 | cut -d: -f1)"
 for _f in harden_sysctl_write harden_sysctl_load harden_apt; do
