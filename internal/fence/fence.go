@@ -634,6 +634,15 @@ func (s *scanner) strips(b []byte, where string) []StripEvent {
 	return ev
 }
 
+// allTokens is the set of every token rule: TokenRE, else all of Rules.
+func allTokens(ctx Ctx) *tokenSet {
+	allRE := ctx.TokenRE
+	if allRE == nil && ctx.Rules != nil {
+		allRE = ctx.Rules.All()
+	}
+	return tokensFor(allRE)
+}
+
 func newScanner(ctx Ctx, req *httpwire.Request, pol *corepolicy.Policy, idx *secrets.Index) *scanner {
 	host := req.Get("Host")
 	inject := !ctx.NoInject && pol != nil && pol.Authority(ctx.SNI, host)
@@ -646,11 +655,7 @@ func newScanner(ctx Ctx, req *httpwire.Request, pol *corepolicy.Policy, idx *sec
 			inject = false
 		}
 	}
-	allRE := ctx.TokenRE
-	if allRE == nil && ctx.Rules != nil {
-		allRE = ctx.Rules.All()
-	}
-	all := tokensFor(allRE)
+	all := allTokens(ctx)
 	tokens := all
 	if inject {
 		tokens = nil

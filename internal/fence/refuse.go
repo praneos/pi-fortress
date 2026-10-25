@@ -233,14 +233,31 @@ func (s *scanner) noteMethod(method string) {
 // token-prefix match. It checks every live value, also one of a kind that
 // this host injects, and every token rule, as noteNames does.
 func (s *scanner) noteHost(host string) {
-	for _, sl := range s.idx.Lives {
-		if httpwire.Contains([]byte(host), []byte(sl.Live)) {
-			s.refuse(CauseLiveInHost, sl.ID, sl.Kind, "header:Host")
-		}
+	for _, sl := range hostLives(s.idx.Lives, host) {
+		s.refuse(CauseLiveInHost, sl.ID, sl.Kind, "header:Host")
 	}
 	if s.all.match([]byte(host)) {
 		s.refuse(CauseLiveInHost, "", "", "header:Host")
 	}
+}
+
+// hostLives gives the live values that host holds.
+func hostLives(lives []secrets.Slot, host string) []secrets.Slot {
+	var in []secrets.Slot
+	for _, sl := range lives {
+		if httpwire.Contains([]byte(host), []byte(sl.Live)) {
+			in = append(in, sl)
+		}
+	}
+	return in
+}
+
+// SecretInHost reports whether host holds a live value of slots or a
+// token-prefix match. It is the test of noteHost (CauseLiveInHost). The
+// broker uses it for the rows that it writes before the fence runs. Only
+// TokenRE and Rules of ctx apply.
+func SecretInHost(ctx Ctx, host string, slots map[string]secrets.Slot) bool {
+	return len(hostLives(secrets.NewIndex(slots).Lives, host)) > 0 || allTokens(ctx).match([]byte(host))
 }
 
 // noteTarget scans the percent-decoded target, because the origin decodes

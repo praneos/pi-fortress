@@ -252,9 +252,10 @@ func (b *Broker) flushStrips(c *call) {
 // whereParanoid is the unknown row of the paranoid destination deny.
 const whereParanoid = "paranoid_deny"
 
-// where names the path that logged the row. Empty is the ordinary
-// unknown-host sample, and jsonl fills in "http".
-func (b *Broker) logUnknown(p *preamble.Preamble, req *httpwire.Request, stripped bool, where string) error {
+// host is the host of the row (rowHost). where names the path that
+// logged the row. Empty is the ordinary unknown-host sample, and jsonl
+// fills in "http".
+func (b *Broker) logUnknown(p *preamble.Preamble, req *httpwire.Request, host string, stripped bool, where string) error {
 	if b.Logs == nil {
 		return nil
 	}
@@ -279,7 +280,7 @@ func (b *Broker) logUnknown(p *preamble.Preamble, req *httpwire.Request, strippe
 	}
 	sni := strings.ToLower(strings.TrimSuffix(p.SNI, "."))
 	if sni == "" {
-		sni = prettyHost(req, "")
+		sni = host
 	}
 	path, ua, ct, cookies := pathOnly(req.Target), clip(req.Get("User-Agent"), 256), clip(req.Get("Content-Type"), 128), cookieNames(req.Get("Cookie"))
 	if where == whereParanoid {
@@ -291,7 +292,7 @@ func (b *Broker) logUnknown(p *preamble.Preamble, req *httpwire.Request, strippe
 	}
 	return b.Logs.Unknown(jsonl.Unknown{
 		ClientIP:    clientIP(p),
-		Host:        prettyHost(req, p.SNI),
+		Host:        host,
 		SNI:         sni,
 		DestIP:      destIP,
 		DestPort:    destPort,
@@ -307,6 +308,32 @@ func (b *Broker) logUnknown(p *preamble.Preamble, req *httpwire.Request, strippe
 		Stripped:    stripped,
 		Where:       where,
 	})
+}
+
+// rowHost is the host that the rows of a request name. Usually it is host,
+// the prettyHost of the request. A Host that holds a live value or a
+// token-prefix match makes the fence refuse the request (live_in_host).
+// But the broker writes some rows before the fence runs: the target
+// rules, the blocklist, the paranoid deny and a refused git push. The
+// alerter posts the host of a strip row to the webhook. So for such a
+// Host, each row names the SNI. The test reads the Host as sent and as
+// the row writes it (lowercase), because a live value can be in either
+// form. A sealed store gives no live values; then only the token rules
+// apply.
+func (b *Broker) rowHost(p *preamble.Preamble, req *httpwire.Request, host string) string {
+	sni := strings.ToLower(strings.TrimSuffix(p.SNI, "."))
+	if host == sni {
+		return host
+	}
+	var slots map[string]secrets.Slot
+	if b.Store != nil {
+		slots, _ = b.Store.Snapshot()
+	}
+	ctx := fence.Ctx{TokenRE: b.TokenRE, Rules: b.Rules}
+	if fence.SecretInHost(ctx, req.Get("Host"), slots) || fence.SecretInHost(ctx, host, slots) {
+		return sni
+	}
+	return host
 }
 
 func prettyHost(req *httpwire.Request, sni string) string {

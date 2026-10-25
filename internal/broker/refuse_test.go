@@ -11,9 +11,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"pi-fortress/internal/alert"
+	"pi-fortress/internal/blocklist"
 	"pi-fortress/internal/httpwire"
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/preamble"
@@ -286,5 +289,69 @@ func TestKeyInHeaderNameAlertsEachTime(t *testing.T) {
 	}
 	if alerts != 3 {
 		t.Fatalf("%d alerts, want 3:\n%s", alerts, body)
+	}
+}
+
+// The broker writes some rows before the fence runs: the target rules,
+// the blocklist, the paranoid deny and a refused git push. A Host that
+// holds a live value or a token-prefix match must not go into these rows
+// either, because the alerter posts the host of a strip row to the
+// webhook. The row names the SNI instead.
+func TestLiveValueInHostStaysOutOfEarlyRows(t *testing.T) {
+	akia := "AKIA" + strings.Repeat("Q", 16)
+	for _, tc := range []struct {
+		name, sni, host, dst, target, live, want, where string
+		setup                                           func(*Broker)
+	}{
+		{name: "bad host", sni: "evil.example", host: "lab_fence_github@evil.example", live: "lab_fence_github", want: "evil.example", where: "target"},
+		{name: "port mismatch", sni: "evil.example", host: akia + ".evil.example:8443", live: akia, want: "evil.example", where: "target"},
+		{name: "blocklist", sni: "ok.example", host: akia + ".blocked.example", live: akia, want: "ok.example", where: "host",
+			setup: func(b *Broker) { b.Blocked = blocklist.New("blocked.example") }},
+		{name: "git push", sni: "github.com", host: akia + ".github.com", target: "/o/x.git/info/refs?service=git-receive-pack", live: akia, want: "github.com", where: "target",
+			setup: func(b *Broker) { b.GitPush = gitPushList(t, "github.com o/r\n") }},
+		{name: "paranoid", sni: "github.com", host: akia + ".evil.example", live: akia, want: "github.com", where: whereParanoid,
+			setup: func(b *Broker) {
+				pb := paranoidBroker(t)
+				b.Paranoid, b.Forward = pb.Paranoid, pb.Forward
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, _ := testBroker(t)
+			dir := t.TempDir()
+			b.Logs = &jsonl.Writer{StripPath: filepath.Join(dir, "strip.jsonl"), UnknownPath: filepath.Join(dir, "unknown.jsonl")}
+			var dialed atomic.Bool
+			b.DialTLS = noDial(&dialed)
+			if tc.setup != nil {
+				tc.setup(b)
+			}
+			target := tc.target
+			if target == "" {
+				target = "/"
+			}
+			p := preamble.Preamble{SNI: tc.sni, OrigDst: netip.MustParseAddrPort("8.8.8.8:443")}
+			_ = rawRoundtrip(t, b, p, "GET "+target+" HTTP/1.1\r\nHost: "+tc.host+"\r\n\r\n")
+			strip, _ := os.ReadFile(b.Logs.StripPath)
+			unknown, _ := os.ReadFile(b.Logs.UnknownPath)
+			all := string(strip) + string(unknown)
+			if strings.Contains(strings.ToLower(all), strings.ToLower(tc.live)) {
+				t.Fatalf("the live value is in a row:\n%s", all)
+			}
+			found := false
+			for _, line := range strings.Split(strings.TrimSpace(all), "\n") {
+				var m map[string]any
+				if err := json.Unmarshal([]byte(line), &m); err != nil {
+					t.Fatalf("row %q: %v", line, err)
+				}
+				if msg := alert.Summarize(m); strings.Contains(strings.ToLower(msg), strings.ToLower(tc.live)) {
+					t.Fatalf("the live value is in the alert %q", msg)
+				}
+				if m["where"] == tc.where && m["host"] == tc.want {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("no %s row with host %q:\n%s", tc.where, tc.want, all)
+			}
+		})
 	}
 }

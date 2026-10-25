@@ -622,7 +622,10 @@ cause is marked `alert` one time for each broker start. These eight are not
 an operational fault to fix. They show the fence catching a credential aimed
 where it may not go. This is the signature of a compromised or badly broken
 agent. A `live_in_host` row has the SNI as its `host`, so the live value goes
-to no log and no webhook. A refresh response that the broker refuses (the
+to no log and no webhook. The broker writes some rows before the fence runs:
+the target rules, the blocklist, the paranoid deny and a refused git push.
+When the `Host` holds a live value or a token-prefix match, each of these
+rows also has the SNI as its `host`. A refresh response that the broker refuses (the
 harvest cannot read the new pair, or a token shape stays after the scrub)
 writes `harvest_leftover` with the slot. It is always marked `alert`.
 

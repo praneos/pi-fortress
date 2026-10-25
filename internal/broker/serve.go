@@ -83,8 +83,12 @@ type call struct {
 	req    *httpwire.Request
 	up     *upstream
 	expect bool
-	host   string
-	echo   bool
+	// authority is the Host as the decisions read it (prettyHost). host is
+	// the name that the rows of the request carry (rowHost). They differ
+	// only for a Host that holds a credential.
+	authority string
+	host      string
+	echo      bool
 	// echoRole is set with echo and names the fixture that answers. The two
 	// fixtures differ in what they may receive. The core fixture is lab-gated
 	// and reflects a substituted request on purpose. The open fixture is
@@ -222,8 +226,8 @@ func (b *Broker) serve(ctx context.Context, client net.Conn, br *bufio.Reader, p
 		// stage below is the one a real wss connection runs.
 		b.echoWSOrigin(c)
 	}
-	if !b.hostAllowed(c.host) {
-		_ = b.logUnknown(p, req, len(strips) > 0, "")
+	if !b.hostAllowed(c.authority) {
+		_ = b.logUnknown(p, req, c.host, len(strips) > 0, "")
 	}
 	// A chunked body announces no length. So the only honest count of its
 	// upload occurs while the body goes past. This is after bindHarvest,
@@ -319,16 +323,17 @@ func (b *Broker) serve(ctx context.Context, client net.Conn, br *bufio.Reader, p
 // done says that admit answered the request. A refusal that wrote without
 // error returns done with errRefused, so the caller tests done, not err.
 func (b *Broker) admit(c *call) (done bool, err error) {
-	c.host = prettyHost(c.req, c.p.SNI)
+	c.authority = prettyHost(c.req, c.p.SNI)
+	c.host = b.rowHost(c.p, c.req, c.authority)
 	if rule := targetRefusal(c.req, c.p.OrigDst.Port()); rule != "" {
 		_ = b.logStrip(&c.strips, clientIP(c.p), c.host, "target", rule)
 		return true, b.refuse(c.client, c.req, c.expect, 400, "400 Bad Request", "request\n")
 	}
-	if b.Blocked.Has(c.host) || b.Blocked.Has(c.p.SNI) {
+	if b.Blocked.Has(c.authority) || b.Blocked.Has(c.p.SNI) {
 		_ = b.logStrip(&c.strips, clientIP(c.p), c.host, "host", "blocklist")
 		return true, b.refuse(c.client, c.req, c.expect, 403, "403 Forbidden", "blocked\n")
 	}
-	c.echo = isEcho(c.p.OrigDst) || echoHost(c.p.SNI, c.host)
+	c.echo = isEcho(c.p.OrigDst) || echoHost(c.p.SNI, c.authority)
 	if c.echo {
 		c.echoRole = echoRole(c.p, c.req)
 	}
@@ -457,10 +462,10 @@ func (b *Broker) paranoidRefuse(c *call) (done bool, err error) {
 	if !b.paranoidFor(c.p) || c.echo {
 		return false, nil
 	}
-	if b.forwardAllowed(c.host) && b.forwardAllowed(c.p.SNI) {
+	if b.forwardAllowed(c.authority) && b.forwardAllowed(c.p.SNI) {
 		return false, nil
 	}
-	_ = b.logUnknown(c.p, c.req, false, whereParanoid)
+	_ = b.logUnknown(c.p, c.req, c.host, false, whereParanoid)
 	return true, b.refuse(c.client, c.req, c.expect, 403, "403 Forbidden", "paranoid\n")
 }
 
@@ -470,7 +475,7 @@ func (b *Broker) paranoidRefuse(c *call) (done bool, err error) {
 // push never sends its pack. It answers with the one substitution
 // refusal, so the agent cannot tell a list miss from a sealed store.
 func (b *Broker) gitPushRefuse(c *call) (done bool, err error) {
-	refused, repo, clean := fence.GitPushRefused(b.GitPush, c.host, c.p.SNI, c.req.Method, c.req.Target)
+	refused, repo, clean := fence.GitPushRefused(b.GitPush, c.authority, c.p.SNI, c.req.Method, c.req.Target)
 	if !refused {
 		return false, nil
 	}
