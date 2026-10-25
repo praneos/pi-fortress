@@ -561,6 +561,18 @@ func (c *Config) checkHouseCable(w io.Writer) error {
 	return nil
 }
 
+// minAgentNetBits is the shortest prefix that AGENT_NET may have.
+const minAgentNetBits = 8
+
+// envSrc is " (<net.env>)" for the end of a refusal, or "" when the caller
+// gave no EnvSrc. Thus a refusal never ends in "()".
+func (c *Config) envSrc() string {
+	if c.EnvSrc == "" {
+		return ""
+	}
+	return " (" + c.EnvSrc + ")"
+}
+
 // checkNet validates the network that each chain in the ruleset is built
 // on. The code reads house.env and segments.d field by field and checks
 // them against each other. net.env was copied in as strings, and only the
@@ -588,6 +600,13 @@ func (c *Config) checkNet(o Options) error {
 	// for it.
 	if masked := p.Masked(); masked != p {
 		return fmt.Errorf("AGENT_NET=%s carries a host address; write the network itself, %s (%s)", c.AgentNet, masked, c.EnvSrc)
+	}
+	// The widest private range, 10.0.0.0/8, is a /8. A wider AGENT_NET always
+	// holds public addresses, and a /0 holds all of them. Thus no FAKEIP_NET
+	// can be outside it, and checkFakeIP would tell the operator to change
+	// the wrong key.
+	if p.Bits() < minAgentNetBits {
+		return fmt.Errorf("AGENT_NET=%s is wider than /%d; the agent network is one LAN, and a wider network holds public addresses%s", c.AgentNet, minAgentNetBits, c.envSrc())
 	}
 	for _, x := range []struct{ key, val string }{{"PI_IP", c.PiIP}, {"AGENT_IP", c.AgentIP}} {
 		if x.val == "" {
@@ -1814,7 +1833,7 @@ func (c *Config) checkFakeIP() error {
 	}
 	for _, n := range nets {
 		if netsOverlap(c.FakeIPNet, n.val) {
-			return fmt.Errorf("FAKEIP_NET=%s overlaps %s=%s; the pool must not share addresses with a network the Pi is on (%s)", c.FakeIPNet, n.key, n.val, c.EnvSrc)
+			return fmt.Errorf("FAKEIP_NET=%s overlaps %s=%s; the pool must not share addresses with a network the Pi is on%s", c.FakeIPNet, n.key, n.val, c.envSrc())
 		}
 	}
 	return nil

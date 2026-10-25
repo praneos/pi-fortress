@@ -277,3 +277,38 @@ func TestFakeIPNetIsValidated(t *testing.T) {
 		}
 	}
 }
+
+// An AGENT_NET wider than a /8 holds public addresses, and a /0 holds all
+// of them. No pool can be outside it. The refusal names AGENT_NET, the key
+// to change, and not FAKEIP_NET.
+func TestAgentNetTooWideIsRefused(t *testing.T) {
+	for _, v := range []string{"0.0.0.0/0", "0.0.0.0/1", "10.0.0.0/7"} {
+		net := lab
+		net.AgentNet = v
+		_, err := Load(Options{Net: net, HouseEnv: "/nonexistent/house.env", SegmentsDir: "/nonexistent"})
+		if err == nil || !strings.HasPrefix(err.Error(), "AGENT_NET="+v+" is wider than /8") {
+			t.Errorf("AGENT_NET=%s: err=%v", v, err)
+		}
+	}
+	net := lab
+	net.AgentNet = "10.0.0.0/8"
+	if _, err := Load(Options{Net: net, HouseEnv: "/nonexistent/house.env", SegmentsDir: "/nonexistent"}); err != nil {
+		t.Fatalf("AGENT_NET=10.0.0.0/8 refused: %v", err)
+	}
+}
+
+// The refusal names net.env when the caller gave it, and has no empty
+// brackets when not.
+func TestFakeIPOverlapNamesTheEnvFile(t *testing.T) {
+	net := lab
+	net.AgentDNS, net.FakeIPNet = AgentDNSFakeIP, "10.77.0.0/16"
+	_, err := Load(Options{Net: net, HouseEnv: "/nonexistent/house.env", SegmentsDir: "/nonexistent"})
+	if err == nil || strings.Contains(err.Error(), "()") || !strings.HasSuffix(err.Error(), "a network the Pi is on") {
+		t.Fatalf("no EnvSrc: err=%v", err)
+	}
+	net.EnvSrc = "/etc/pi-fortress/net.env"
+	_, err = Load(Options{Net: net, HouseEnv: "/nonexistent/house.env", SegmentsDir: "/nonexistent"})
+	if err == nil || !strings.HasSuffix(err.Error(), "a network the Pi is on (/etc/pi-fortress/net.env)") {
+		t.Fatalf("with EnvSrc: err=%v", err)
+	}
+}
