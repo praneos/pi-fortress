@@ -455,6 +455,34 @@ func asciiWarnings(policyDir string) ([]string, error) {
 	return warn, nil
 }
 
+// starWarnings gives one warning for each "*.name" line of allow.domains.
+// The line allows name and all names below it (corepolicy.AllowEntry),
+// the same as the line "name". The warning tells the operator to write
+// that. It reads the line as LoadDomains does: the first token before a
+// "#". The block lists need no warning: ParseDomain reads "*.name" there
+// as "name", and a sinkhole line also covers the names below it.
+func starWarnings(path string) ([]string, error) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var warn []string
+	for i, line := range strings.Split(string(raw), "\n") {
+		line, _, _ = strings.Cut(line, "#")
+		bits := strings.Fields(line)
+		if len(bits) == 0 {
+			continue
+		}
+		if name, star := corepolicy.AllowEntry(bits[0]); star && name != "" {
+			warn = append(warn, fmt.Sprintf("%s line %d: %q means %s and every name below it; write %s", filepath.Base(path), i+1, bits[0], name, name))
+		}
+	}
+	return warn, nil
+}
+
 // splitAddrs takes the IPv4 addresses out of the items of a domain list.
 // ParseDomain accepts "192.0.2.1": four labels of digits obey the grammar
 // of a name. As a name, the address got only a sinkhole line, and no nft
@@ -1130,7 +1158,11 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
-	warnings = append(append(warnings, ascii...), core.Warnings...)
+	star, err := starWarnings(filepath.Join(policyDir, agent.File("allow.domains")))
+	if err != nil {
+		return Summary{}, err
+	}
+	warnings = append(append(append(warnings, ascii...), star...), core.Warnings...)
 	if out.HouseWhatsAppNFT != "" {
 		wa, err := LoadTokens(filepath.Join(policyDir, HouseWhatsAppFile), "ips")
 		if err != nil {

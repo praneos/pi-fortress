@@ -625,6 +625,34 @@ func TestShieldedBlacklistLineWarns(t *testing.T) {
 	}
 }
 
+// A "*.name" line in allow.domains allows name and all names below it, as
+// "name" does (corepolicy.AllowEntry). The compile tells the operator to
+// write "name". A "*." line that allows nothing gets no such warning. The
+// block lists already read "*.name" as "name" (ParseDomain) and do not warn.
+func TestAllowStarLineWarns(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"allow.domains":     "github.com\n*.Example.com # docs\n*.*.x.example\n*.com\n",
+		"blacklist.domains": "*.ads.example\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := t.TempDir()
+	sum, err := Compile(dir, Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`allow.domains line 2: "*.Example.com" means example.com and every name below it; write example.com`}
+	if !slices.Equal(sum.Warnings, want) {
+		t.Fatalf("warnings %q, want %q", sum.Warnings, want)
+	}
+	if dns, _ := os.ReadFile(filepath.Join(out, "d.conf")); string(dns) != dnsLines([]string{"ads.example"}) {
+		t.Fatalf("d.conf=%q", dns)
+	}
+}
+
 // A name that is not ASCII never matches: a query, an SNI and a feed carry
 // the xn-- form. A line of the operator with such a name is skipped with a
 // warning that gives the xn-- form to write. This applies to each editable

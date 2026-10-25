@@ -8,10 +8,11 @@ import (
 
 // The set of a plain segment is only its own file, read the same way as
 // allow.domains. It has no core table and no echo fixtures, for each value of lab.
+// A "*.name" line is the line "name" (AllowEntry). A "*.*.name" line allows nothing.
 func TestLoadAllowIsTheSegmentFileAlone(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "allow.desk.domains")
-	body := "github.com\n# comment\n\n*.example.com\n"
+	body := "github.com\n# comment\n\n*.example.com\n*.*.other.example\n"
 	if err := os.WriteFile(p, []byte(body), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -26,8 +27,11 @@ func TestLoadAllowIsTheSegmentFileAlone(t *testing.T) {
 		{"github.com", true},
 		{"api.github.com", true},
 		{"github.com.evil.example", false},
-		{"a.example.com", false},
-		{"example.com", false},
+		{"a.example.com", true},
+		{"example.com", true},
+		{"evilexample.com", false},
+		{"a.other.example", false},
+		{"other.example", false},
 		{"x..github.com", false},
 		{"", false},
 		{OpenEcho, false},
@@ -39,8 +43,8 @@ func TestLoadAllowIsTheSegmentFileAlone(t *testing.T) {
 			}
 		}
 	}
-	if n := f.Names(); len(n) != 1 || n[0] != "github.com" {
-		t.Errorf("Names() = %v, want [github.com]: a *. line is not a usable name", n)
+	if n := f.Names(); len(n) != 2 || n[0] != "example.com" || n[1] != "github.com" {
+		t.Errorf("Names() = %v, want [example.com github.com]: a *.*. line is not a usable name", n)
 	}
 }
 
@@ -52,7 +56,7 @@ func TestLoadAllowRefusesAMissingFile(t *testing.T) {
 
 func TestLoadAllowEmptyFileHasNoNames(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "allow.desk.domains")
-	if err := os.WriteFile(p, []byte("# nothing yet\n*.example.com\n"), 0644); err != nil {
+	if err := os.WriteFile(p, []byte("# nothing yet\n*.*.example.com\n*.com\n"), 0644); err != nil {
 		t.Fatal(err)
 	}
 	f, err := LoadAllow(p)

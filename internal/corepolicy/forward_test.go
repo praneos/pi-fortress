@@ -107,7 +107,7 @@ func TestForwardEmptyUnion(t *testing.T) {
 // Allowed still refuses names that only such a line could make.
 func TestForwardNamesExcludesUnusableNames(t *testing.T) {
 	f := testForward(t,
-		"github.com\na/b\n\x01evil.com\nlocalhost\nclaude.ai\npf-core-echo.test\n*.gitlab.com\n",
+		"github.com\na/b\n\x01evil.com\nlocalhost\nclaude.ai\npf-core-echo.test\n*.*.gitlab.com\n",
 		"api.x.ai K\n*.example.com K\nup:port K\n"+strings.Repeat("z", 64)+".com K\npf-open-echo.test *\n")
 	want := []string{"api.x.ai", "claude.ai", "example.com", "github.com"}
 	if got := f.Names(); !slices.Equal(got, want) {
@@ -120,6 +120,27 @@ func TestForwardNamesExcludesUnusableNames(t *testing.T) {
 	}
 	if f.Allowed("b", false) || f.Allowed("evil.com", false) || f.Allowed("port", false) || f.Allowed("a.gitlab.com", false) {
 		t.Fatal("a name only a malformed line could have produced was allowed")
+	}
+}
+
+// A "*.name" line in an allow list is the same as "name": the name and
+// all names below it. pf tui writes it as "name". Only one "*." goes, and
+// only before a name with a dot. A "*" that is left, or "*.com", allows
+// nothing.
+func TestAllowStarLineIsTheName(t *testing.T) {
+	f := testForward(t, "*.Example.COM.\n*.*.gitlab.com\n*.com\n*\n*.\n", "")
+	if got, want := f.Names(), []string{"example.com"}; !slices.Equal(got, want) {
+		t.Fatalf("Names() = %v, want %v", got, want)
+	}
+	for _, n := range []string{"example.com", "api.example.com", "a.b.example.com"} {
+		if !f.Allowed(n, false) {
+			t.Errorf("Allowed(%q) = false", n)
+		}
+	}
+	for _, n := range []string{"evilexample.com", "gitlab.com", "a.gitlab.com", "x.a.gitlab.com", "foo.com", "*.gitlab.com"} {
+		if f.Allowed(n, false) {
+			t.Errorf("Allowed(%q) = true", n)
+		}
 	}
 }
 

@@ -7,7 +7,8 @@
 #
 # One name per line. A name allows itself and all its subdomains, the same
 # as allow.domains. Thus anthropic.com already covers api.anthropic.com
-# and *.anthropic.com. A "*.name" line matches nothing. This file only:
+# and *.anthropic.com. A "*.name" line is the same as "name": write
+# "name". This file only:
 # the allow.domains and core.hosts of the agent do not apply to a segment.
 #
 # The seed lets Claude Code work on the desk. Apply refuses

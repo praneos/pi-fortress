@@ -90,7 +90,7 @@ func TestParanoidSegmentRefusals(t *testing.T) {
 		{"agent spelling", "PARANOID=1\n", "github.com\n", 0644, []string{"PARANOID is not on or off"}},
 		{"missing allowlist", "PARANOID=on\n", "", 0, []string{"desk.env", "allow.desk.domains is missing or unreadable", "Nothing was changed"}},
 		{"comments only", "PARANOID=on\n", "# later\n\n", 0644, []string{"allow.desk.domains has no usable name"}},
-		{"star lines only", "PARANOID=on\n", "*.github.com\n", 0644, []string{"allow.desk.domains has no usable name"}},
+		{"star lines with no name", "PARANOID=on\n", "*.*.github.com\n*.com\n", 0644, []string{"allow.desk.domains has no usable name"}},
 		{"not readable by pf dns", "PARANOID=on\n", "github.com\n", 0600, []string{"not readable by pf dns", "chmod 0644"}},
 		{"gate turned off", "PARANOID=on\nBLOCK_DIRECT_IP=off\n", "github.com\n", 0644, []string{"PARANOID=on needs the resolved-address gate", "BLOCK_DIRECT_IP=off"}},
 	} {

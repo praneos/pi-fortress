@@ -299,13 +299,31 @@ func LoadDomains(path string) (map[string]struct{}, error) {
 			continue
 		}
 
-		host := normHost(bits[0])
+		host, _ := AllowEntry(bits[0])
 		if host == "" {
 			continue
 		}
 		out[host] = struct{}{}
 	}
 	return out, sc.Err()
+}
+
+// AllowEntry reads the first token of an allow list line (allow.domains,
+// allow.<segment>.domains). It gives the name that the line allows, and if
+// the line starts with "*.". Each line allows the name and all names below
+// it. Thus "*.name" is the same as "name", as pf tui writes it. Before, the
+// "*.name" line matched no name. One "*." goes, and only before a name
+// with a dot. If a "*" is left ("*.*.name") or the name has one label
+// ("*.com"), it gives "": the line allows nothing.
+func AllowEntry(tok string) (string, bool) {
+	host := normHost(tok)
+	if !strings.HasPrefix(host, "*.") {
+		return host, false
+	}
+	if host = host[2:]; !validName(host) {
+		return "", true
+	}
+	return host, true
 }
 
 func (p *Policy) HostAllowed(name string) bool {

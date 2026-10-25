@@ -47,10 +47,10 @@ The blocklist runs first and still wins.
 
 `allow.domains` is now operator state (`PI_OWNED`, `admin.AgentLists`).
 A listed name covers its subdomains. Thus the seed lists `github.com`,
-not `api.github.com`. A `*.name` line in this file matches nothing. The
-`paranoid=N` count of `pf status` does not count it. `sudo pf tui` writes
-a `*.name` that you type as the bare `name`. Thus that entry allows `name`
-itself and each name below it, at all depths. Each line in this file
+not `api.github.com`. A `*.name` line in this file is the same as
+`name`: it allows `name` itself and each name below it, at all depths.
+`pf compile` gives a warning for it: write `name`. `sudo pf tui` writes
+a `*.name` that you type as the bare `name`. Each line in this file
 allows all names below it. There is no form for one exact name. Write the
 narrowest name that works, for example `api.example.com` and not
 `example.com`.
@@ -220,7 +220,7 @@ The segment key accepts `on` or `off` only. `1` is refused. In
 
 | Piece | Where |
 |---|---|
-| Allowlist | `/etc/pi-fortress/allow.<name>.domains`, next to `segments.d`. Same line format and matching as `allow.domains` (`corepolicy.HostIn`). A name covers itself and its subdomains. A `*.name` line matches nothing. Only this file is used: the agent `allow.domains` and `core.hosts` are not read for a segment. The echo fixtures are not forwarded (`corepolicy.LoadAllow`) |
+| Allowlist | `/etc/pi-fortress/allow.<name>.domains`, next to `segments.d`. Same line format and matching as `allow.domains` (`corepolicy.HostIn`). A name covers itself and its subdomains. A `*.name` line is the same as `name` (`pf compile` does not read this file and gives no warning for it). Only this file is used: the agent `allow.domains` and `core.hosts` are not read for a segment. The echo fixtures are not forwarded (`corepolicy.LoadAllow`) |
 | Seed | apply copies `vm/pi/allow.segment.domains.example` to `allow.<name>.domains` for each plain segment that has no file. It does this once, and never over an existing file. The seed lists `anthropic.com`, `claude.ai`, and `claude.com`. These cover `*.anthropic.com`, `*.claude.ai`, and `*.claude.com`. Thus Claude Code continues to work on a paranoid desk without a first edit. After that, the file is operator state. Edit it by hand and run `sudo pf apply --local` |
 | Refusals | With `PARANOID=on`, apply refuses and changes nothing if the file is missing, unreadable, not world-readable (`pf dns` runs as `pf-dns`; `chmod 0644`), or has no usable name. The message names the file. `PARANOID=on` with `BLOCK_DIRECT_IP=off` is refused, because paranoid needs the gate |
 | DNS | The `dns.json` entry of the segment gets `"paranoid": true, "allow": "<file>"` and no `core_hosts`. A name that is not on the list gets the sinkhole answer, `0.0.0.0`. The name is logged as `blocked` in `dns-<name>.jsonl`. It is never asked upstream and never put in `resolved_<name>_v4`. The blocklist still answers first |
