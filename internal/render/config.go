@@ -84,6 +84,10 @@ type Options struct {
 	// reads the box. It is unexported, so the injection cannot become an
 	// API that a caller uses to tell the renderer that an interface is there.
 	ifaces map[string]bool
+	// liveIF replaces the detection of INT_IF and WAN_IF from the kernel
+	// (the interface that holds PI_IP, and the default route) in the Live
+	// mode. Only the tests set it. nil reads the box.
+	liveIF func(key, piIP string) (string, error)
 }
 
 type Segment struct {
@@ -1358,15 +1362,27 @@ func (c *Config) interfaces(o Options, have map[string]bool) error {
 	c.IntIF, c.WanIF = o.IntIF, o.WanIF
 	switch {
 	case o.Live:
-		if c.IntIF == "" {
-			c.IntIF = ifaceWithAddr(c.PiIP)
+		detect := o.liveIF
+		if detect == nil {
+			detect = kernelIF
 		}
-		if c.WanIF == "" {
-			wan, err := defaultRouteIF()
+		// A detected name goes into the ruleset the same way as a declared
+		// one, inside a quoted iifname match. Thus it gets the same check.
+		for _, x := range []struct {
+			key string
+			dst *string
+		}{{"INT_IF", &c.IntIF}, {"WAN_IF", &c.WanIF}} {
+			if *x.dst != "" {
+				continue
+			}
+			name, err := detect(x.key, c.PiIP)
 			if err != nil {
 				return err
 			}
-			c.WanIF = wan
+			if name != "" && !reIface.MatchString(name) {
+				return fmt.Errorf("%s=%q, found on this box, is not an interface name; set %s in net.env%s. Nothing was changed.", x.key, name, x.key, c.envSrc())
+			}
+			*x.dst = name
 		}
 	default:
 		setDefault(&c.IntIF, "eth0")
@@ -1430,6 +1446,15 @@ func (c *Config) explainNoIF(w io.Writer) {
 var errSilent = errors.New("silent")
 
 func IsSilent(err error) bool { return errors.Is(err, errSilent) }
+
+// kernelIF detects INT_IF (the interface that holds PI_IP) or WAN_IF (the
+// interface of the default route) from the kernel.
+func kernelIF(key, piIP string) (string, error) {
+	if key == "INT_IF" {
+		return ifaceWithAddr(piIP), nil
+	}
+	return defaultRouteIF()
+}
 
 // ifaceWithAddr is `ip -4 -o addr show to ADDR`: the first interface,
 // by index, that has exactly that address.
