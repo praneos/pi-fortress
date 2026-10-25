@@ -359,6 +359,7 @@ func Load(o Options) (*Config, error) {
 		return nil, err
 	}
 	c.warnInspectAdmin(o.Stderr)
+	c.warnDNSTypes(o.Stderr)
 	if err := c.checkHouseCable(o.Stderr); err != nil {
 		return nil, err
 	}
@@ -1900,6 +1901,24 @@ func ParsePorts(v string) (tcp, udp string, err error) {
 // (internal/dnsd, namedTypes). All other types are written TYPE<n>. A
 // test there keeps the two lists the same.
 var DNSTypeNames = []string{"A", "AAAA", "CNAME", "MX", "NS", "PTR", "SRV", "TXT", "SOA", "HTTPS", "SVCB"}
+
+// warnDNSTypes warns about a DNS_TYPES entry for AAAA, HTTPS or SVCB.
+// pf dns answers these empty on every segment, before DNS_TYPES
+// (internal/dnsd, alwaysEmpty). The entry stays accepted, so an existing
+// segment file still renders, but it has no effect.
+func (c *Config) warnDNSTypes(w io.Writer) {
+	if w == nil {
+		return
+	}
+	inert := map[string]string{"AAAA": "AAAA", "TYPE28": "AAAA", "HTTPS": "HTTPS", "TYPE65": "HTTPS", "SVCB": "SVCB", "TYPE64": "SVCB"}
+	for _, s := range c.Segments {
+		for _, tok := range strings.Fields(s.DNSTypes) {
+			if typ, ok := inert[tok]; ok {
+				fmt.Fprintf(w, "pi-fortress: WARNING segment %s DNS_TYPES: %s is always answered empty (IPv6 is dropped; HTTPS/SVCB would carry ECH and real addresses); this entry has no effect.\n", s.Name, typ)
+			}
+		}
+	}
+}
 
 // ValidDNSType reports whether pf dns will take tok as a DNS_TYPES entry.
 func ValidDNSType(tok string) bool {

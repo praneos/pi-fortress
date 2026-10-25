@@ -532,9 +532,9 @@ func (seg *Segment) readTypes() (*typeAllow, error) {
 	return ta, nil
 }
 
-// reportTypes says which dns_types.allow lines were skipped. -check and
-// the journal show this. A skipped line filters a pair that the operator
-// meant to forward. Nothing else would tell the operator why.
+// reportTypes says which dns_types.allow lines and entries were skipped.
+// -check and the journal show this. A skipped line filters a pair that the
+// operator meant to forward. Nothing else would tell the operator why.
 func (s *Server) reportTypes(seg *Segment, ta *typeAllow) {
 	if ta == nil {
 		return
