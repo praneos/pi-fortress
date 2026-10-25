@@ -31,8 +31,9 @@ func dropTests(t *testing.T) {
 	t.Run("DNS straight out is dropped", func(t *testing.T) {
 		liftAgentLock(t)
 		since := piClock(t)
-		mustFailOn(t, "agent", "dig +time=3 +tries=1 @8.8.8.8 example.com")
-		mustFailOn(t, "agent", "dig +tcp +time=3 +tries=1 @8.8.8.8 example.com")
+		mustFailAllOn(t, "agent",
+			"dig +time=3 +tries=1 @8.8.8.8 example.com",
+			"dig +tcp +time=3 +tries=1 @8.8.8.8 example.com")
 		kernLog(t, since, "pi-fortress agent-doh: ", "DST=8.8.8.8 ", "PROTO=UDP ", "DPT=53 ")
 		kernLog(t, since, "pi-fortress agent-doh: ", "DST=8.8.8.8 ", "PROTO=TCP ", "DPT=53 ")
 	})

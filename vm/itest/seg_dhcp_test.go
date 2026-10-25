@@ -183,8 +183,9 @@ func segDHCPTests(t *testing.T) {
 			t.Errorf("the segment's DNS on %s did not answer %s: %q", segIP, allow, ips)
 		}
 		// House trust at most: no SSH to the Pi or into the agents.
-		mustFailOn(t, "house", "sudo ip netns exec "+ns+" nc -z -w3 "+segIP+" 22")
-		mustFailOn(t, "house", "sudo ip netns exec "+ns+" nc -z -w3 "+e["AGENT_IP"]+" 22")
+		mustFailAllOn(t, "house",
+			"sudo ip netns exec "+ns+" nc -z -w3 "+segIP+" 22",
+			"sudo ip netns exec "+ns+" nc -z -w3 "+e["AGENT_IP"]+" 22")
 	})
 	// A reservation for the MAC of the client, outside the dynamic range,
 	// so that the address can only come from it. It is in dhcp.<name>.hosts

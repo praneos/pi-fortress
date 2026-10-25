@@ -156,10 +156,25 @@ func run(t *testing.T, d time.Duration, name string, args ...string) (string, er
 
 func ssh(t *testing.T, d time.Duration, vm, cmd string) (string, error) {
 	t.Helper()
+	out, err := sshNoSkip(t, d, vm, cmd)
+	sudoSkip(t, vm, cmd, err)
+	return out, err
+}
+
+// sshNoSkip is ssh without the sudo skip. It does not stop the test, so
+// a goroutine can call it. The caller then gives the error to sudoSkip
+// on the test goroutine.
+func sshNoSkip(t *testing.T, d time.Duration, vm, cmd string) (string, error) {
+	t.Helper()
 	if sshCfg == "" {
 		return "", fmt.Errorf("ssh config not loaded")
 	}
-	out, err := run(t, d, "ssh", "-n", "-F", sshCfg, "-o", "BatchMode=yes", vm, cmd)
+	return run(t, d, "ssh", "-n", "-F", sshCfg, "-o", "BatchMode=yes", vm, cmd)
+}
+
+// sudoSkip skips the test when err is a sudo refusal of cmd on vm.
+func sudoSkip(t *testing.T, vm, cmd string, err error) {
+	t.Helper()
 	// All sudo paths go through here, also the paths that drop the error.
 	// The probe of requireLab must see the refusal. Thus skips start only
 	// after the lab is up.
@@ -171,7 +186,6 @@ func ssh(t *testing.T, d time.Duration, vm, cmd string) (string, error) {
 	if labReady && !requireSudo() && err != nil && sudoRefused(err.Error()) {
 		skipNoSudo(t, vm, cmd)
 	}
-	return out, err
 }
 
 func mustSSH(t *testing.T, vm, cmd string) string {

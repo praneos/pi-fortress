@@ -87,8 +87,9 @@ func houseTests(t *testing.T) {
 		if out := mustSSH(t, "house", "ip -4 -o addr show"); !contains(out, " "+other+"/") {
 			t.Skip("no second address " + other)
 		}
-		mustFailOn(t, "house", "nc -s "+other+" -z -w3 "+agentIP+" 22")
-		mustFailOn(t, "house", "nc -s "+other+" -z -w3 "+gw+" 22")
+		mustFailAllOn(t, "house",
+			"nc -s "+other+" -z -w3 "+agentIP+" 22",
+			"nc -s "+other+" -z -w3 "+gw+" 22")
 	})
 	t.Run("DoT dropped and logged", func(t *testing.T) {
 		since := piClock(t)

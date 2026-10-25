@@ -70,12 +70,14 @@ func houseDeviceTests(t *testing.T) {
 		}
 	})
 	t.Run("pool address has no ssh", func(t *testing.T) {
-		mustFailOn(t, "house", in("phone", "nc -z -w3 "+gw+" 22"))
-		mustFailOn(t, "house", in("phone", "nc -z -w3 "+agentIP+" 22"))
+		mustFailAllOn(t, "house",
+			in("phone", "nc -z -w3 "+gw+" 22"),
+			in("phone", "nc -z -w3 "+agentIP+" 22"))
 	})
 	t.Run("setup page and desk unreachable", func(t *testing.T) {
-		mustFailOn(t, "house", in("phone", "curl -sS --noproxy '*' -o /dev/null --max-time 5 http://10.77.0.1/setup.sh"))
-		mustFailOn(t, "house", in("phone", "nc -z -w3 "+desk+" 22"))
+		mustFailAllOn(t, "house",
+			in("phone", "curl -sS --noproxy '*' -o /dev/null --max-time 5 http://10.77.0.1/setup.sh"),
+			in("phone", "nc -z -w3 "+desk+" 22"))
 	})
 	// To an allowed site, not 1.1.1.1: 1.1.1.1 is in the DoH set, and the
 	// rule before the QUIC rule would drop it.

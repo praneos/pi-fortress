@@ -205,6 +205,31 @@ func hostAliases(cfg string) map[string]bool {
 func mustFailOn(t *testing.T, host, cmd string) {
 	t.Helper()
 	out, err := ssh(t, 25*time.Second, host, cmd)
+	failedAsExpected(t, host, cmd, out, err)
+}
+
+// mustFailAllOn is mustFailOn for commands that do not depend on each
+// other. A dropped probe waits for its full timeout. Thus the commands
+// run at the same time, and the wait is that of the slowest one. The
+// checks then occur in the order of cmds, on the test goroutine.
+func mustFailAllOn(t *testing.T, host string, cmds ...string) {
+	t.Helper()
+	outs := make([]string, len(cmds))
+	errs := make([]error, len(cmds))
+	var wg sync.WaitGroup
+	for i, cmd := range cmds {
+		wg.Go(func() { outs[i], errs[i] = sshNoSkip(t, 25*time.Second, host, cmd) })
+	}
+	wg.Wait()
+	for i, cmd := range cmds {
+		sudoSkip(t, host, cmd, errs[i])
+		failedAsExpected(t, host, cmd, outs[i], errs[i])
+	}
+}
+
+// failedAsExpected fails the test unless cmd itself failed on host.
+func failedAsExpected(t *testing.T, host, cmd, out string, err error) {
+	t.Helper()
 	if err == nil {
 		t.Fatalf("%s: %s: expected failure\n%s", host, cmd, out)
 	}
