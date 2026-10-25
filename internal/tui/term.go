@@ -28,11 +28,19 @@ const (
 	KeyCtrlC
 	KeyCtrlR
 	KeyResize
+	// keyPasteStart and keyPasteEnd are the brackets that the terminal puts
+	// around a paste. ReadKey uses them, and never returns them.
+	keyPasteStart
+	keyPasteEnd
 )
 
 type Key struct {
 	Kind KeyKind
 	Rune rune
+	// Paste is set on a key that came between the paste brackets of the
+	// terminal (bracketed paste, mode 2004). Thus a line end with Paste is
+	// part of a paste, not an Enter that the operator pressed.
+	Paste bool
 }
 
 // Terminal is what the app needs from a tty. ReadKey blocks. It returns
@@ -53,7 +61,16 @@ var escSeqs = map[string]KeyKind{
 	"[H": KeyHome, "[F": KeyEnd, "OH": KeyHome, "OF": KeyEnd,
 	"[1~": KeyHome, "[4~": KeyEnd, "[7~": KeyHome, "[8~": KeyEnd,
 	"[5~": KeyPgUp, "[6~": KeyPgDn, "[15~": KeyF5, "[[E": KeyF5,
+	"[200~": keyPasteStart, "[201~": keyPasteEnd,
 }
+
+// Bracketed paste. EnterRaw turns it on and Restore turns it off. A
+// terminal that does not know the mode ignores it, and then no key is a
+// paste.
+const (
+	pasteOn  = "\x1b[?2004h"
+	pasteOff = "\x1b[?2004l"
+)
 
 // parseKey changes one byte, plus all bytes that follow an escape within
 // escWait, into a Key. next returns the following byte, or false on
@@ -161,6 +178,29 @@ type byteSource struct {
 	// next and pending before newer bytes. Only the goroutine that reads keys
 	// touches it.
 	back []byte
+	// pasting is true between the start and the end bracket of a paste. Only
+	// the goroutine that reads keys touches it.
+	pasting bool
+}
+
+// key parses the key that starts with b. A paste bracket is not a key: key
+// records it and returns false. Each key between the brackets has Paste
+// set. Before, the code guessed a paste from a line end at the end of one
+// read. But an ssh session or a slow link also brings typed keys in one
+// read, so a typed Enter could count as a paste, and an arrow key and Enter
+// did.
+func (s *byteSource) key(b byte) (Key, bool) {
+	k := parseKey(b, s.next, s.unread)
+	switch k.Kind {
+	case keyPasteStart:
+		s.pasting = true
+		return k, false
+	case keyPasteEnd:
+		s.pasting = false
+		return k, false
+	}
+	k.Paste = s.pasting
+	return k, true
 }
 
 func (s *byteSource) unread(b byte) { s.back = append(s.back, b) }
@@ -184,7 +224,7 @@ func (s *byteSource) pending() (byte, bool) {
 func newByteSource(r io.Reader, stop <-chan struct{}) *byteSource {
 	s := &byteSource{ch: make(chan byte, 64), err: make(chan error, 1)}
 	go func() {
-		buf := make([]byte, 64)
+		buf := make([]byte, 512)
 		for {
 			n, err := r.Read(buf)
 			for _, b := range buf[:n] {

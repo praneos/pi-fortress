@@ -100,6 +100,22 @@ func TestParseDomainWildcard(t *testing.T) {
 	}
 }
 
+// A leading dot reads as "*.": the name and all names below it. Before, the
+// parser refused ".example.com", and the line compiled to nothing with no
+// warning. Only one dot goes.
+func TestParseDomainLeadingDot(t *testing.T) {
+	for in, want := range map[string]string{".example.com": "example.com", ".Evil.Example.": "evil.example"} {
+		if got, ok := ParseDomain(in); !ok || got != want {
+			t.Errorf("ParseDomain(%q) = %q, %v; want %q", in, got, ok, want)
+		}
+	}
+	for _, bad := range []string{"..example.com", "*..example.com", ".*.example.com", ".", ".com"} {
+		if got, ok := ParseDomain(bad); ok {
+			t.Errorf("ParseDomain(%q) accepted as %q", bad, got)
+		}
+	}
+}
+
 func TestParseDomainLengthLimits(t *testing.T) {
 	if _, ok := ParseDomain(strings.Repeat("a", 64) + ".example.com"); ok {
 		t.Fatal("label over 63 accepted")
@@ -398,6 +414,68 @@ func TestParseAllowIPv4CapsWidth(t *testing.T) {
 	}
 }
 
+// An allow list refuses a prefix with host bits, as ssh_allow.ips does. A
+// mask would open the full range where the operator possibly meant one
+// host. The warning gives the network.
+func TestAllowListsSkipHostBitPrefixes(t *testing.T) {
+	for _, bad := range []string{"93.184.216.40/24", "151.101.1.9/31"} {
+		if got, ok := ParseAllowIPv4(bad); ok {
+			t.Errorf("ParseAllowIPv4(%q) accepted as %q", bad, got)
+		}
+	}
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"direct_ip.allow":       "93.184.216.40/24\n151.101.1.9\n",
+		"house_direct_ip.allow": "76.76.2.9/24\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := t.TempDir()
+	o := Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf"),
+		DirectIPNFT: filepath.Join(out, "direct.nft"), HouseDirectIPNFT: filepath.Join(out, "house-direct.nft")}
+	sum, err := Compile(dir, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct, _ := os.ReadFile(o.DirectIPNFT)
+	if sum.DirectIPs != 1 || sum.HouseDirectIPs != 0 || strings.Contains(string(direct), "93.184.216.0/24") {
+		t.Fatalf("direct.nft=%q summary=%+v", direct, sum)
+	}
+	want := [][]string{
+		{`direct_ip.allow line 1: "93.184.216.40/24"`, "host bits", "93.184.216.0/24"},
+		{`house_direct_ip.allow line 1: "76.76.2.9/24"`, "host bits", "76.76.2.0/24"},
+	}
+	if len(sum.Warnings) != len(want) {
+		t.Fatalf("warnings %q, want %d", sum.Warnings, len(want))
+	}
+	for i, w := range want {
+		for _, s := range w {
+			if !strings.Contains(sum.Warnings[i], s) {
+				t.Errorf("warning %d %q lacks %q", i, sum.Warnings[i], s)
+			}
+		}
+	}
+}
+
+// house_private_dns.ips pins exact addresses. A range stops the compile with
+// the "is a range" error, also when it has host bits and another line gives
+// a good pin. Before, the compiler dropped a host-bits line with no message.
+func TestHousePrivateDNSRangeStopsTheCompile(t *testing.T) {
+	for _, ips := range []string{"76.76.2.0/24\n", "76.76.2.22/24\n", "76.76.2.22\n76.76.10.22/24\n", "76.76.2.22\n76.0.0.0/8\n"} {
+		dir := t.TempDir()
+		_ = os.WriteFile(filepath.Join(dir, "house_private_dns.domains"), []byte("abc123.dns.controld.com\n"), 0644)
+		_ = os.WriteFile(filepath.Join(dir, "house_private_dns.ips"), []byte(ips), 0644)
+		out := t.TempDir()
+		_, err := Compile(dir, Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf"),
+			HouseDoHDNS: filepath.Join(out, "house-doh.domains"), HousePrivateDNSNFT: filepath.Join(out, "private.nft")})
+		if err == nil || !strings.Contains(err.Error(), "house_private_dns.ips: ") || !strings.Contains(err.Error(), " is a range;") {
+			t.Errorf("%q: err %v", ips, err)
+		}
+	}
+}
+
 // The house VPN feed compiles to its own file. house_never_block applies.
 // The file does not repeat a name that the house sinkhole already carries.
 // Thus the file is exactly what HOUSE_BLOCK_VPN adds.
@@ -496,5 +574,158 @@ func TestHandKeptListsWarnOnSkippedLines(t *testing.T) {
 	sum, err = Compile(dir, Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf")})
 	if err != nil || len(sum.Warnings) != 0 || strings.Contains(sum.Line(), "warning") {
 		t.Fatalf("clean lists: warnings %q err %v", sum.Warnings, err)
+	}
+}
+
+// never_block.domains and core.hosts shield a name and each name below it.
+// Thus a line of the operator in blacklist.domains can compile to nothing.
+// The compiler then gives a warning that names the entry and the two files.
+// A feed entry that a shield removes gets no warning: the shield is there
+// for the feeds.
+func TestShieldedBlacklistLineWarns(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "generated"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"never_block.domains":         "example.com\n",
+		"core.hosts":                  "api.anthropic.com CLAUDE_OAT\n",
+		"blacklist.domains":           "www.example.com\nanthropic.com\nevil.example\nwww.example.com\n",
+		"generated/blacklist.domains": "cdn.example.com\napi.anthropic.com\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := t.TempDir()
+	sum, err := Compile(dir, Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dns, _ := os.ReadFile(filepath.Join(out, "d.conf"))
+	if string(dns) != dnsLines([]string{"evil.example"}) || sum.Domains != 1 {
+		t.Fatalf("d.conf=%q summary=%+v", dns, sum)
+	}
+	want := [][]string{
+		{`blacklist.domains: "www.example.com"`, "never_block.domains"},
+		{`blacklist.domains: "anthropic.com"`, "core.hosts"},
+	}
+	if len(sum.Warnings) != len(want) {
+		t.Fatalf("warnings %q, want %d", sum.Warnings, len(want))
+	}
+	for i, w := range want {
+		for _, s := range w {
+			if !strings.Contains(sum.Warnings[i], s) {
+				t.Errorf("warning %d %q lacks %q", i, sum.Warnings[i], s)
+			}
+		}
+	}
+	if line := sum.Line(); strings.Contains(line, "cdn.example.com") || !strings.Contains(line, "\ncompile: warning: blacklist.domains:") {
+		t.Fatalf("Line:\n%s", line)
+	}
+}
+
+// A "*.name" line in allow.domains allows name and all names below it, as
+// "name" does (corepolicy.AllowEntry). The compile tells the operator to
+// write "name". A "*." line that allows nothing gets no such warning (a
+// one-label one gets its own). The
+// block lists already read "*.name" as "name" (ParseDomain) and do not warn.
+func TestAllowStarLineWarns(t *testing.T) {
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"allow.domains":     "github.com\n*.Example.com # docs\n*.*.x.example\n*.com\n",
+		"blacklist.domains": "*.ads.example\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := t.TempDir()
+	sum, err := Compile(dir, Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`allow.domains line 2: "*.Example.com" means example.com and every name below it; write example.com`,
+		`allow.domains line 4: "*.com" is one label; it would allow every name below it; write the full name`,
+	}
+	if !slices.Equal(sum.Warnings, want) {
+		t.Fatalf("warnings %q, want %q", sum.Warnings, want)
+	}
+	if dns, _ := os.ReadFile(filepath.Join(out, "d.conf")); string(dns) != dnsLines([]string{"ads.example"}) {
+		t.Fatalf("d.conf=%q", dns)
+	}
+}
+
+// A one-label line of allow.domains allows nothing (corepolicy.AllowEntry).
+// The compile tells the operator why, for "com" and for "*.com".
+func TestAllowOneLabelLineWarns(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "allow.domains"), []byte("github.com\nCom\n*.org\n*\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	sum, err := Compile(dir, Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`allow.domains line 2: "Com" is one label; it would allow every name below it; write the full name`,
+		`allow.domains line 3: "*.org" is one label; it would allow every name below it; write the full name`,
+	}
+	if !slices.Equal(sum.Warnings, want) {
+		t.Fatalf("warnings %q, want %q", sum.Warnings, want)
+	}
+}
+
+// A name that is not ASCII never matches: a query, an SNI and a feed carry
+// the xn-- form. A line of the operator with such a name is skipped with a
+// warning that gives the xn-- form to write. This applies to each editable
+// domain list, to doh.domains.local and to core.hosts. A feed line is
+// skipped silently, as before.
+func TestNonASCIINameWarnsWithItsALabel(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "generated"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"blacklist.domains":           "evil.example\nmünchen.de\n",
+		"allow.domains":               "# mine\nbücher.example\n",
+		"house.domains":               "*.straße.example\n",
+		"doh.domains.local":           "dns.bücher.example\n",
+		"core.hosts":                  "api.anthropic.com CLAUDE_OAT\n",
+		"core.hosts.local":            "münchen.de CLAUDE_OAT\n",
+		"generated/blacklist.domains": "feed.bücher.example\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := t.TempDir()
+	sum, err := Compile(dir, Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf"), HouseDNS: filepath.Join(out, "h.conf")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{`blacklist.domains line 2: "münchen.de"`, "xn--mnchen-3ya.de"},
+		{`allow.domains line 2: "bücher.example"`, "xn--bcher-kva.example"},
+		{`house.domains line 1: "*.straße.example"`, "*.xn--strae-oqa.example"},
+		{`doh.domains.local line 1: "dns.bücher.example"`, "dns.xn--bcher-kva.example"},
+		{`core.hosts.local line 1: "münchen.de"`, "xn--mnchen-3ya.de"},
+	}
+	if len(sum.Warnings) != len(want) {
+		t.Fatalf("warnings %q, want %d", sum.Warnings, len(want))
+	}
+	for _, w := range want {
+		found := false
+		for _, got := range sum.Warnings {
+			found = found || strings.Contains(got, w[0]) && strings.Contains(got, w[1])
+		}
+		if !found {
+			t.Errorf("no warning has %q and %q: %q", w[0], w[1], sum.Warnings)
+		}
+	}
+	if dns, _ := os.ReadFile(filepath.Join(out, "d.conf")); string(dns) != dnsLines([]string{"evil.example"}) {
+		t.Fatalf("d.conf=%q", dns)
 	}
 }

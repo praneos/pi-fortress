@@ -13,6 +13,40 @@ Wants=network-pre.target
 Type=oneshot
 ExecStart=/usr/local/lib/pi-fortress/usb-nic-switch.sh
 TimeoutStartSec=90
+# Root, with a sandbox. The script reads /sys/bus/usb/devices, runs
+# usb_modeswitch and usbreset on the adapter in /dev/bus/usb, and writes 0
+# and 1 to the authorized file of the adapter in /sys. It writes nothing
+# else.
+NoNewPrivileges=yes
+ProtectHome=yes
+# The file system is read-only, except /dev, /proc and /sys.
+ProtectSystem=strict
+# Not ProtectKernelTunables: it makes /sys read-only, and the authorized
+# write is the last step of the recovery. Not PrivateDevices: it removes
+# /dev/bus/usb. Not PrivateTmp: the script writes no temporary file, and
+# this unit starts before most of the file systems are ready.
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+# AF_NETLINK: libusb in usb_modeswitch opens a kernel event socket, and
+# stops if it cannot. AF_UNIX: the journal.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+# The kernel asks for no capability for the usbfs calls or for the
+# authorized file: the owner of those files is root. CAP_SYS_ADMIN stays
+# as a margin, because a failure here is silent: the adapter stays in
+# driver-CD mode, and the script still exits 0.
+CapabilityBoundingSet=CAP_SYS_ADMIN
+AmbientCapabilities=
 
 [Install]
 WantedBy=sysinit.target

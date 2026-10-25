@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,6 +41,7 @@ type Server struct {
 	// an error: a www that cannot write the log must still serve the handoff.
 	Audit *audit.Log
 	lim   limiter
+	seg   window
 	seen  recent
 }
 
@@ -97,11 +99,15 @@ func contentType(name string) string {
 	}
 }
 
-func (s *Server) pathFor(name string) string {
-	dir := s.Dir
-	if dir == "" {
-		dir = "/var/lib/pi-fortress/www"
+func (s *Server) dir() string {
+	if s.Dir == "" {
+		return "/var/lib/pi-fortress/www"
 	}
+	return s.Dir
+}
+
+func (s *Server) pathFor(name string) string {
+	dir := s.dir()
 	switch name {
 	case "setup.sh":
 		return setupPath(dir)
@@ -136,7 +142,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		_ = AppendEvent(claims, Event{Ev: "setup", IP: ip, Path: r.URL.Path})
 	}
 	path := s.pathFor(name)
-	if path == "" || filepath.Base(path) != name {
+	if path == "" || !s.servable(name, path) {
 		http.NotFound(w, r)
 		return
 	}
@@ -163,6 +169,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, f)
 }
 
+// servable says that www may serve path for name. For ca.pem, path must
+// be one of the files that caPath picks from. Their names are not all
+// ca.pem. For each other name, path must have that name.
+func (s *Server) servable(name, path string) bool {
+	if name == "ca.pem" {
+		return slices.Contains(caPaths(s.dir()), path)
+	}
+	return filepath.Base(path) == name
+}
+
 func clientIP(r *http.Request) string {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -172,15 +188,17 @@ func clientIP(r *http.Request) string {
 }
 
 // serveClaim answers GET /claim/<CODE> with the enrol script once. A wrong,
-// used or expired code gets the same 404. Over ten tries a minute from one
-// address gets a 429, before serveClaim touches the directory.
+// used or expired code gets the same 404. Over limitPerMin tries a minute
+// from one address, or over segmentPerMin from all addresses together, gets
+// a 429, before serveClaim touches the directory. A try that the per-source
+// limit refuses does not count against the segment.
 func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, claims, code string) {
 	if r.Method != http.MethodGet {
 		http.NotFound(w, r)
 		return
 	}
 	ip := clientIP(r)
-	if !s.lim.allow(ip) {
+	if !s.lim.allow(ip) || !s.seg.allow() {
 		http.Error(w, "slow down", http.StatusTooManyRequests)
 		return
 	}
@@ -209,17 +227,30 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, claims, code
 		Args:  map[string]string{"slot": c.Slot},
 		OK:    true,
 	})
-	pi := s.Bind
-	if h, _, err := net.SplitHostPort(r.Host); err == nil && net.ParseIP(h) != nil {
-		pi = h
-	} else if net.ParseIP(r.Host) != nil {
-		pi = r.Host
-	}
-	body := ClaimScript(pi, c)
+	body := ClaimScript(s.claimPi(r), c)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = io.WriteString(w, body)
+}
+
+// claimPi is the Pi address that the claim script writes. The command of
+// the operator checks the script against the hash for PI_IP, and www binds
+// PI_IP. So when the bind is an IP address, claimPi uses it, and the Host
+// of the request has no effect. A wrong Host thus cannot give a script that
+// fails its hash after the code is spent. The Host is used only when the
+// bind is not an IP address (for example "localhost").
+func (s *Server) claimPi(r *http.Request) string {
+	if net.ParseIP(s.Bind) != nil {
+		return s.Bind
+	}
+	if h, _, err := net.SplitHostPort(r.Host); err == nil && net.ParseIP(h) != nil {
+		return h
+	}
+	if net.ParseIP(r.Host) != nil {
+		return r.Host
+	}
+	return s.Bind
 }
 
 // maxConns bounds the number of connections that the server accepts at

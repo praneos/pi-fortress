@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"pi-fortress/internal/policycompile"
 	"pi-fortress/internal/testsupport"
 )
 
@@ -146,6 +147,46 @@ func TestNeverBlockAppliesToAStaleCopy(t *testing.T) {
 	got := testsupport.ReadFile(t, filepath.Join(out, "blacklist.domains"))
 	if strings.Contains(got, "a.example") {
 		t.Fatalf("never_block was ignored on the stale copy: %q", got)
+	}
+}
+
+// pf compile reads never_block too, and it skips a line that is not a
+// name. fetch kept such a line as it was written. A line with two fields
+// then shielded nothing, with no word to the operator. A single label
+// ("test") shielded each feed name under it in fetch, but not in compile.
+// Now fetch skips the same lines as compile, and the report names each one.
+func TestNeverBlockRefusesALineThatIsNotAName(t *testing.T) {
+	body := "keep.example\nx.test\nshield.example\n"
+	var boom error
+	f, out := staleDir(t, &body, &boom, nil)
+	never := "0.0.0.0 keep.example\ntest\nshield.example.\n"
+	if err := os.WriteFile(filepath.Join(f.PolicyDir, "never_block.domains"), []byte(never), 0644); err != nil {
+		t.Fatal(err)
+	}
+	report, _, n, err := f.Run()
+	if err != nil || n != 2 {
+		t.Fatalf("Run: %d domains, %v, %q", n, err, report)
+	}
+	if got := testsupport.ReadFile(t, filepath.Join(out, "blacklist.domains")); got != "keep.example\nx.test\n" {
+		t.Fatalf("blacklist.domains = %q", got)
+	}
+	rep := strings.Join(report, "\n")
+	for _, want := range []string{
+		`WARN never_block.domains line 1: "0.0.0.0 keep.example" is not a domain; skipped`,
+		`WARN never_block.domains line 2: "test" is not a domain; skipped`,
+	} {
+		if !strings.Contains(rep, want) {
+			t.Errorf("report has no %q:\n%s", want, rep)
+		}
+	}
+	if strings.Contains(rep, "line 3") {
+		t.Errorf("a valid line is reported:\n%s", rep)
+	}
+	path := filepath.Join(f.PolicyDir, "never_block.domains")
+	var warn []string
+	compiled, err := policycompile.LoadTokens(path, "domains")
+	if got := readListFile(path, "domains", &warn); err != nil || strings.Join(got, ",") != strings.Join(compiled, ",") {
+		t.Fatalf("fetch reads %q, compile reads %q (%v)", got, compiled, err)
 	}
 }
 

@@ -2,10 +2,13 @@ package broker
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -13,6 +16,7 @@ import (
 
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/preamble"
+	"pi-fortress/internal/secrets"
 )
 
 // The open echo refuses a placeholder that it must not substitute, and
@@ -196,4 +200,81 @@ func base64Runs(s string) []string {
 		}
 	}
 	return out
+}
+
+// An echo fixture has no origin, but a streamed body still goes through
+// the placeholder guard. A placeholder in it gets the answer that a real
+// host gives: the one refusal, and a row that names the cause.
+func TestEchoStreamedBodyPlaceholderRefused(t *testing.T) {
+	for _, tc := range []struct{ name, sni, dst string }{
+		{"core", "pf-core-echo.test", "192.0.2.2:443"},
+		{"open", "pf-open-echo.test", "192.0.2.3:443"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, _ := testBroker(t)
+			dir := t.TempDir()
+			b.Logs = &jsonl.Writer{StripPath: filepath.Join(dir, "strip.jsonl")}
+			ph := secrets.Placeholder("b0b1b2b3b4b5b6b7", "CLAUDE_OAT")
+			p := preamble.Preamble{SNI: tc.sni, OrigDst: netip.MustParseAddrPort(tc.dst)}
+			raw := "POST / HTTP/1.1\r\nHost: " + tc.sni + "\r\nTransfer-Encoding: chunked\r\n\r\n" + chunkWire("k="+ph)
+			resp, rb := roundtripStream(t, b, p, raw)
+			if resp.Code != 503 || string(rb) != RefusedBody {
+				t.Fatalf("%d %q", resp.Code, rb)
+			}
+			rows, _ := os.ReadFile(b.Logs.StripPath)
+			if !strings.Contains(string(rows), `"cause":"placeholder_in_streamed_body"`) || !strings.Contains(string(rows), `"where":"body"`) {
+				t.Fatalf("log %q", rows)
+			}
+		})
+	}
+}
+
+// A streamed body to the open echo writes the strip rows that the same
+// body writes at a real core host: a live value that the scrub replaced,
+// and on a refusal, each strip before the placeholder. The rows differ
+// only in the time, the host and the SNI. The core echo injects each
+// kind, so its scrub replaces no live value; it writes only the refusal.
+func TestEchoStreamedBodyStripRows(t *testing.T) {
+	// The live GitHub value, at a host that does not inject it.
+	live := "lab_fence_github"
+	ph := secrets.Placeholder("b0b1b2b3b4b5b6b7", "CLAUDE_OAT")
+	rows := func(t *testing.T, sni, dst, body string) []string {
+		t.Helper()
+		b, _ := testBroker(t)
+		b.Logs = &jsonl.Writer{StripPath: filepath.Join(t.TempDir(), "strip.jsonl")}
+		fakeUpstream(t, b, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.ReadAll(r.Body)
+			_, _ = w.Write([]byte("ok"))
+		})
+		p := preamble.Preamble{SNI: sni, OrigDst: netip.MustParseAddrPort(dst)}
+		raw := "POST / HTTP/1.1\r\nHost: " + sni + "\r\nTransfer-Encoding: chunked\r\n\r\n" + chunkWire(body)
+		roundtripStream(t, b, p, raw)
+		data, _ := os.ReadFile(b.Logs.StripPath)
+		var out []string
+		for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if line == "" {
+				continue
+			}
+			var m map[string]any
+			if err := json.Unmarshal([]byte(line), &m); err != nil {
+				t.Fatalf("row %q: %v", line, err)
+			}
+			delete(m, "t")
+			delete(m, "host")
+			delete(m, "sni")
+			j, _ := json.Marshal(m)
+			out = append(out, string(j))
+		}
+		sort.Strings(out)
+		return out
+	}
+	for _, body := range []string{"k=" + live + " x", "k=" + live + " " + ph} {
+		want := rows(t, "api.anthropic.com", "8.8.8.8:443", body)
+		if !strings.Contains(strings.Join(want, "\n"), `"rule":"secret:a1b2c3d4e5f67890_GITHUB_TOKEN"`) {
+			t.Fatalf("real host rows %q", want)
+		}
+		if got := rows(t, "pf-open-echo.test", "192.0.2.3:443", body); strings.Join(got, "\n") != strings.Join(want, "\n") {
+			t.Errorf("body %q:\n got %q\nwant %q", body, got, want)
+		}
+	}
 }

@@ -60,9 +60,8 @@ func LoadForward(allowPath, corePath string) (*Forward, error) {
 		if len(bits) == 0 {
 			continue
 		}
-		suffix := strings.HasPrefix(bits[0], "*.")
-		host := normHost(strings.TrimPrefix(bits[0], "*."))
-		if host == "" {
+		host, suffix := hostEntry(bits[0])
+		if host == "" || hostProblem(bits[0], host) != "" {
 			continue
 		}
 		// Policy.Load also lists a "*.name" entry as an exact host.
@@ -140,10 +139,11 @@ func validName(n string) bool {
 // Names is all names on the two lists, without echo fixtures and
 // unparseable entries. It is a count, not an enforcement path. pf dns
 // resolves through Allowed directly. Names only supplies the "paranoid=N"
-// line that pf status prints (internal/dnsd Segments). A "*." line in
-// allow.domains is unparseable here, because Allowed matches it against
-// nothing. If Names counted it, the count would tell the operator that a
-// name is open when the box refuses it.
+// line that pf status prints (internal/dnsd Segments). An entry that
+// Allowed matches against nothing is unparseable here. If Names counted
+// it, the count would tell the operator that a name is open when the box
+// refuses it. A "*.name" line of allow.domains is the entry "name"
+// (AllowEntry), and Names counts it.
 func (f *Forward) Names() []string {
 	seen := map[string]struct{}{}
 	for _, table := range []map[string]struct{}{f.allow, f.hosts, f.suffix} {

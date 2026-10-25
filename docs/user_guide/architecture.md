@@ -49,6 +49,7 @@ These steps show what occurs when an agent sends one HTTPS request.
 
 4. **Broker checks.** The engine sends the decrypted HTTP/1.1 stream to the **broker** through a unix socket. A unix socket is a local channel between two processes on the same machine. The broker then:
     - Compares the HTTP `Host` header with the SNI. They must be the same.
+    - Compares the port in the `Host` header, if there is one, with the port that the agent connected to. They must be the same.
     - Examines the blocklist again, by name.
     - Searches `core.hosts` for the host. This file lists the providers for which the gateway manages credentials.
 

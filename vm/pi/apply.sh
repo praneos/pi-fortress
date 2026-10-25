@@ -155,6 +155,49 @@ fi
 # PF_POLICY points apply at another policy tree (the TUI's -policy).
 POLICY="${PF_POLICY:-${POLICY}}"
 
+# With a checkout, the lists come from the checkout. pf tui edits the
+# checkout, and provision seeds /etc/pi-fortress only once. So a copy in
+# /etc/pi-fortress that differs from the checkout copy is usually only an
+# old seed. Name a list only when its copy in /etc/pi-fortress is newer
+# than the checkout copy: a hand edit there that has no effect. Below,
+# this apply copies the lists in the case pattern into /etc/pi-fortress
+# (doh.*, git_push.allow, allow.domains, dns_types.allow). For these, the
+# line says that apply replaces the edit. Keep the two sets the same. One
+# line, at most 5 names per part. PF_TEST_ETC is the apply_test stand-in
+# for /etc/pi-fortress.
+_etc="${PF_TEST_ETC:-/etc/pi-fortress}"
+if [[ -n "${TREE}" && "${POLICY}" -ef "${TREE}/vm/policy" && ! "${POLICY}" -ef "${_etc}" ]]; then
+  _keep=()
+  _repl=()
+  for _f in "${POLICY}"/*.domains "${POLICY}"/*.ips "${POLICY}"/*.allow; do
+    _n="${_f##*/}"
+    if [[ -f "${_f}" && -f "${_etc}/${_n}" && "${_etc}/${_n}" -nt "${_f}" ]] && ! cmp -s "${_f}" "${_etc}/${_n}"; then
+      case "${_n}" in
+        allow.domains | dns_types.allow | doh.ips | doh.domains | git_push.allow) _repl+=("${_n}") ;;
+        *) _keep+=("${_n}") ;;
+      esac
+    fi
+  done
+  # Prints the first 5 names of its arguments, and the count of the rest.
+  _names() {
+    local more=""
+    if [[ "$#" -gt 5 ]]; then
+      more=" (+$(($# - 5)) more)"
+    fi
+    printf '%s' "${*:1:5}${more}"
+  }
+  _msg=""
+  if [[ "${#_keep[@]}" -gt 0 ]]; then
+    _msg="; edits there have no effect: $(_names "${_keep[@]}")"
+  fi
+  if [[ "${#_repl[@]}" -gt 0 ]]; then
+    _msg+="; this apply replaces edits there: $(_names "${_repl[@]}")"
+  fi
+  if [[ -n "${_msg}" ]]; then
+    echo "pi-fortress: lists come from ${POLICY}, not ${_etc}${_msg}" >&2
+  fi
+fi
+
 # net.env comes from git, and a ship copies it over /etc. Thus the next
 # ship reverts a value that the operator sets at the seat. The overlay is
 # not in the tree. Nothing copies over it. So operator settings go here.
@@ -1112,16 +1155,23 @@ install -d -m 0755 "${FENCE_STATE}"
 # Thus BLOCKED_CHANGED above already compared the new compile with the
 # installed copy. It joins the answer here, without a second copy of a
 # megabyte of names under /etc.
+# FENCE_INPUT_CHANGED keeps the answer for the other inputs apart. A feed
+# refresh changes only the list, and the refresh path below uses this
+# difference.
 FENCE_CHANGED="${BLOCKED_CHANGED}"
+FENCE_INPUT_CHANGED=0
 for _i in "${FENCE_INPUTS[@]}"; do
   if [[ -f "${_i}" ]]; then
-    cmp -s "${_i}" "${FENCE_STATE}/${_i##*/}" || FENCE_CHANGED=1
+    cmp -s "${_i}" "${FENCE_STATE}/${_i##*/}" || FENCE_INPUT_CHANGED=1
   elif [[ -e "${FENCE_STATE}/${_i##*/}" ]]; then
     # A file that the policy removed is a change, the same as an edited
     # file: the daemons still enforce its old content.
-    FENCE_CHANGED=1
+    FENCE_INPUT_CHANGED=1
   fi
 done
+if [[ "${FENCE_INPUT_CHANGED}" -eq 1 ]]; then
+  FENCE_CHANGED=1
+fi
 # Record this only after the daemons run again on these inputs. A
 # restart that failed, or a restart that an unattended refresh skipped on
 # purpose, must leave the change visible to the next apply. A snapshot
@@ -1932,14 +1982,18 @@ if [[ "${LOCAL_ONLY}" -eq 1 ]]; then
   # and to each other file in FENCE_INPUTS: the ruleset and the resolver
   # have the new policy, but the daemons still hold the old policy.
   _fence_note=""
-  if [[ "${REFRESH}" -eq 1 && "${BLOCKED_CHANGED}" -eq 1 ]]; then
-    # The unattended path. Above, "the operator changed policy" makes it
-    # acceptable to drop open connections. On a timer at 04:00, that is
-    # not true: nobody asked for this, and nobody is there to see it.
-    # The sinkhole and the nft sets are live in both cases. Thus the new list
-    # applies to all that resolves. Only the SNI/Host check in the fence
-    # is still on the old copy, and the Feeds screen shows that until an
-    # operator applies.
+  if [[ "${REFRESH}" -eq 1 && "${BLOCKED_CHANGED}" -eq 1 && "${FENCE_INPUT_CHANGED}" -eq 0 ]]; then
+    # The unattended path, when only the list changed. Above, "the
+    # operator changed policy" makes it acceptable to drop open
+    # connections. On a timer at 04:00, that is not true: nobody asked for
+    # this, and nobody is there to see it. The sinkhole and the nft sets
+    # are live in both cases. Thus the new list applies to all that
+    # resolves. Only the SNI/Host check in the fence is still on the old
+    # copy, and the Feeds screen shows that until an operator applies.
+    # When a refresh also finds a change to another fence input, the
+    # operator changed policy. The ruleset that this run loaded already
+    # has that change. Thus the refresh restarts the fence and records
+    # the state in the next branch, the same as --local does.
     echo "pi-fortress: feed refresh changed blocked-domains.conf; the fence keeps the old name list until the next pf apply" >&2
     _fence_note=" name list changed, fence not restarted (unattended refresh)"
   elif [[ "${FENCE_CHANGED}" -eq 1 ]] && systemctl is-active --quiet pi-fortress-engine.service; then

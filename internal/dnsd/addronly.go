@@ -43,7 +43,8 @@ const maxFlatA = 16
 // the resolver did not accept must be reported somewhere.
 //
 // The parser skips and reports a line that does not parse (bad). It is not
-// fatal. To skip the line can only filter more, never forward more. To
+// fatal. It also reports in bad each AAAA, HTTPS or SVCB entry, and adds no
+// pair for it (alwaysEmpty). To skip the line can only filter more, never forward more. To
 // refuse the file would stop the one daemon that runs DNS for every
 // segment, the house included. This would occur at the next boot, because
 // of a typo in an agent override.
@@ -80,8 +81,12 @@ func loadTypeAllow(path string) (*typeAllow, error) {
 		if len(bits) == 0 {
 			continue
 		}
-		if why := ta.line(bits); why != "" {
+		why, inert := ta.line(bits)
+		if why != "" {
 			ta.bad = append(ta.bad, fmt.Sprintf("%s:%d: %s; line ignored", path, n, why))
+		}
+		for _, t := range inert {
+			ta.bad = append(ta.bad, fmt.Sprintf("%s:%d: %s is always answered empty (%s); this entry has no effect", path, n, qtypeName(dnsmessage.Type(t)), alwaysEmptyWhy))
 		}
 	}
 	if err := sc.Err(); err != nil {
@@ -90,11 +95,12 @@ func loadTypeAllow(path string) (*typeAllow, error) {
 	return ta, nil
 }
 
-// line returns the pairs of one line, all of them or none. If none, it
-// gives the reason.
-func (ta *typeAllow) line(bits []string) string {
+// line adds the pairs of one line, all of them or none. If none, it gives
+// the reason. It also gives the alwaysEmpty types of the line, for which it
+// adds no pair.
+func (ta *typeAllow) line(bits []string) (string, []uint16) {
 	if len(bits) < 2 {
-		return fmt.Sprintf("%q names no type", bits[0])
+		return fmt.Sprintf("%q names no type", bits[0]), nil
 	}
 	table := ta.exact
 	name := bits[0]
@@ -103,20 +109,35 @@ func (ta *typeAllow) line(bits []string) string {
 	}
 	name = strings.TrimSuffix(strings.ToLower(name), ".")
 	if name == "" || strings.Contains(name, "*") {
-		return fmt.Sprintf("%q is not a name", bits[0])
+		return fmt.Sprintf("%q is not a name", bits[0]), nil
 	}
-	ts := make([]uint16, 0, len(bits)-1)
+	var ts, inert []uint16
 	for _, tok := range bits[1:] {
 		t, ok := parseQType(tok)
 		if !ok {
-			return fmt.Sprintf("%q is not a record type", tok)
+			return fmt.Sprintf("%q is not a record type", tok), nil
 		}
-		ts = append(ts, t)
+		if alwaysEmpty(t) {
+			inert = append(inert, t)
+		} else {
+			ts = append(ts, t)
+		}
 	}
 	for _, t := range ts {
 		table[typeKey{name, t}] = struct{}{}
 	}
-	return ""
+	return "", inert
+}
+
+// alwaysEmptyWhy is why Server.answer gives an empty answer to AAAA, HTTPS
+// and SVCB on every segment, before dns_types.allow and DNS_TYPES. render
+// gives the same words for a DNS_TYPES entry.
+const alwaysEmptyWhy = "IPv6 is dropped; HTTPS/SVCB would carry ECH and real addresses"
+
+// alwaysEmpty reports whether Server.answer gives an empty answer to type t
+// on every segment. An entry for t in dns_types.allow has no effect.
+func alwaysEmpty(t uint16) bool {
+	return t == uint16(dnsmessage.TypeAAAA) || t == typeHTTPS || t == typeSVCB
 }
 
 // namedTypes is each type that qtypeName has a name for, as a reverse map.

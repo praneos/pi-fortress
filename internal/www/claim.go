@@ -22,9 +22,23 @@ import (
 const (
 	ClaimTTL      = 5 * time.Minute
 	claimAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	claimLen      = 6
-	sweepAfter    = time.Hour
-	limitPerMin   = 10
+	// claimLen is 8 symbols of 32, thus 40 bits. The operator reads the code
+	// from a screen and types it on a different box, so the code stays short.
+	claimLen    = 8
+	sweepAfter  = time.Hour
+	limitPerMin = 10
+	// segmentPerMin is the cap on the claim tries of all sources together.
+	// limitPerMin is per source. The anti-spoof rule admits each address of
+	// AGENT_NET, so a root agent can add an alias for each free address of a
+	// /24. With only the per-source cap, that is approximately 250 x 10
+	// tries a minute. One enrolment is one try: the operator pastes one
+	// command on one agent. 30 a minute is one enrolment each 2 seconds. No
+	// operator does that by hand, and it leaves space for typing errors and
+	// retries. 30 a minute for the 5 minutes of ClaimTTL is 150 tries
+	// against 2^40 codes for each live claim. The cost: an agent that keeps
+	// the cap full stops all claims on the segment while it continues. The
+	// operator sees a 429, not a spent code.
+	segmentPerMin = 30
 	setupWindow   = time.Minute
 	seenMax       = 4096
 	// hitsMax bounds the table of the claim limiter, as seenMax bounds the
@@ -61,9 +75,18 @@ func setupPath(dir string) string {
 	return firstFile("/vagrant/vm/agent/setup.sh", filepath.Join(dir, "setup.sh"))
 }
 
+// caFallbacks are the CA files that www serves when dir has no ca.pem.
+// A test points them at its own files.
+var caFallbacks = []string{"/etc/pi-fortress/egress-ca.pem", "/etc/pi-fortress/mitm-ca.pem"}
+
+// caPaths are the files that caPath picks from, in order.
+func caPaths(dir string) []string {
+	return append([]string{filepath.Join(dir, "ca.pem")}, caFallbacks...)
+}
+
 // caPath is the ca.pem www serves from dir.
 func caPath(dir string) string {
-	return firstFile(filepath.Join(dir, "ca.pem"), "/etc/pi-fortress/egress-ca.pem", "/etc/pi-fortress/mitm-ca.pem")
+	return firstFile(caPaths(dir)...)
 }
 
 // fileSHA256 is path's hex sha256, or "" when it cannot be read.
@@ -205,14 +228,16 @@ func groupOfDir(dir string, f *os.File) error {
 }
 
 // RedeemClaim consumes a code. www reads claims from dir and writes only in
-// RedeemedDir(dir). The marker <CODE>.redeemed, made with O_EXCL, is the
-// single-use guarantee: a second caller cannot make it again. The marker
-// is on disk, so a code stays spent after a restart. RedeemClaim makes a
-// marker only for a claim file that exists, so a guess leaves no file.
-// After the marker, it reads the claim. It refuses an expired claim, a
-// claim file that the owner of dir did not make, and a field that
-// scriptFields does not accept. That answer is the same as for an unknown
-// code.
+// RedeemedDir(dir). First it reads the claim. It refuses an expired claim,
+// a claim file that the owner of dir did not make, a field that
+// scriptFields does not accept, and a claim whose setup.sh or ca.pem hash
+// is not the hash of the file that www serves now. That answer is the same
+// as for an unknown code, and it does not spend the code. Only after all
+// checks pass does it make the marker <CODE>.redeemed with O_EXCL. The
+// O_EXCL create is the lock and the single-use guarantee: of two callers
+// that pass the checks at the same time, only one makes the marker. The
+// marker is on disk, so a code stays spent after a restart. A guess leaves
+// no file.
 func RedeemClaim(dir, code string) (Claim, error) {
 	code = strings.ToUpper(strings.TrimSpace(code))
 	if !validCode(code) {
@@ -222,6 +247,14 @@ func RedeemClaim(dir, code string) (Claim, error) {
 	if _, err := os.Lstat(src); err != nil {
 		return Claim{}, ErrNoClaim
 	}
+	raw, err := readClaim(dir, src)
+	if err != nil {
+		return Claim{}, ErrNoClaim
+	}
+	var c Claim
+	if json.Unmarshal(raw, &c) != nil || c.Code != code || time.Now().After(c.Expires) || !scriptFields(c) || !servesSame(dir, c) {
+		return Claim{}, ErrNoClaim
+	}
 	m, err := os.OpenFile(markerPath(dir, code), os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0640)
 	if err != nil {
 		return Claim{}, ErrNoClaim
@@ -229,15 +262,20 @@ func RedeemClaim(dir, code string) (Claim, error) {
 	if err := m.Close(); err != nil {
 		return Claim{}, ErrNoClaim
 	}
-	raw, err := readClaim(dir, src)
-	if err != nil {
-		return Claim{}, ErrNoClaim
-	}
-	var c Claim
-	if json.Unmarshal(raw, &c) != nil || c.Code != code || time.Now().After(c.Expires) || !scriptFields(c) {
-		return Claim{}, ErrNoClaim
-	}
 	return c, nil
+}
+
+// servesSame reports whether www serves now the setup.sh and ca.pem that c
+// has the hashes of. After a pf apply that replaced one of them, the claim
+// script fails its hash check on the agent. So such a claim is refused
+// before the marker. A claim with an empty hash passes here. ClaimScript
+// then gives the operator the message for that case.
+func servesSame(dir string, c Claim) bool {
+	www := filepath.Dir(dir)
+	if c.SetupSHA256 != "" && fileSHA256(setupPath(www)) != c.SetupSHA256 {
+		return false
+	}
+	return c.CASHA256 == "" || fileSHA256(caPath(www)) == c.CASHA256
 }
 
 // claimMax bounds the read of one claim file. A real claim is far smaller.
@@ -568,6 +606,32 @@ func (l *limiter) allow(ip string) bool {
 		l.sweep(now)
 	}
 	l.hits[ip] = append(keep, now)
+	return true
+}
+
+// window counts the claim tries of all sources in the last minute. It keeps
+// one time for each try that it accepts. So it never holds more than
+// segmentPerMin times, and a flood cannot grow it.
+type window struct {
+	mu sync.Mutex
+	at []time.Time
+}
+
+func (w *window) allow() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	now := time.Now()
+	keep := w.at[:0]
+	for _, t := range w.at {
+		if now.Sub(t) < time.Minute {
+			keep = append(keep, t)
+		}
+	}
+	w.at = keep
+	if len(keep) >= segmentPerMin {
+		return false
+	}
+	w.at = append(keep, now)
 	return true
 }
 

@@ -457,7 +457,9 @@ func TestHostMustBeHostAndPort(t *testing.T) {
 		{"CDN.Example", 204},
 		{"cdn.example.", 204},
 		{"[2001:db8::1]", 204},
-		{"[2001:db8::1]:8443", 204},
+		{"[2001:db8::1]:443", 204},
+		// A valid form, but not the port that the broker dialled.
+		{"[2001:db8::1]:8443", 400},
 		{"192.0.2.1:443", 204},
 	}
 	for _, c := range cases {
@@ -533,12 +535,61 @@ func TestExpectContinueInAnyField(t *testing.T) {
 	}
 }
 
-// TE and Keep-Alive describe one hop. The broker drops them in both
+// The fence does not scan request trailers. Thus the broker does not
+// announce them to the origin (Trailer), and the trailer fields after the
+// last chunk do not reach the origin. The test reads the raw bytes that
+// the origin gets, because an httpwire parser on the origin side also
+// drops trailer fields.
+func TestRequestTrailerNeverReachesOrigin(t *testing.T) {
+	b, _ := testBroker(t)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	raw := make(chan string, 1)
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		var got strings.Builder
+		br := bufio.NewReader(io.TeeReader(c, &got))
+		req, err := httpwire.ReadRequest(br)
+		if err != nil {
+			raw <- "read: " + err.Error()
+			return
+		}
+		if req.Body != nil {
+			_, _ = io.Copy(io.Discard, req.Body)
+		}
+		raw <- got.String()
+		_, _ = io.WriteString(c, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+	}()
+	b.DialTLS = dialTo(ln)
+	s := open(t, b, anthropic)
+	s.send("POST / HTTP/1.1\r\nHost: api.anthropic.com\r\nTrailer: X-Secret\r\nTransfer-Encoding: chunked\r\n\r\n" +
+		"2\r\nhi\r\n0\r\nX-Secret: trailer-value\r\n\r\n")
+	if resp := s.read(); resp.Code != 200 || string(resp.Body) != "ok" {
+		t.Fatalf("%d %q", resp.Code, resp.Body)
+	}
+	s.close()
+	got := <-raw
+	if strings.Contains(strings.ToLower(got), "trailer") || strings.Contains(got, "X-Secret") {
+		t.Fatalf("origin saw a trailer: %q", got)
+	}
+	if !strings.Contains(got, "hi") {
+		t.Fatalf("origin did not get the body: %q", got)
+	}
+}
+
+// TE, Trailer and Keep-Alive describe one hop. The broker drops them in both
 // directions, on the buffered response path and on the streamed one.
 func TestHopByHopFieldsDropped(t *testing.T) {
 	for name, reply := range map[string]string{
 		"buffered": "HTTP/1.1 200 OK\r\nKeep-Alive: timeout=5, max=100\r\nTE: trailers\r\nContent-Length: 2\r\n\r\nok",
-		"streamed": "HTTP/1.1 200 OK\r\nKeep-Alive: timeout=5, max=100\r\nTE: trailers\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n0\r\n\r\n",
+		"streamed": "HTTP/1.1 200 OK\r\nKeep-Alive: timeout=5, max=100\r\nTE: trailers\r\nTrailer: X-T\r\nTransfer-Encoding: chunked\r\n\r\n2\r\nok\r\n0\r\n\r\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			b, _ := testBroker(t)
@@ -559,6 +610,9 @@ func TestHopByHopFieldsDropped(t *testing.T) {
 			}
 			if v := resp.Values("TE"); len(v) != 0 {
 				t.Fatalf("client saw TE %v", v)
+			}
+			if v := resp.Values("Trailer"); len(v) != 0 {
+				t.Fatalf("client saw Trailer %v", v)
 			}
 			s.close()
 			if got, _ := seen.Load().([]string); len(got) != 0 {

@@ -23,6 +23,15 @@ import (
 // A refusal that names a CANARY slot alerts every time, whatever the
 // cause. It does not use the once-per-cause alert of the other refusals.
 func (b *Broker) logRefusals(c *call, rs []fence.Refusal) {
+	// A Host that holds a live value must not go to the log, because the
+	// alerter posts the host of a row to the webhook. The rows of this
+	// request name the SNI instead.
+	host := c.host
+	for _, r := range rs {
+		if r.Cause == fence.CauseLiveInHost {
+			host = strings.ToLower(strings.TrimSuffix(c.p.SNI, "."))
+		}
+	}
 	for _, r := range rs {
 		canary := r.Kind == corepolicy.KindCanary
 		// Before alertRefusal: a row that the cap drops must not use the
@@ -31,7 +40,7 @@ func (b *Broker) logRefusals(c *call, rs []fence.Refusal) {
 			continue
 		}
 		row := jsonl.Refused{
-			Host:     c.host,
+			Host:     host,
 			SNI:      c.p.SNI,
 			Where:    r.Where,
 			Cause:    string(r.Cause),
@@ -74,14 +83,21 @@ func canaryRule(rule string) bool {
 // process started. The operator must know one time that credentials
 // stopped working. The log still records each occurrence.
 func (b *Broker) alertRefusal(cause fence.RefusalCause) bool {
-	// A live value in a decoded body or a decoded target has the same
-	// signature as the other two:
+	// A live value in a decoded body, a decoded target, the Host, a
+	// Connection or an Upgrade has the same signature as the other two:
 	// a credential aimed where the plain scan would not see it. A body that
 	// the fence could not decode is different. An ordinary client that
 	// compresses its uploads with zstd gets a refusal on each request. A post
 	// for each would use all of the hourly cap of the webhook before a real
-	// strip arrives. It alerts one time, like the conditions below.
-	if cause == fence.CauseKindNotAllowed || cause == fence.CauseOutsideHeader || cause == fence.CausePlaceholderInWS || cause == fence.CauseEncodedBodyToken || cause == fence.CauseKeyInHeaderName || cause == fence.CauseKeyInMethod || cause == fence.CauseEncodedURLToken {
+	// strip arrives. It alerts one time, like the conditions below. A
+	// repeated credential header or a repeated Content-Type on a refresh is
+	// an attempt to make the origin read a value that the fence did not
+	// decide on. No ordinary client sends it.
+	switch cause {
+	case fence.CauseKindNotAllowed, fence.CauseOutsideHeader, fence.CausePlaceholderInWS,
+		fence.CauseEncodedBodyToken, fence.CauseKeyInHeaderName, fence.CauseKeyInMethod,
+		fence.CauseEncodedURLToken, fence.CauseLiveInHost, fence.CauseLiveInConnection,
+		fence.CauseRepeatedCredHeader, fence.CauseRepeatedContentType:
 		return true
 	}
 	b.useMu.Lock()
@@ -243,9 +259,10 @@ func (b *Broker) flushStrips(c *call) {
 // whereParanoid is the unknown row of the paranoid destination deny.
 const whereParanoid = "paranoid_deny"
 
-// where names the path that logged the row. Empty is the ordinary
-// unknown-host sample, and jsonl fills in "http".
-func (b *Broker) logUnknown(p *preamble.Preamble, req *httpwire.Request, stripped bool, where string) error {
+// host is the host of the row (rowHost). where names the path that
+// logged the row. Empty is the ordinary unknown-host sample, and jsonl
+// fills in "http".
+func (b *Broker) logUnknown(p *preamble.Preamble, req *httpwire.Request, host string, stripped bool, where string) error {
 	if b.Logs == nil {
 		return nil
 	}
@@ -270,7 +287,7 @@ func (b *Broker) logUnknown(p *preamble.Preamble, req *httpwire.Request, strippe
 	}
 	sni := strings.ToLower(strings.TrimSuffix(p.SNI, "."))
 	if sni == "" {
-		sni = prettyHost(req, "")
+		sni = host
 	}
 	path, ua, ct, cookies := pathOnly(req.Target), clip(req.Get("User-Agent"), 256), clip(req.Get("Content-Type"), 128), cookieNames(req.Get("Cookie"))
 	if where == whereParanoid {
@@ -282,7 +299,7 @@ func (b *Broker) logUnknown(p *preamble.Preamble, req *httpwire.Request, strippe
 	}
 	return b.Logs.Unknown(jsonl.Unknown{
 		ClientIP:    clientIP(p),
-		Host:        prettyHost(req, p.SNI),
+		Host:        host,
 		SNI:         sni,
 		DestIP:      destIP,
 		DestPort:    destPort,
@@ -298,6 +315,50 @@ func (b *Broker) logUnknown(p *preamble.Preamble, req *httpwire.Request, strippe
 		Stripped:    stripped,
 		Where:       where,
 	})
+}
+
+// rowHost is the host that the rows of a request name. Usually it is host,
+// the prettyHost of the request. A Host that holds a live value or a
+// token-prefix match makes the fence refuse the request (live_in_host).
+// But the broker writes some rows before the fence runs: the target
+// rules, the blocklist, the paranoid deny and a refused git push. The
+// alerter posts the host of a strip row to the webhook. So for such a
+// Host, each row names the SNI. The test reads the Host as sent and as
+// the row writes it (lowercase), because a live value can be in either
+// form. A sealed store gives no live values; then only the token rules
+// apply.
+func (b *Broker) rowHost(p *preamble.Preamble, req *httpwire.Request, host string) string {
+	sni := strings.ToLower(strings.TrimSuffix(p.SNI, "."))
+	if host == sni {
+		return host
+	}
+	var slots map[string]secrets.Slot
+	if b.Store != nil {
+		slots, _ = b.Store.Snapshot()
+	}
+	ctx := fence.Ctx{TokenRE: b.TokenRE, Rules: b.Rules}
+	if fence.SecretInHost(ctx, req.Get("Host"), slots) || fence.SecretInHost(ctx, host, slots) {
+		return sni
+	}
+	return host
+}
+
+// logLiveConn writes the live_in_connection rows of the fence for a
+// protocol switch that the broker refuses before the fence runs. The
+// agent gets the same 501 in all cases.
+func (b *Broker) logLiveConn(c *call) {
+	var slots map[string]secrets.Slot
+	if b.Store != nil {
+		slots, _ = b.Store.Snapshot()
+	}
+	ctx := fence.Ctx{TokenRE: b.TokenRE, Rules: b.Rules}
+	var rs []fence.Refusal
+	for _, name := range []string{"Connection", "Upgrade"} {
+		for _, v := range c.req.Values(name) {
+			rs = append(rs, fence.LiveIn(ctx, v, slots, fence.CauseLiveInConnection, "header:"+name)...)
+		}
+	}
+	b.logRefusals(c, rs)
 }
 
 func prettyHost(req *httpwire.Request, sni string) string {

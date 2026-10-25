@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/fetch"
 	"pi-fortress/internal/policycompile"
 )
@@ -21,6 +22,10 @@ var (
 	HouseLists = listNames(policycompile.SegmentFor(policycompile.AllowByDefault))
 	errList    = errors.New("unknown list")
 	errToken   = errors.New("invalid token")
+	// forwardAllowList is the forward set of the agent under PARANOID=1.
+	// corepolicy.LoadDomains reads each name in it as the name and all names
+	// below it.
+	forwardAllowList = policycompile.SegmentFor(policycompile.DenyByDefault).File("allow.domains")
 )
 
 // kindDNSTypes is the token kind of dns_types.allow: a full "name TYPE..."
@@ -66,6 +71,11 @@ func ValidateToken(list, value string) (string, error) {
 			kind = "ips"
 		}
 	}
+	// A query and a feed carry a name that is not ASCII in its xn-- form.
+	// Thus the seat refuses such a name in a name list, and gives that form.
+	if (kind == "domains" || kind == "endpoints") && !corepolicy.IsASCII(value) {
+		return "", fmt.Errorf("%w: %s", errToken, corepolicy.ASCIIHint(strings.TrimSpace(value)))
+	}
 	var got string
 	var ok bool
 	switch kind {
@@ -89,6 +99,12 @@ func ValidateToken(list, value string) (string, error) {
 	case "ips":
 		got, ok = policycompile.ParseIPv4(value)
 	default:
+		// ParseDomain reads ".name" as "name". In the forward set, "name" also
+		// allows all names below it. Thus the seat does not change a dotted
+		// entry into a wider one. The operator writes the bare name.
+		if list == forwardAllowList && strings.HasPrefix(strings.TrimSpace(value), ".") {
+			return "", fmt.Errorf("%w: %s takes no leading dot; a name here also allows all names below it", errToken, list)
+		}
 		got, ok = policycompile.ParseDomain(value)
 	}
 	if !ok {
@@ -136,7 +152,7 @@ func (c *Config) ListRemove(name, value string) error {
 				if err != nil {
 					return err
 				}
-				return writeLines(c.listPath(name), removeToken(lines, tok, lineKey(kindDNSTypes)))
+				return writeLines(c.listPath(name), removeToken(lines, tok, lineKey(name)))
 			})
 		}
 	}
@@ -168,18 +184,21 @@ func removeToken(lines []string, tok string, key func(string) string) []string {
 	return slices.DeleteFunc(lines, func(l string) bool { return key(l) == tok })
 }
 
-// lineKey is the form of a file line that the code compares to a token. For
-// a one-word list, that is the line without its comment. People write a
-// dns_types.allow line by hand as often as the seat writes it. Thus
-// "Example.com  txt" must match the "example.com TXT" that the check gives
-// back. If not, a delete of the row on the screen would delete nothing.
-func lineKey(kind string) func(string) string {
+// lineKey is the form of a file line that the code compares to a token: the
+// line without its comment, in the form that ValidateToken gives back. People
+// write a line by hand as often as the seat writes it. Thus ".ads.example",
+// "*.ads.example" and "ADS.example." must match the "ads.example" that the
+// check gives back, and "Example.com  txt" must match "example.com TXT". If
+// not, a delete of the row on the screen would delete nothing. A line that
+// the check refuses stays as it is written.
+func lineKey(list string) func(string) string {
 	return func(l string) string {
 		tok := policycompile.StripLine(l)
-		if kind == kindDNSTypes && tok != "" {
-			if canon, err := CheckDNSTypesLine(tok); err == nil {
-				return canon
-			}
+		if tok == "" {
+			return ""
+		}
+		if canon, err := ValidateToken(list, tok); err == nil {
+			return canon
 		}
 		return tok
 	}
@@ -188,8 +207,7 @@ func lineKey(kind string) func(string) string {
 // listEdit writes the file again, one line at a time. Comments, blank lines
 // and the order of all lines that the edit does not touch stay the same.
 func (c *Config) listEdit(name, value string, fn func([]string, string, func(string) string) []string) error {
-	kind, known := listKind(name)
-	if !known {
+	if !knownList(name) {
 		return errList
 	}
 	tok, err := ValidateToken(name, value)
@@ -201,7 +219,7 @@ func (c *Config) listEdit(name, value string, fn func([]string, string, func(str
 		if err != nil {
 			return err
 		}
-		return writeLines(c.listPath(name), fn(lines, tok, lineKey(kind)))
+		return writeLines(c.listPath(name), fn(lines, tok, lineKey(name)))
 	})
 }
 

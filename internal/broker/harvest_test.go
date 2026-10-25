@@ -391,3 +391,34 @@ func TestRefreshResponseEmptyRefreshToken(t *testing.T) {
 		})
 	}
 }
+
+// Only a 200 is the new pair. An error answer can carry token fields too.
+// The broker does not store them: the slot keeps the pair that it had, and
+// the agent does not get the values.
+func TestRefreshResponseNot200StoresNothing(t *testing.T) {
+	newOAT := "sk-ant-oat01-" + strings.Repeat("N", 64)
+	newORT := "sk-ant-ort01-" + strings.Repeat("R", 64)
+	for _, code := range []int{400, 401, 500} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			b, path := testBroker(t)
+			before, _ := os.ReadFile(path)
+			fakeUpstream(t, b, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(code)
+				_, _ = w.Write([]byte(`{"error":"invalid_grant","access_token":"` + newOAT + `","refresh_token":"` + newORT + `"}`))
+			})
+			p := preamble.Preamble{SNI: "api.anthropic.com", OrigDst: netip.MustParseAddrPort("8.8.8.8:443")}
+			reqBody := `{"grant_type":"refresh_token","refresh_token":"pf_b0b1b2b3b4b5b6b7_CLAUDE_ORT"}`
+			raw := "POST /v1/oauth/token HTTP/1.1\r\nHost: api.anthropic.com\r\n" +
+				"Content-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(reqBody)) + "\r\n\r\n" + reqBody
+			got := roundtrip(t, b, p, raw)
+			if strings.Contains(got, newOAT) || strings.Contains(got, newORT) {
+				t.Fatalf("the values reached the agent:\n%s", got)
+			}
+			after, _ := os.ReadFile(path)
+			if string(before) != string(after) {
+				t.Fatalf("a %d answer changed the store:\n%s", code, after)
+			}
+		})
+	}
+}

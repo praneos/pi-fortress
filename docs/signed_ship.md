@@ -1,8 +1,9 @@
 # Signed ship
 
 This is the developer loop. It ships your own build from a desktop to a
-Pi. A release install uses `install.sh` and `pf upgrade` instead
-(`gateway_install.md`). Below, `<user>` is your login user on the Pi
+Pi. An install from source at a stable tag uses `install.sh` and
+`pf upgrade` instead (`gateway_install.md`). From v1, a release install
+does the same. Below, `<user>` is your login user on the Pi
 (`PI_USER` for `make`).
 
 Before: `make pi-ship` was rsync as your login user, plus `sudo pf apply`
@@ -324,8 +325,8 @@ Keep a root shell open. Before you close it, test `sudo -k; sudo true`
 in a new session. Then run `PI_IP=10.79.0.1 make pi-ship`. Make sure
 that `tail -1 /var/log/pi-fortress/ship.jsonl` shows `"result":"ok"`.
 
-By default, `SIGN_KEY` is shared with `make release`. The namespaces
-keep the signatures apart. To use a separate key, set `SIGN_KEY`. After
+`SIGN_KEY` signs ship bundles only. `make release` uses a separate key,
+`DIST_KEY` (release.md). The namespaces also keep the signatures apart. After
 a signed ship, root owns the tree. Thus `pi-sync` and `pi-provision`
 fail.
 

@@ -56,6 +56,9 @@ func Load(path string) (*Set, error) {
 			continue
 		}
 		name, _, _ := strings.Cut(rest, "/")
+		// A hand-written "*.name" blocks the same names as "name": Has walks
+		// the labels of a query, and never gets a "*" label.
+		name = strings.TrimPrefix(strings.TrimSpace(name), "*.")
 		if name = norm(name); name != "" {
 			s.names[name] = struct{}{}
 		}

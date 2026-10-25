@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
 
 	"pi-fortress/internal/admin"
 )
@@ -517,17 +518,68 @@ const (
 )
 
 // saved records an edit that waits for an apply. The wider scope wins: a
-// list edit after a house.env edit still needs the full apply.
+// list edit after a house.env edit still needs the full apply. Each caller
+// sets msg to the result of the save just before, so msg names the edit:
+// "KEY=value", "added name", "f1 toggled".
 func (a *App) saved(scope string) {
-	a.edits++
+	what, _, _ := strings.Cut(a.msg, warnSep)
+	what = strings.TrimSuffix(what, " saved")
+	a.edits = addEdit(a.edits, what)
 	if scope == applyFull || a.pending == "" {
 		a.pending = scope
 	}
 	a.msg += "; A applies"
+	if cost, ok := widens[what[strings.LastIndexByte(what, ' ')+1:]]; ok {
+		a.msg = cost + "; " + a.msg
+	}
 }
 
+// addEdit appends what to edits, and removes an older entry for the same
+// key. The next apply takes only the newest value. Thus on, off and on
+// again is one edit, not three.
+func addEdit(edits []string, what string) []string {
+	k := editKey(what)
+	edits = slices.DeleteFunc(edits, func(e string) bool { return editKey(e) == k })
+	return append(edits, what)
+}
+
+// editKey is what a save changes: KEY= of "KEY=value" (with the segment
+// name before it, for a segment), the DHCP range of a segment, or else the
+// full entry. Thus each add or delete of a list item is its own edit.
+func editKey(what string) string {
+	if i := strings.IndexByte(what, '='); i >= 0 {
+		return what[:i+1]
+	}
+	if i := strings.Index(what, " DHCP range "); i >= 0 {
+		return what[:i+len(" DHCP range")]
+	}
+	return what
+}
+
+// widens is the cost of a save that opens the fence, by KEY=value, in the
+// words of the help of its row. These saves do not ask: the confirm set is
+// for the changes that cost the way in, and more prompts get fewer reads.
+// But the message says the cost at the press. The cost comes first, so a
+// clip of the title bar at 80 columns does not remove it.
+var widens = map[string]string{
+	"HOUSE_BLOCK_VPN=off":         "devices may route around the filter",
+	"HOUSE_BLOCK_DIRECT_IP=off":   "direct-IP web connections will pass",
+	"BLOCK_DIRECT_IP=off":         "only the blocklist will filter",
+	"PARANOID=off":                "names outside the allowlist will resolve",
+	"AGENT_DNS=forward":           "names may carry data out",
+	"HOUSE_EGRESS=audit":          "what strict would drop will pass, logged",
+	"HOUSE_ALLOW_CALL_UDP=on":     "call apps' UDP media will pass",
+	"HOUSE_PRIVATE_DNS=on":        "the Pi may not filter devices' DNS",
+	"HOUSE_ALLOW_WIFI_CALLING=on": "IPsec opens to anywhere; IKEv2 VPNs get through too",
+}
+
+// confirmWidth is the label width that keeps a y/N prompt, with its
+// " [y/N]: _", inside 80 columns.
+const confirmWidth = 71
+
 // applyPending is A: confirm, then run the apply that the saved edits need
-// on System > Actions, where its output streams.
+// on System > Actions, where its output streams. The confirm names the
+// newest edits, so that the y is about a list, not about a habit.
 func (a *App) applyPending() {
 	scope := a.pending
 	if scope == "" {
@@ -537,7 +589,41 @@ func (a *App) applyPending() {
 	if scope == applyLocal {
 		label = "run pf apply --local now"
 	}
+	if len(a.edits) > 0 {
+		label = editsLine(a.edits, confirmWidth-len(label)-2) + "; " + label
+	}
 	a.confirm(label, func() { a.runApply(scope) })
+}
+
+// editsLine names the saved edits in n columns or fewer: the count, then
+// the newest edits that fit, oldest of them first. "..." shows that older
+// edits do not fit. One edit that is too long for the line is clipped.
+func editsLine(edits []string, n int) string {
+	head := fmt.Sprintf("%d edits: ", len(edits))
+	if len(edits) == 1 {
+		head = "1 edit: "
+	}
+	if all := head + strings.Join(edits, ", "); utf8.RuneCountInString(all) <= n {
+		return all
+	}
+	const more = "..., "
+	used := utf8.RuneCountInString(head + more)
+	var shown []string
+	for i := len(edits) - 1; i >= 0; i-- {
+		w := utf8.RuneCountInString(edits[i])
+		if len(shown) > 0 {
+			w += 2
+		}
+		if used+w > n {
+			break
+		}
+		shown = append([]string{edits[i]}, shown...)
+		used += w
+	}
+	if len(shown) == 0 {
+		return clip(head+edits[len(edits)-1], n)
+	}
+	return head + more + strings.Join(shown, ", ")
 }
 
 func (a *App) runApply(scope string) {
@@ -551,13 +637,32 @@ func (a *App) runApply(scope string) {
 	}
 	a.goTo(netSystem, secActions)
 	a.stream(title, "apply", args)
-	if a.paneBusy {
-		a.applying = &applyRun{scope: scope, edits: a.edits}
+	// The apply takes the saved edits when its scope covers them. Thus they
+	// do not wait for an apply now, and a quit while it runs does not count
+	// them. A save while it runs is a new edit. apply --local from Actions
+	// does not cover an edit that needs the full apply, and takes none.
+	if a.paneBusy && (scope == applyFull || a.pending != applyFull) {
+		a.applying = &applyRun{edits: a.edits, pending: a.pending}
+		a.edits, a.pending = nil, ""
 	}
 }
 
-// applyRun is an A apply in progress. Refer to App.applying.
+// applyRun is an A apply in progress: the edits and the scope that it
+// took. Refer to App.applying.
 type applyRun struct {
-	scope string
-	edits int
+	edits   []string
+	pending string
+}
+
+// untake gives the edits of a failed apply back. They wait for an apply
+// again, with the edits saved while it ran. The wider scope wins.
+func (a *App) untake(run *applyRun) {
+	edits := run.edits
+	for _, e := range a.edits {
+		edits = addEdit(edits, e)
+	}
+	a.edits = edits
+	if run.pending == applyFull || a.pending == "" {
+		a.pending = run.pending
+	}
 }

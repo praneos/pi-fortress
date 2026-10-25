@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"pi-fortress/internal/admin"
 	"pi-fortress/internal/secrets"
@@ -46,7 +47,14 @@ func testConfig(t *testing.T) (*admin.Config, *[][]string) {
 		}
 	}
 	calls := &[][]string{}
+	// The clock stops at the start of the minute. The Overview shows it as
+	// "checked HH:MM:SS", so a screen must not change with the second that
+	// the test runs in. The clock stays near the wall clock, because the
+	// admin side ages the observe events against the wall clock.
+	// writeReport sets the mtime of a fetch report from this clock.
+	now := time.Now().Truncate(time.Minute)
 	c := &admin.Config{
+		Now:         func() time.Time { return now },
 		PolicyDir:   policy,
 		HouseEnv:    filepath.Join(dir, "house.env"),
 		NetEnvPath:  filepath.Join(dir, "net.env"),
@@ -172,7 +180,7 @@ func TestDevicesReserveAndDelete(t *testing.T) {
 	if last := (*calls)[len(*calls)-1]; strings.Join(last, " ") != "systemctl reload "+admin.HouseDNSUnit {
 		t.Fatal(*calls)
 	}
-	f = NewFake(100, 24).Type(keys(netHouse, secDevices) + "d").Type("y").Type("n")
+	f = NewFake(100, 24).Type(keys(netHouse, secDevices) + "d").Type("y")
 	run(t, c, f)
 	if got, _ := os.ReadFile(c.HouseHosts); strings.Contains(string(got), "ee:02") || !strings.Contains(string(got), "ee:01") {
 		t.Fatalf("%q", got)
@@ -195,7 +203,7 @@ func TestDevicesCursorFollowsTheDeviceItActedOn(t *testing.T) {
 		t.Fatalf("d after a reserve asks about another device:\n%s", f.Last())
 	}
 	os.WriteFile(c.HouseHosts, before, 0o644)
-	run(t, c, reserve().Type("d").Type("y").Type("n"))
+	run(t, c, reserve().Type("d").Type("y"))
 	got, _ := os.ReadFile(c.HouseHosts)
 	if strings.Contains(string(got), "ee:02") || !strings.Contains(string(got), "ee:01") {
 		t.Fatalf("the delete took the wrong reservation:\n%s", got)
@@ -204,7 +212,7 @@ func TestDevicesCursorFollowsTheDeviceItActedOn(t *testing.T) {
 
 func TestFeedsSecretsSettings(t *testing.T) {
 	c, _ := testConfig(t)
-	run(t, c, NewFake(80, 24).Type(keys(netSystem, secFeeds)+"e"))
+	run(t, c, NewFake(80, 24).Type(keys(netSystem, secFeeds)+"e").Type("y"))
 	if got, _ := os.ReadFile(filepath.Join(c.PolicyDir, "sources.json")); !strings.Contains(string(got), `"enabled": false`) {
 		t.Fatalf("%s", got)
 	}
@@ -432,6 +440,46 @@ func TestIdleExit(t *testing.T) {
 	if a.ctx.Err() == nil {
 		t.Fatal("action context alive after exit")
 	}
+	if !strings.Contains(f.Last(), idleNote) {
+		t.Fatalf("idle exit left no note on the tty: %q", f.Last())
+	}
+}
+
+// The whole help shows on a stock 80x24 terminal, its last line too: a
+// line past the bottom row is not drawn.
+func TestHelpFitsAStockTerminal(t *testing.T) {
+	c, _ := testConfig(t)
+	f := run(t, c, NewFake(80, 24).Type("?"))
+	if !strings.Contains(f.Last(), helpText[len(helpText)-1]) {
+		t.Fatalf("help is cut at 80x24:\n%s", f.Last())
+	}
+	for _, l := range helpText {
+		if n := utf8.RuneCountInString(l); n > 64 {
+			t.Errorf("help line is %d columns, over 64: %q", n, l)
+		}
+	}
+}
+
+// Help names the idle exit, and says what can lock the seat, on a stock
+// 80x24 terminal.
+func TestHelpNamesIdleExit(t *testing.T) {
+	c, _ := testConfig(t)
+	f := run(t, c, NewFake(80, 24).Type("?"))
+	if !strings.Contains(f.Last(), "the login manager can lock") {
+		t.Fatalf("help does not name the idle exit:\n%s", f.Last())
+	}
+}
+
+// The idle note is for the idle exit only. A q is a choice of the operator,
+// and needs no explanation.
+func TestQuitWritesNoIdleNote(t *testing.T) {
+	c, _ := testConfig(t)
+	f := run(t, c, NewFake(80, 24).Type("q"))
+	for _, fr := range f.Frames {
+		if strings.Contains(fr, idleNote) {
+			t.Fatalf("q wrote the idle note: %q", fr)
+		}
+	}
 }
 
 func TestIdleWaitsForRunningAction(t *testing.T) {
@@ -447,6 +495,9 @@ func TestIdleWaitsForRunningAction(t *testing.T) {
 	waitRun(t, done, 3*time.Second)
 	if time.Since(start) < 250*time.Millisecond || !strings.Contains(strings.Join(a.pane, "\n"), "done") {
 		t.Fatal(time.Since(start), a.pane)
+	}
+	if !strings.Contains(f.Last(), idleNote) {
+		t.Fatalf("idle exit after the action left no note on the tty: %q", f.Last())
 	}
 }
 
@@ -466,6 +517,7 @@ func TestQuitCancelsRunningAction(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	a.events <- event{key: Key{Kind: KeyCtrlC}}
+	a.events <- event{key: Key{Kind: KeyRune, Rune: 'y'}}
 	waitRun(t, done, 3*time.Second)
 	if a.ctx.Err() == nil {
 		t.Fatal("context alive after quit")

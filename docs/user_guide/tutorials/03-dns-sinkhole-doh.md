@@ -110,6 +110,8 @@ The resolver gate is that structural defence. The agent cannot reach a destinati
 - The redirect sends the connection to the engine.
 - After the TLS handshake gives the host name, the broker resolves the real name itself, from the Pi. Then it connects to that address.
 
+**`direct_ip.allow` on the agent segment.** The agent gate passes an address in `direct_ip.allow`. The connection still goes to the engine and the broker, as each agent connection on 443 does. The broker refuses a private, reserved or LAN address. Thus a device on your home network stays unreachable from an agent, by design.
+
 A lookup alone sends nothing out of the network. An address that the agent got in a different way still meets the gate. The flow below shows forward mode.
 
 ```mermaid

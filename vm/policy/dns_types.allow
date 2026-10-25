@@ -16,7 +16,8 @@
 # A type is spelled as dns.jsonl spells it: TXT, MX, SRV, NS, SOA, PTR,
 # CNAME, or TYPE<n> for any other (NULL is TYPE10, ANY TYPE255, CAA
 # TYPE257). AAAA, HTTPS and SVCB are filtered before this list, on all
-# segments. A line with these types changes nothing.
+# segments. An entry for one of these types changes nothing, and pf dns
+# writes a warning for it.
 #
 # A line that does not parse is skipped (journalctl -u
 # pi-fortress-dns-agent-go shows which), and its pairs stay filtered.

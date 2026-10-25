@@ -1,6 +1,7 @@
 package dnsd
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"net"
@@ -458,6 +459,37 @@ func TestALocalAnswerCarriesAnOPTWhenTheClientSentOne(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("an EDNS query got an answer with no OPT record")
+	}
+}
+
+// An upstream answer can be 65535 bytes with no OPT. The TCP length
+// prefix has 16 bits. Thus the OPT for the caller must not make the
+// message longer than that.
+func TestAnOPTNeverTakesAnAnswerPastTheTCPFrame(t *testing.T) {
+	msg := make([]byte, maxMsg)
+	msg[2] = 0x80
+	out := withCallerOPT(msg, ednsOPT{present: true, size: 1232})
+	if len(out) > maxMsg {
+		t.Fatalf("%d bytes with the OPT, the frame holds %d", len(out), maxMsg)
+	}
+	if !bytes.Equal(out, msg) {
+		t.Fatal("a message with no room for the OPT was changed")
+	}
+	small := withCallerOPT(msg[:maxMsg-11], ednsOPT{present: true, size: 1232})
+	if len(small) != maxMsg {
+		t.Fatalf("%d bytes, want the OPT on a message that has room for it", len(small))
+	}
+}
+
+// The length prefix cannot say more than 65535. A longer message gets no
+// frame, not a frame whose length is the low 16 bits.
+func TestATCPFrameHoldsOnlyWhatItsLengthCanSay(t *testing.T) {
+	if f := tcpFrame(make([]byte, maxMsg+1)); f != nil {
+		t.Fatalf("a %d-byte message got a frame that says %d", maxMsg+1, binary.BigEndian.Uint16(f))
+	}
+	f := tcpFrame(make([]byte, maxMsg))
+	if len(f) != 2+maxMsg || binary.BigEndian.Uint16(f) != maxMsg {
+		t.Fatalf("frame of %d bytes says %d, want %d bytes that say %d", len(f), binary.BigEndian.Uint16(f), 2+maxMsg, maxMsg)
 	}
 }
 

@@ -185,14 +185,27 @@ cat >/usr/local/lib/pi-fortress/clock.sh <<'EOF'
 set -euo pipefail
 # shellcheck source=/dev/null
 source /etc/pi-fortress/net.env
+# The Date header has no signature. So after the first sync of a boot, the
+# script refuses a step over 24 hours. Then a device that answers for the
+# Pi cannot move the clock outside the validity of the CA in one poll. The
+# first run of a boot can take any step: a new VM or a box with a flat
+# clock battery can start days or years off. The state file is in /run, so
+# a reboot also recovers a clock that is more than 24 hours off.
+synced=/run/pi-fortress-agent-clock.synced
+max=86400
 stamp="$(curl -fsSI --max-time 5 "http://${PI_IP}/ca.pem" | sed -n 's/^[Dd]ate: //p' | tr -d '\r')"
 [[ -n "${stamp}" ]] || { echo "agent clock: no Date header from ${PI_IP}" >&2; exit 1; }
 want="$(date -d "${stamp}" +%s)"
 off=$(( want - $(date +%s) ))
+if [[ -e "${synced}" ]] && (( off > max || off < -max )); then
+  echo "agent clock: refused a step of ${off}s from ${PI_IP}: over ${max}s after the first sync of this boot; reboot to take it" >&2
+  exit 0
+fi
 if (( off > 2 || off < -2 )); then
   date -s "@${want}" >/dev/null
   echo "agent clock: stepped ${off}s to the gateway's"
 fi
+: >"${synced}"
 EOF
 chmod 0755 /usr/local/lib/pi-fortress/clock.sh
 cat >/etc/systemd/system/pi-fortress-agent-clock.service <<'EOF'

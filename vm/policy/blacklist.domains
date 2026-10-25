@@ -21,6 +21,10 @@ pi-fortress-block.test
 #
 # To un-block, name the domain in never_block.domains. Never delete the
 # line here.
+#
+# A non-ASCII name is refused: pf compile warns, skips the line and gives
+# the xn-- form to write. An IPv4 address here blocks that address (an
+# nft /32), not a name.
 
 # --- out-of-band / webhook catchers: an agent's C2 rendezvous of choice
 webhook.site

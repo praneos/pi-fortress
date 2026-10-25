@@ -90,7 +90,7 @@ const sshMinBits = 16
 // must be. The warning for a skipped line uses them. A feed line that is
 // skipped gets no warning: it is feed noise.
 var (
-	allowWhat = fmt.Sprintf("a public IPv4 address or range (/%d or narrower)", allowMinBits)
+	allowWhat = fmt.Sprintf("a public IPv4 address or range (/%d or narrower, no host bits)", allowMinBits)
 	sshWhat   = fmt.Sprintf("a public IPv4 address or network (/%d or narrower, no host bits)", sshMinBits)
 )
 
@@ -131,7 +131,8 @@ type Out struct {
 	// DomainMap and IPMap receive one "<item>\t<feed>" line for each compiled
 	// sinkhole name (agent, then house) and for each blacklist prefix before
 	// coalescence. The feed comes from generated/feeds.map. It is "local" when
-	// the map does not name the item. pf observe
+	// the map does not name the item, or when a list of the operator
+	// (blacklist.*, house.domains) has the item. pf observe
 	// reads them to label a blocked event.
 	DomainMap string
 	IPMap     string
@@ -151,7 +152,8 @@ type Summary struct {
 	// Warnings are lines that the operator wrote into a hand-kept address list
 	// (ssh_allow.ips, direct_ip.allow, the direct_ip.allow of the house). Each
 	// line was not an address that the list accepts, and the compiler skipped
-	// it. Line prints each one after the counts.
+	// it. They are also the lines of blacklist.domains that a shield removed
+	// (shieldWarnings). Line prints each one after the counts.
 	Warnings []string
 	// SharedParents are the feed entries that did not compile because each
 	// is at a shared parent (AtSharedParent), in order. Line prints them.
@@ -248,18 +250,24 @@ func prefixContains(outer, inner netip.Prefix) bool {
 func ParseIPv4(token string) (string, bool) { return parseIPv4(token, minBits) }
 
 // ParseAllowIPv4 is ParseIPv4 for a list that opens something
-// (direct_ip.allow, house_direct_ip.allow): it accepts nothing wider than /24.
-func ParseAllowIPv4(token string) (string, bool) { return parseIPv4(token, allowMinBits) }
+// (direct_ip.allow, house_direct_ip.allow): it accepts nothing wider than /24,
+// and it refuses host bits as ParseSSHIPv4 does.
+func ParseAllowIPv4(token string) (string, bool) { return parseOpenIPv4(token, allowMinBits) }
 
 // ParseSSHIPv4 parses the token of ssh_allow.ips: /16 or narrower, with a
 // prefix written as its network. Before, the code masked 140.82.114.4/20 to
 // 140.82.112.0/20 without a warning. This opened a /20 for an operator who
 // possibly meant the one host.
-func ParseSSHIPv4(token string) (string, bool) {
+func ParseSSHIPv4(token string) (string, bool) { return parseOpenIPv4(token, sshMinBits) }
+
+// parseOpenIPv4 is parseIPv4 for a list that opens something. It refuses a
+// prefix with host bits. It does not mask it into a range wider than the
+// operator possibly meant. loadOperatorIPs gives the network in the warning.
+func parseOpenIPv4(token string, min int) (string, bool) {
 	if p, err := netip.ParsePrefix(strings.TrimSpace(token)); err == nil && p.Masked() != p {
 		return "", false
 	}
-	return parseIPv4(token, sshMinBits)
+	return parseIPv4(token, min)
 }
 
 // ParseHostIPv4 accepts one address, not a range. house_private_dns.ips pins
@@ -299,11 +307,17 @@ func parseIPv4(token string, min int) (string, bool) {
 	return p.Addr().String(), true
 }
 
+// ParseDomain gives the name that a list line blocks or shields. A dnsmasq
+// line and a suffix match cover the name and all names below it. Thus
+// "*.example.com" and ".example.com" are the same as "example.com". Only one
+// "*." or one dot goes.
 func ParseDomain(token string) (string, bool) {
 	name := strings.ToLower(strings.TrimSpace(token))
 	name = strings.TrimRight(name, ".")
 	if strings.HasPrefix(name, "*.") {
 		name = name[2:]
+	} else {
+		name = strings.TrimPrefix(name, ".")
 	}
 	if len(name) > 253 || !domainRe.MatchString(name) {
 		return "", false
@@ -379,6 +393,119 @@ func SharedParents(names []string) map[string]struct{} {
 func AtSharedParent(entry string, shared map[string]struct{}) bool {
 	_, ok := shared[entry]
 	return ok
+}
+
+// shieldWarnings gives one warning for each line of the operator's block
+// list (local) that never_block.domains or core.hosts removes. The shield
+// is a suffix match (IsNeverDomain). Thus a line for www.example.com goes
+// when never_block has example.com. The operator wrote that line to block
+// the name, so the compiler tells why it did not. A feed entry that a
+// shield removes gets no warning: the shield is there for the feeds.
+func shieldWarnings(seg SegmentPolicy, local []string, never map[string]struct{}, core *corepolicy.Policy) []string {
+	var warn []string
+	seen := map[string]struct{}{}
+	for _, d := range local {
+		if _, ok := seen[d]; ok {
+			continue
+		}
+		seen[d] = struct{}{}
+		var why string
+		switch {
+		case IsNeverDomain(d, never):
+			why = seg.File("never_block.domains") + " shields it (the name or a parent of it is there)"
+		case BlocksCoreHost(d, core):
+			why = `core.hosts shields it (a credential host there is the name, is below it, or is under a "*." line that covers it)`
+		default:
+			continue
+		}
+		warn = append(warn, fmt.Sprintf("%s: %q is not blocked: %s", seg.Sinkhole("domains"), d, why))
+	}
+	return warn
+}
+
+// asciiWarnings gives one warning for each line that is not ASCII in a
+// domain list that the operator edits: the lists of each segment and
+// doh.domains.local. LoadTokens skips such a line, because a query, an SNI
+// and a feed carry the xn-- form. The warning gives that form. A feed line
+// that is not ASCII gets no warning: it is feed noise.
+func asciiWarnings(policyDir string) ([]string, error) {
+	files := []string{"doh.domains.local"}
+	for _, seg := range Segments {
+		for _, l := range seg.Lists() {
+			if l.Kind == "domains" || l.Kind == "endpoints" {
+				files = append(files, l.Name)
+			}
+		}
+	}
+	var warn []string
+	for _, name := range files {
+		raw, err := os.ReadFile(filepath.Join(policyDir, name))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for i, line := range strings.Split(string(raw), "\n") {
+			if token := StripLine(line); !corepolicy.IsASCII(token) {
+				warn = append(warn, fmt.Sprintf("%s line %d: %q is skipped (%s)", name, i+1, token, corepolicy.ASCIIHint(token)))
+			}
+		}
+	}
+	return warn, nil
+}
+
+// allowWarnings gives one warning for each "*.name" line of allow.domains.
+// The line allows name and all names below it (corepolicy.AllowEntry),
+// the same as the line "name". The warning tells the operator to write
+// that. It also gives one warning for each one-label line ("com",
+// "*.com"), which allows nothing. It reads the line as LoadDomains does:
+// the first token before a "#". The block lists need no "*." warning:
+// ParseDomain reads "*.name" there as "name", and a sinkhole line also
+// covers the names below it.
+func allowWarnings(path string) ([]string, error) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var warn []string
+	for i, line := range strings.Split(string(raw), "\n") {
+		line, _, _ = strings.Cut(line, "#")
+		bits := strings.Fields(line)
+		if len(bits) == 0 {
+			continue
+		}
+		name, star, oneLabel := corepolicy.AllowEntry(bits[0])
+		switch {
+		case oneLabel:
+			warn = append(warn, fmt.Sprintf("%s line %d: %q is one label; it would allow every name below it; write the full name", filepath.Base(path), i+1, bits[0]))
+		case star && name != "":
+			warn = append(warn, fmt.Sprintf("%s line %d: %q means %s and every name below it; write %s", filepath.Base(path), i+1, bits[0], name, name))
+		}
+	}
+	return warn, nil
+}
+
+// splitAddrs takes the IPv4 addresses out of the items of a domain list.
+// ParseDomain accepts "192.0.2.1": four labels of digits obey the grammar
+// of a name. As a name, the address got only a sinkhole line, and no nft
+// drop. Thus addrs goes to the IP list. An address that ParseIPv4 refuses
+// (private or reserved, for example the 0.0.0.0 of a hosts feed) is in
+// neither half.
+func splitAddrs(items []string) (names, addrs []string) {
+	for _, item := range items {
+		if a, err := netip.ParseAddr(item); err != nil || !a.Is4() {
+			names = append(names, item)
+			continue
+		}
+		if ip, ok := ParseIPv4(item); ok {
+			addrs = append(addrs, ip)
+		}
+	}
+	return names, addrs
 }
 
 // dropFeed removes from items each entry that refuse matches, and adds it
@@ -709,12 +836,15 @@ func nftElements(items []string) string {
 // The pin is per address. The firewall does not check the SNI of a
 // connection to a pinned address; the house resolver is what answers by
 // name. Each usual device resolves the name first.
+// privateRangeErr is the error for a range in house_private_dns.ips.
+const privateRangeErr = "house_private_dns.ips: %s is a range; list the endpoint's own addresses, one per line (a provider's range also holds its public resolvers)"
+
 func privateDNSEndpoints(names, ips []string) (string, []string, error) {
 	var pins []string
 	for _, ip := range ips {
 		addr, bits, ok := strings.Cut(ip, "/")
 		if ok && bits != "32" {
-			return "", nil, fmt.Errorf("house_private_dns.ips: %s is a range; list the endpoint's own addresses, one per line (a provider's range also holds its public resolvers)", ip)
+			return "", nil, fmt.Errorf(privateRangeErr, ip)
 		}
 		pins = append(pins, addr)
 	}
@@ -772,11 +902,14 @@ func ParseMap(text string) map[string]string {
 	return m
 }
 
-func mapLines(items []string, feeds map[string]string) string {
+// mapLines gives one "<item>\t<feed>" line for each item. An item in local
+// (the operator half of the list) is "local", also when a feed lists it
+// too: the operator line is the reason for the block.
+func mapLines(items []string, feeds map[string]string, local map[string]struct{}) string {
 	var b strings.Builder
 	for _, item := range items {
 		feed := feeds[item]
-		if feed == "" {
+		if _, ok := local[item]; ok || feed == "" {
 			feed = "local"
 		}
 		b.WriteString(item + "\t" + feed + "\n")
@@ -810,17 +943,17 @@ func compileOperatorIPs(src, kind, what string, warn *[]string, path string) ([]
 
 // compileHouse removes the entries of the two house feeds that refuseFeed
 // matches. The shipped defaults and house.domains of the operator compile
-// as written.
-func compileHouse(policyDir string, house SegmentPolicy, out Out, refuseFeed func([]string) []string) (houseFinal, houseVPNFinal []string, err error) {
+// as written. houseLocal is the set of house.domains, for the domain map.
+func compileHouse(policyDir string, house SegmentPolicy, out Out, refuseFeed func([]string) []string) (houseFinal, houseVPNFinal []string, houseLocal map[string]struct{}, err error) {
 	if out.HouseDNS == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	// The shared never_block keeps registries and Google APIs reachable for
 	// agents. On the house side, it would protect ad hosts under google.com.
 	// The house list obeys only its own file.
 	houseNeverList, err := LoadTokens(filepath.Join(policyDir, house.File("never_block.domains")), "domains")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	houseNever := set(houseNeverList)
 	isNever := func(d string) bool { return IsNeverDomain(d, houseNever) }
@@ -828,37 +961,41 @@ func compileHouse(policyDir string, house SegmentPolicy, out Out, refuseFeed fun
 	// The defaults go first. Thus the head of the compiled file is the shipped
 	// baseline, and the volatile feed is in the middle of each diff.
 	for _, f := range []struct {
-		name string
-		feed bool
+		name  string
+		feed  bool
+		local bool
 	}{
-		{house.File("default.domains"), false},
-		{house.Generated("domains"), true},
-		{house.Sinkhole("domains"), false},
+		{house.File("default.domains"), false, false},
+		{house.Generated("domains"), true, false},
+		{house.Sinkhole("domains"), false, true},
 	} {
 		got, err := LoadTokens(filepath.Join(policyDir, f.name), "domains")
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if f.feed {
 			got = refuseFeed(got)
 		}
+		if f.local {
+			houseLocal = set(got)
+		}
 		houseFinal = keepNew(houseFinal, got, seenHouse, isNever)
 	}
 	if err := writeFile(out.HouseDNS, dnsLines(houseFinal)); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if out.HouseVPNDNS == "" {
-		return houseFinal, nil, nil
+		return houseFinal, nil, houseLocal, nil
 	}
 	got, err := LoadTokens(filepath.Join(policyDir, HouseVPNFile), "domains")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	houseVPNFinal = keepNew(nil, refuseFeed(got), seenHouse, isNever)
 	if err := writeFile(out.HouseVPNDNS, dnsLines(houseVPNFinal)); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return houseFinal, houseVPNFinal, nil
+	return houseFinal, houseVPNFinal, houseLocal, nil
 }
 
 func compilePrivateDNS(policyDir string, house SegmentPolicy, out Out, dohDomains []string) ([]string, error) {
@@ -869,9 +1006,18 @@ func compilePrivateDNS(policyDir string, house SegmentPolicy, out Out, dohDomain
 	if err != nil {
 		return nil, err
 	}
-	privateIPs, err := LoadTokens(filepath.Join(policyDir, house.File("private_dns.ips")), "allow_ips")
+	// The kind is host_ips, as in Lists. That parser refuses a range, and
+	// loadTokens skips a refused line with no message. Thus a line that is a
+	// range stops the compile here, with or without host bits, and at any
+	// width. The file pins exact addresses: a skip would hide the mistake.
+	privateIPs, bad, err := loadTokens(filepath.Join(policyDir, house.File("private_dns.ips")), "host_ips")
 	if err != nil {
 		return nil, err
+	}
+	for _, b := range bad {
+		if p, ok := parsePrefix4(b.token); ok && p.Bits() < 32 {
+			return nil, fmt.Errorf(privateRangeErr, b.token)
+		}
 	}
 	endpoints, pins, err := privateDNSEndpoints(privateNames, privateIPs)
 	if err != nil {
@@ -896,6 +1042,13 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
+	// An address on a domain list blocks as an address. It keeps its half:
+	// the IP map labels a feed address with its feed and an operator line
+	// "local". never_block.ips applies to it.
+	feedDomains, feedAddrs := splitAddrs(feedDomains)
+	localDomains, localAddrs := splitAddrs(localDomains)
+	feedIPs = append(feedIPs, feedAddrs...)
+	localIPs = append(localIPs, localAddrs...)
 	sharedList, err := LoadTokens(filepath.Join(policyDir, SharedParentsFile), "domains")
 	if err != nil {
 		return Summary{}, err
@@ -935,6 +1088,7 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	domainFinal := keepNew(nil, domains, map[string]struct{}{}, func(d string) bool {
 		return IsNeverDomain(d, neverDomains) || BlocksCoreHost(d, core)
 	})
+	warnings := shieldWarnings(agent, localDomains, neverDomains, core)
 
 	if err := writeFile(out.NFT, nftElements(ipFinal)); err != nil {
 		return Summary{}, err
@@ -948,7 +1102,7 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	if raw, err := os.ReadFile(filepath.Join(policyDir, "generated", "feeds.map")); err == nil {
 		feeds = ParseMap(string(raw))
 	}
-	if err := writeFile(out.IPMap, mapLines(ipKept, feeds)); err != nil {
+	if err := writeFile(out.IPMap, mapLines(ipKept, feeds, set(localIPs))); err != nil {
 		return Summary{}, err
 	}
 
@@ -969,7 +1123,6 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	if err := writeFile(out.DoHDNS, dnsLines(dohDomains)); err != nil {
 		return Summary{}, err
 	}
-	var warnings []string
 	directFinal, err := compileOperatorIPs(filepath.Join(policyDir, agent.File("direct_ip.allow")), "allow_ips", allowWhat, &warnings, out.DirectIPNFT)
 	if err != nil {
 		return Summary{}, err
@@ -989,11 +1142,11 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	}
 
 	house := SegmentFor(AllowByDefault)
-	houseFinal, houseVPNFinal, err := compileHouse(policyDir, house, out, refuseFeed)
+	houseFinal, houseVPNFinal, houseLocal, err := compileHouse(policyDir, house, out, refuseFeed)
 	if err != nil {
 		return Summary{}, err
 	}
-	if err := writeFile(out.DomainMap, mapLines(domainFinal, feeds)+mapLines(houseFinal, feeds)+mapLines(houseVPNFinal, feeds)); err != nil {
+	if err := writeFile(out.DomainMap, mapLines(domainFinal, feeds, set(localDomains))+mapLines(houseFinal, feeds, houseLocal)+mapLines(houseVPNFinal, feeds, nil)); err != nil {
 		return Summary{}, err
 	}
 
@@ -1007,6 +1160,15 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
+	ascii, err := asciiWarnings(policyDir)
+	if err != nil {
+		return Summary{}, err
+	}
+	allowWarn, err := allowWarnings(filepath.Join(policyDir, agent.File("allow.domains")))
+	if err != nil {
+		return Summary{}, err
+	}
+	warnings = append(append(append(warnings, ascii...), allowWarn...), core.Warnings...)
 	if out.HouseWhatsAppNFT != "" {
 		wa, err := LoadTokens(filepath.Join(policyDir, HouseWhatsAppFile), "ips")
 		if err != nil {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -131,5 +132,77 @@ func TestListEditPreservesComments(t *testing.T) {
 				t.Fatalf("got %q, want %q", raw, tc.want)
 			}
 		})
+	}
+}
+
+// allow.domains is the forward set of the agent under PARANOID=1. A name
+// there also allows all names below it. Thus a leading dot is not a narrower
+// entry, and the seat refuses it and does not write the bare name. The
+// other domain lists read ".name" as "name".
+func TestAllowDomainsRefusesLeadingDot(t *testing.T) {
+	if got, err := ValidateToken("allow.domains", ".example.com"); !errors.Is(err, errToken) || !strings.Contains(err.Error(), "leading dot") {
+		t.Fatalf("ValidateToken(allow.domains, .example.com) = %q, %v; want a refusal that names the dot", got, err)
+	}
+	if got, err := ValidateToken("allow.domains", "*.example.com"); err != nil || got != "example.com" {
+		t.Fatalf("ValidateToken(allow.domains, *.example.com) = %q, %v", got, err)
+	}
+	for _, list := range []string{"blacklist.domains", "never_block.domains", "house.domains"} {
+		if got, err := ValidateToken(list, ".ads.example"); err != nil || got != "ads.example" {
+			t.Errorf("ValidateToken(%s, .ads.example) = %q, %v", list, got, err)
+		}
+	}
+	c := &Config{PolicyDir: t.TempDir()}
+	path := filepath.Join(c.PolicyDir, "allow.domains")
+	write(t, path, allowMenu)
+	if err := c.ListAdd("allow.domains", ".example.org"); !errors.Is(err, errToken) {
+		t.Fatalf("ListAdd = %v, want errToken", err)
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != allowMenu {
+		t.Fatalf("file changed: %q", raw)
+	}
+}
+
+// The screen shows a hand-written line as it is in the file. The delete
+// normalises the token. Thus the delete compares each line in its normal
+// form too. If not, it deleted nothing and the screen said "deleted".
+// Comments and blank lines stay.
+func TestListRemoveMatchesTheNormalForm(t *testing.T) {
+	cases := []struct {
+		list, before, value, want string
+	}{
+		{"blacklist.domains", "# .ads.example\n.ads.example\nkeep.example\n", ".ads.example", "# .ads.example\nkeep.example\n"},
+		{"blacklist.domains", "*.ads.example # why\n\nkeep.example\n", "ads.example", "\nkeep.example\n"},
+		{"house.domains", "ADS.Example.\nkeep.example\n", "ads.example", "keep.example\n"},
+		{"blacklist.ips", "# 8.8.8.8\n8.8.8.8/32\n", "8.8.8.8", "# 8.8.8.8\n"},
+		{"blacklist.domains", "not a name\nads.example\n", "ads.example", "not a name\n"},
+	}
+	for _, tc := range cases {
+		c := &Config{PolicyDir: t.TempDir()}
+		path := filepath.Join(c.PolicyDir, tc.list)
+		write(t, path, tc.before)
+		if err := c.ListRemove(tc.list, tc.value); err != nil {
+			t.Fatalf("%s: ListRemove(%q) = %v", tc.list, tc.value, err)
+		}
+		if raw, _ := os.ReadFile(path); string(raw) != tc.want {
+			t.Errorf("%s: remove %q from %q gave %q, want %q", tc.list, tc.value, tc.before, raw, tc.want)
+		}
+	}
+}
+
+// A name that is not ASCII never matches a query. The seat refuses it and
+// gives the xn-- form to write.
+func TestValidateTokenRefusesNonASCIIWithItsALabel(t *testing.T) {
+	for list, want := range map[string]string{
+		"blacklist.domains":         "xn--mnchen-3ya.de",
+		"allow.domains":             "xn--mnchen-3ya.de",
+		"house_private_dns.domains": "abc.dns.xn--mnchen-3ya.de",
+	} {
+		value := "münchen.de"
+		if list == "house_private_dns.domains" {
+			value = "abc.dns.münchen.de"
+		}
+		if got, err := ValidateToken(list, value); !errors.Is(err, errToken) || !strings.Contains(err.Error(), want) {
+			t.Errorf("ValidateToken(%s, %s) = %q, %v; want a refusal that gives %s", list, value, got, err, want)
+		}
 	}
 }

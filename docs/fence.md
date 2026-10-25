@@ -47,7 +47,12 @@ share a process (`docs/privilege_split.md`).
 The fence applies a credential by **kind + TLS name**, not to "any core
 host". `vm/policy/core.hosts` lists `host KIND…` (`*` = lab echo). A name
 matches exactly, unless it is written as `*.name`. `*.name` matches the name
-and each subdomain of it. A Claude placeholder
+and each subdomain of it. `pf compile` and `pf apply` refuse some host forms:
+a host with one label (`localhost`), a host with `_`, a bare `*`, a `*` after
+the first `*.` (`*.*.example.com`), and a non-ASCII host. They print a warning,
+skip that line, and change nothing else. For a non-ASCII host, the warning
+gives the `xn--` form to write. `*` as a kind (the lab echo) is not
+changed. A Claude placeholder
 becomes live only toward Anthropic/Claude names. A GitHub placeholder becomes
 live only toward GitHub.
 
@@ -90,9 +95,17 @@ replaces `core.hosts` and keeps the local file. Apply installs the two files
 as one `/etc/pi-fortress/core.hosts`, with the local part below a marker
 line.
 
-A placeholder in `Host` or `Connection` refuses the request, as in any other
-non-credential header. The fence never substitutes into these two headers,
-and it strips every live value in them.
+A placeholder in `Host`, `Connection` or `Upgrade` refuses the request, as in
+any other non-credential header. The fence never substitutes into these three
+headers, and it never changes them. The authority decision, the blocklist and
+paranoid mode read the `Host`, and the origin server routes the request by
+it. Thus a live value or a token-prefix match in `Host` refuses the request
+(`live_in_host`, an alert), also a live value of a kind that the host
+injects. The broker reads `Connection` and `Upgrade` to decide on a WebSocket
+(§5.3c) before the fence runs, and the origin server switches the protocol by
+them. Thus a live value or a token-prefix match in `Connection` or `Upgrade`
+refuses the request (`live_in_connection`, an alert), also a live value of a
+kind that the host injects.
 
 The fence writes a credential into one body only: the body of the refresh
 token, `CLAUDE_ORT` on `/v1/oauth/token` or `/oauth/token`. This body is
@@ -111,7 +124,8 @@ the URL and any other buffered body. A placeholder in a streamed body stops
 the copy (`placeholder_in_streamed_body`, §5.2b). Data in a body or a URL can
 come back past the literal scrub. Examples are a model that is asked to print
 its prompt in reverse, a public gist, and an access log. Stripping does not
-change. It runs over the URL, every header, and the body.
+change. It runs over the URL, every header except `Host`, `Connection` and
+`Upgrade`, and the body.
 
 What the fence scans:
 
@@ -258,6 +272,15 @@ case. The broker refuses a request before it writes anything upstream if:
 For a placeholder, the refusal is the one refusal of the fence. For a live
 value, the refusal is the 403.
 
+The broker reads the first `Content-Type` to decide on `application/json`.
+A request to a refresh path with a second `Content-Type` field, or with a
+list of media types in one field (`a/b, c/d`), gets the one refusal of the
+fence (`repeated_content_type`, an alert, §5.2b). RFC 9110 lets a recipient
+join repeated fields into one list, so the two forms are the same. A comma
+in a quoted parameter value does not make a list. The other readers of
+`Content-Type` (the JSON body scan above, the DoH check) read each field and
+each list item. Thus a request that is not a refresh can repeat it.
+
 The broker acquires that slot **before** the write to the origin server. It
 holds the slot until it has stored the rewritten response. A second refresh
 of the same slot in that window gets `429 refresh_busy`, not a race. The
@@ -274,8 +297,13 @@ other origin server returns `access_token`, it is data.
 
 The HTTP layer of the broker (`internal/httpwire`, no `net/http`) is strict
 where the fence rewrites by name. It rejects a repeated `Host`,
-`Authorization`, or `Cookie`. Reason: the fence rewrites the first one, and
-the origin server must see exactly what the fence saw.
+`Authorization`, or `Cookie` with a `400`. Reason: the fence rewrites the
+first one, and the origin server must see exactly what the fence saw. The
+fence refuses a repeat of each other header that it writes a credential into
+for the host: `X-Api-Key`, and each header that the `core.hosts` line of the
+host declares (`repeated_credential_header`, an alert, §5.2b). The name
+matches in any letter case. A host that gets no credential has no such
+header, so these headers can repeat toward it.
 
 The broker forwards only an origin-form target (`/...`), or `*` with
 `OPTIONS`. Reasons:
@@ -291,8 +319,12 @@ The broker also refuses `CONNECT`, an HTTP/1.1 request with no `Host`
 field, and a `Host` that is not a host and an optional port (RFC 9110
 §7.2: a DNS name, an IPv4 literal, or a bracketed IPv6 literal; a port of
 1 to 65535). The blocklist walks the labels of the `Host`, so it must see
-a clean name. The result is `400`, and a strip row with `where=target` and
-the rule `request_target`, `connect`, `no_host`, or `bad_host`.
+a clean name. A `Host` port must be the port that the broker dialled: the
+fence, the blocklist, and paranoid mode decide on the name only, and an
+origin server can route by the port. A `Host` with no port goes out. The
+result is `400`, and a strip row with `where=target` and the rule
+`request_target`, `connect`, `no_host`, `bad_host`, or
+`host_port_mismatch`.
 
 The broker skips every 1xx response, up to a bounded number. A 101 is an
 error, because nothing asked to upgrade. Thus a `103 Early Hints` cannot be
@@ -317,6 +349,17 @@ stay on the origin connection after a framed response ended:
 
 The broker does not check a close-delimited HTTP/1.0 body for leftover bytes
 at all. That connection ends in either case.
+
+The fence does not scan trailers or chunk extensions. The broker reads each
+trailer field after the last chunk of a body, checks that it has the shape
+of a header field, and then discards it. A chunk extension (the text after
+`;` on a chunk size line) is discarded in the same way. A trailer field
+with a bad shape, or a control byte in a chunk extension, ends the request.
+No trailer field and no chunk extension goes to the origin server or to the
+agent. The broker also drops the `Trailer` header, which announces trailer
+fields, in the request and in the response. Thus a placeholder or a live
+value in a trailer or a chunk extension does not leave the Pi, and it
+writes no refusal and no strip row.
 
 The broker also base64-decodes an `Authorization` value with the scheme
 `Basic` (any case, with spaces or tabs before the token), padded or not. The
@@ -363,6 +406,29 @@ verifies the origin certificate against the SNI. Thus, on a dedicated origin
 server, a client cannot name an unlisted host to reach a listed one. On a
 shared CDN edge that permits fronting, the `Host` check is the remaining
 line.
+
+Each domain list (for example `blacklist.domains`, `never_block.domains`,
+`allow.domains` and the house lists) refuses a non-ASCII name. `pf compile`
+and `pf apply` print a warning, skip that line, and give the `xn--` form to
+write. An IPv4 address on a domain list of the agent blocks that address
+(an nft `/32`), not a name.
+
+**A blocked name resolves to `0.0.0.0`.** The resolver answers a listed
+name with `NOERROR` and one A record, `0.0.0.0`, with a TTL of 0. It does
+not answer `NXDOMAIN`. Each other record type of that name gets an empty
+`NOERROR` answer. A name outside the allowlist in paranoid mode gets the
+same answers. The DNS log marks each of these rows `blocked`. Reasons:
+
+- This is the dnsmasq sinkhole form. The compiled lists use it, and a
+  fixture that points a name to a real address uses the same path.
+- The answer is final. A stub resolver does not try its search domains or
+  a second resolver after it, as it can do after `NXDOMAIN`.
+
+Thus a client gets a failed connection, not a failed lookup. For example,
+`curl` reports "Connection refused" and not "Could not resolve host". An
+agent that retries on a connection failure also retries a blocked name. On
+Linux, a client that dials `0.0.0.0` connects to its own host. Thus a
+service that listens on the agent itself can get that connection.
 
 **The key-shape check of `pf dns` also applies to the SNI.** The broker dials
 the origin with the SNI of the agent, and the origin can log it. A name that
@@ -582,6 +648,18 @@ Substitution can fail for these reasons:
   match that the raw target does not show, or the target does not decode to
   a stable form in a few rounds (`encoded_url_token`). The raw bytes are
   different, so the fence cannot strip the value in place.
+- The `Host` holds a live value or a token-prefix match (`live_in_host`).
+  The origin server routes the request by its `Host`, so a strip there
+  sends the request to a name that the fence did not judge.
+- A `Connection` or an `Upgrade` holds a live value or a token-prefix match
+  (`live_in_connection`). The broker decided on a WebSocket from these
+  headers, so a strip there makes the origin server do a different thing.
+- A header that the fence writes a credential into for the host occurs more
+  than one time (`repeated_credential_header`). The origin server can read
+  either field, and thus a value that the fence did not decide on.
+- A request to a refresh path has more than one `Content-Type` field, or a
+  list of media types in one field (`repeated_content_type`). The origin
+  server can read a media type that the broker did not decide on.
 
 For all of them, the agent gets one response, byte for byte: a 503 with
 `Retry-After: 60` and a body that names no cause. The broker refuses the
@@ -605,15 +683,19 @@ The detail is not deleted. It only goes to a different place. The broker
 writes each cause to the strip log as `substitution_refused`, with the cause,
 slot, kind, and SNI. `kind_not_allowed_for_sni`,
 `placeholder_outside_header`, `placeholder_in_ws` (5.3c),
-`encoded_body_token`, `key_in_header_name`, `key_in_method`, and
-`encoded_url_token` are always marked `alert`. Each other cause is marked
-`alert` one time for each broker start. These seven are not an operational
-fault to fix. They show the fence
-catching a credential aimed where it may not go. This is the signature of a
-compromised or badly broken agent. A refresh response that the broker
-refuses (the harvest cannot read the new pair, or a token shape stays after
-the scrub) writes `harvest_leftover` with the slot. It is always marked
-`alert`.
+`encoded_body_token`, `key_in_header_name`, `key_in_method`,
+`encoded_url_token`, `live_in_host`, `live_in_connection`,
+`repeated_credential_header`, and `repeated_content_type` are always marked
+`alert`. Each other cause is marked `alert` one time for each broker start.
+These eleven are not an operational fault to fix. They show the fence
+catching a credential aimed where it may not go. This is the signature of a compromised or badly broken
+agent. A `live_in_host` row has the SNI as its `host`, so the live value goes
+to no log and no webhook. The broker writes some rows before the fence runs:
+the target rules, the blocklist, the paranoid deny and a refused git push.
+When the `Host` holds a live value or a token-prefix match, each of these
+rows also has the SNI as its `host`. A refresh response that the broker refuses (the
+harvest cannot read the new pair, or a token shape stays after the scrub)
+writes `harvest_leftover` with the slot. It is always marked `alert`.
 
 The broker does not read a streamed body (over 1 MiB, or chunked) before the
 head goes to the origin server. Thus the broker cannot refuse a placeholder
@@ -1000,7 +1082,7 @@ of the broker. This stalls TLS.
 
 | Path | What |
 |---|---|
-| `/var/log/pi-fortress/strip.jsonl` | One line for each match: `host`, `where`, `rule`, `t`, and `client_ip` when the preamble carried a source. Refusals add `ev`, `sni`, `cause`, `slot`, `kind`, and `alert` when the broker marks them. A §5.2d budget crossing adds `threat`, `slot`, `count`, `limit`. A §5.2e expiry row adds `threat` and `slot`, and `host` is `-`. An expiring row also adds `count`. |
+| `/var/log/pi-fortress/strip.jsonl` | One line for each match: `host`, `where`, `rule`, `t`, and `client_ip` when the preamble carried a source. Refusals add `ev`, `sni`, `cause`, `slot`, `kind`, and `alert` when the broker marks them. A §5.2d budget crossing adds `threat`, `slot`, `count`, `limit`. A §5.2e expiry row adds `threat` and `slot`, and `host` is `-`. An expiring row also adds `count`. A name that the engine refused because the blocklist has it is a refusal with `cause` and `threat` `sni_blocked` and `where` `sni`. It never has `alert`, and one client and name give at most one such row each minute. |
 | `pf alert` (`internal/alert`) | Tails the jsonl file and `notice.jsonl`. Writes the last event. Optional webhook. |
 | `./vm/bin/alerts.sh follow` | Host terminal bell + `notify-send`. |
 | `vm/policy/alert.url` | One URL: ntfy / Slack / Discord. |
@@ -1120,7 +1202,8 @@ These all refuse in the same way, `encoded_body_unscannable`:
 A live value or token-prefix match found after the decode is
 `encoded_body_token`. `encoded_body_token` alerts every time, the same as
 `kind_not_allowed_for_sni`, `placeholder_outside_header`,
-`key_in_header_name`, `key_in_method`, and `encoded_url_token` (5.2b).
+`key_in_header_name`, `key_in_method`, `encoded_url_token`, `live_in_host`,
+and `live_in_connection` (5.2b).
 `encoded_body_unscannable` alerts one time for each broker run, like a sealed
 store. Reason: the broker refuses every request of a harmless client that
 compresses its uploads with zstd. An alert on each one would fill the hourly
@@ -1150,7 +1233,12 @@ The broker forwards the handshake to the origin server with its
 negotiated, and every frame stays readable. If an origin server accepts an
 extension anyway, the broker ends the connection. The broker sends nothing of
 that response to the agent, and it logs the extension. Any other
-`Upgrade` is still a 501.
+`Upgrade` is still a 501. A live value or a token-prefix match in the
+`Connection` of a handshake refuses the request (`live_in_connection`, 5.2b).
+The broker sends the 501 before the fence runs. A live value or a
+token-prefix match in the `Connection` or the `Upgrade` of such a request
+writes the same `live_in_connection` row, an alert. The agent still gets the
+501.
 
 The broker relays the `101` of the origin server to the agent as it arrived.
 One exception applies: the broker changes a live credential that the origin
@@ -1412,15 +1500,23 @@ The TUI writes `claims/<CODE>.json` (0640). It has `code`, `slot`, `kinds`,
 `issued`, `expires`, `setup_sha256`, and `ca_sha256`, and `git_hosts` when
 the slot has `GITHUB_TOKEN`. www:
 
-- Redeems by making `claims-redeemed/<CODE>.redeemed` with `O_EXCL`. This
-  is what makes a second redeem fail. It makes the marker only for a claim
-  file that exists, and before it reads the claim. The marker is on disk,
-  so a spent code stays spent after a restart or a reboot. A claim that
-  was not redeemed stays valid until it expires.
-- Refuses expired claims, and a claim file that root does not own.
+- Refuses expired claims, a claim file that root does not own, and a claim
+  whose `setup_sha256` or `ca_sha256` is not the hash of the file that www
+  serves now (a `pf apply` replaced it after the issue). A refused request
+  does not spend the code.
+- Redeems by making `claims-redeemed/<CODE>.redeemed` with `O_EXCL`, after
+  all checks pass. This is what makes a second redeem fail, also when two
+  redeems come at the same time. The marker is on disk, so a spent code
+  stays spent after a restart or a reboot. A claim that was not redeemed
+  stays valid until it expires.
+- Writes `PI_IP`, the address that www binds, into the claim script. The
+  `Host` of the request has no effect on the script.
 - Never serves a listing of either directory.
 - Answers wrong, used, and expired codes with the same 404.
-- Allows ten attempts for each source address each minute.
+- Allows ten attempts for each source address each minute, and 30
+  attempts each minute for all sources on the agent segment together. An
+  attempt that the per-source limit refuses does not count against the
+  segment.
 
 Root sweeps: each claim issue and each `pf apply` (`pf www -init-ledger`)
 remove the claims with an mtime more than one hour old, and then the

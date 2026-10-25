@@ -275,7 +275,7 @@ func (c *Config) loadConnLimits() error {
 			key := class + suffix
 			n, m, e := parseConnValue(key, c.ConnLimits[key], dflt, dburst)
 			if e != nil {
-				err = fmt.Errorf("%s='%s': %v (%s)", key, c.ConnLimits[key], e, c.EnvSrc)
+				err = fmt.Errorf("%s='%s': %v%s", key, c.ConnLimits[key], e, c.envSrc())
 			}
 			return n, m
 		}
@@ -289,10 +289,10 @@ func (c *Config) loadConnLimits() error {
 			return err
 		}
 		if b.PerIP > 0 && b.Total > 0 && b.PerIP > b.Total {
-			return fmt.Errorf("%s_CONN_PER_IP=%d is more than %s_CONN_TOTAL=%d, so the per-device cap could never be reached (%s)", class, b.PerIP, class, b.Total, c.EnvSrc)
+			return fmt.Errorf("%s_CONN_PER_IP=%d is more than %s_CONN_TOTAL=%d, so the per-device cap could never be reached%s", class, b.PerIP, class, b.Total, c.envSrc())
 		}
 		if b.Rate > 0 && b.NewTotal > 0 && b.Rate > b.NewTotal {
-			return fmt.Errorf("%s_NEW_PER_IP=%d/%d is more than %s_NEW_TOTAL=%d/%d, so the per-device rate could never be reached (%s)", class, b.Rate, b.Burst, class, b.NewTotal, b.NewBurst, c.EnvSrc)
+			return fmt.Errorf("%s_NEW_PER_IP=%d/%d is more than %s_NEW_TOTAL=%d/%d, so the per-device rate could never be reached%s", class, b.Rate, b.Burst, class, b.NewTotal, b.NewBurst, c.envSrc())
 		}
 		c.connBudgets[class] = b
 	}

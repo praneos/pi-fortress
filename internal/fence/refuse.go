@@ -111,6 +111,31 @@ const (
 	// form in a few rounds is also this cause, because the fence cannot see
 	// what the origin decodes. Thus the fence refuses the request.
 	CauseEncodedURLToken RefusalCause = "encoded_url_token"
+	// CauseLiveInHost is a Host that holds a live value or a token-prefix
+	// match. The origin routes the request by its Host. A strip there
+	// sends the request to a name that the fence did not judge, and the
+	// credential of the judged name goes with it. Thus the fence cannot
+	// strip the value in place, and it refuses the request.
+	CauseLiveInHost RefusalCause = "live_in_host"
+	// CauseLiveInConnection is a Connection or an Upgrade field that holds
+	// a live value or a token-prefix match. The broker reads these fields
+	// to decide on a WebSocket before the fence runs, and the origin reads
+	// them to switch the protocol. A strip there changes what the origin
+	// does after that decision. Thus the fence cannot strip the value in
+	// place, and it refuses the request. Where names the field.
+	CauseLiveInConnection RefusalCause = "live_in_connection"
+	// CauseRepeatedCredHeader is a credential header that occurs more than
+	// one time: X-Api-Key, or a header that the core.hosts line of the host
+	// declares. The fence writes a credential by name, and the origin can
+	// read either field. Thus the origin can read a value that is different
+	// from the value that the fence decided on. httpwire refuses a repeated
+	// Authorization before the fence runs. Where names the second field.
+	CauseRepeatedCredHeader RefusalCause = "repeated_credential_header"
+	// CauseRepeatedContentType is a refresh request with more than one
+	// Content-Type field, or with a list of media types in one field. The
+	// broker reads the media type to decide how the body binds a slot, and
+	// the origin can read a different one. Where names the second field.
+	CauseRepeatedContentType RefusalCause = "repeated_content_type"
 )
 
 type Refusal struct {
@@ -204,6 +229,26 @@ func (s *scanner) noteNames(fields httpwire.Fields) {
 	}
 }
 
+// noteRepeats refuses the request when a header that the fence writes a
+// credential into for this host occurs more than one time. A host that
+// gets no credential has no such header.
+func (s *scanner) noteRepeats(fields httpwire.Fields) {
+	if !s.inject {
+		return
+	}
+	seen := map[string]bool{}
+	for _, f := range fields {
+		name := strings.ToLower(f.Name)
+		if !corepolicy.DefaultHeader(name) && s.extra[name] == nil {
+			continue
+		}
+		if seen[name] {
+			s.refuse(CauseRepeatedCredHeader, "", "", "header:"+f.Name)
+		}
+		seen[name] = true
+	}
+}
+
 // noteMethod refuses the request when the method holds a placeholder, a
 // live value or a token-prefix match. It does the same checks as
 // noteNames, on the method.
@@ -221,6 +266,68 @@ func (s *scanner) noteMethod(method string) {
 	if s.all.match(b) {
 		s.refuse(CauseKeyInMethod, "", "", "method")
 	}
+}
+
+// noteHost refuses the request when the Host holds a live value or a
+// token-prefix match. It checks every live value, also one of a kind that
+// this host injects, and every token rule, as noteNames does.
+func (s *scanner) noteHost(host string) {
+	s.noteLive(host, CauseLiveInHost, "header:Host")
+}
+
+// noteConn refuses the request when a Connection or an Upgrade field holds
+// a live value or a token-prefix match, as noteHost does for the Host.
+func (s *scanner) noteConn(name, v string) {
+	where := "header:Connection"
+	if strings.EqualFold(name, "upgrade") {
+		where = "header:Upgrade"
+	}
+	s.noteLive(v, CauseLiveInConnection, where)
+}
+
+// noteLive refuses the request with cause when v holds a live value or a
+// token-prefix match.
+func (s *scanner) noteLive(v string, cause RefusalCause, where string) {
+	for _, sl := range livesIn(s.idx.Lives, v) {
+		s.refuse(cause, sl.ID, sl.Kind, where)
+	}
+	if s.all.match([]byte(v)) {
+		s.refuse(cause, "", "", where)
+	}
+}
+
+// livesIn gives the live values that v holds.
+func livesIn(lives []secrets.Slot, v string) []secrets.Slot {
+	var in []secrets.Slot
+	for _, sl := range lives {
+		if httpwire.Contains([]byte(v), []byte(sl.Live)) {
+			in = append(in, sl)
+		}
+	}
+	return in
+}
+
+// SecretInHost reports whether host holds a live value of slots or a
+// token-prefix match. It is the test of noteHost (CauseLiveInHost). The
+// broker uses it for the rows that it writes before the fence runs. Only
+// TokenRE and Rules of ctx apply.
+func SecretInHost(ctx Ctx, host string, slots map[string]secrets.Slot) bool {
+	return len(livesIn(secrets.NewIndex(slots).Lives, host)) > 0 || allTokens(ctx).match([]byte(host))
+}
+
+// LiveIn gives the refusals that noteLive records for v: one for each live
+// value of slots that v holds, and one with no slot for a token-prefix
+// match. The broker uses it for a field of a request that it refuses
+// before the fence runs.
+func LiveIn(ctx Ctx, v string, slots map[string]secrets.Slot, cause RefusalCause, where string) []Refusal {
+	var rs []Refusal
+	for _, sl := range livesIn(secrets.NewIndex(slots).Lives, v) {
+		rs = append(rs, Refusal{Cause: cause, Slot: sl.ID, Kind: sl.Kind, Where: where})
+	}
+	if allTokens(ctx).match([]byte(v)) {
+		rs = append(rs, Refusal{Cause: cause, Where: where})
+	}
+	return rs
 }
 
 // noteTarget scans the percent-decoded target, because the origin decodes

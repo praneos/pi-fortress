@@ -135,9 +135,8 @@ main() {
   # docs/release.md "Signing": namespace pi-fortress-dist, principal
   # release@pi-fortress). It is embedded here, not left as a to-do, because
   # the repo already has it in allowed_signers form. PF_SIGNER_PUBKEY
-  # overrides it for key rotation, with no edit to this file (the old key
-  # signs the published new line, as release.md gives).
-  PF_SIGNER_PUBKEY="${PF_SIGNER_PUBKEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP84hURABuMrcMaPPXZpQPXN7hxaZaYI9nHNRhOQIOa9}"
+  # overrides it for key rotation, with no edit to this file.
+  PF_SIGNER_PUBKEY="${PF_SIGNER_PUBKEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKVK/2pcp/J483O0Q/NvHVZr6jAR3uzMQfTabUh5B96R}"
   case "${PF_SIGNER_PUBKEY}" in
     "" | *PLACEHOLDER* | *TODO*)
       fail "PF_SIGNER_PUBKEY is unset or a placeholder; refusing to trust an unverifiable bundle. See https://pi-fortress.praneos.ai/verify/ for the real key."

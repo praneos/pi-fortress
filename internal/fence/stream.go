@@ -17,7 +17,8 @@ var ErrPlaceholderInStream = errors.New("fence: placeholder in a streamed body")
 
 // StreamPlaceholderError is ErrPlaceholderInStream with the name of the
 // placeholder that ended the copy. Thus the refusal row carries its slot and
-// kind. Both are empty for an overlong kind run that is not a placeholder.
+// kind. For a kind run that did not settle within maxHold, the kind is the
+// part of the run that arrived.
 type StreamPlaceholderError struct{ Slot, Kind string }
 
 func (e *StreamPlaceholderError) Error() string { return ErrPlaceholderInStream.Error() }
@@ -84,12 +85,18 @@ func (g *placeholderGuard) scan() {
 	hold = len(g.Buf) - n
 	// A whole placeholder in the settled prefix stops the copy. A hold past
 	// maxHold also stops it. The guard does not emit the bytes of this pass.
-	var slot, kind string
-	if sp := secrets.FindPlaceholderSpans(g.Buf); len(sp) > 0 && sp[0][1] <= n {
-		slot, kind = secrets.PlaceholderParts(g.Buf, sp[0])
+	sp := secrets.FindPlaceholderSpans(g.Buf)
+	if len(sp) > 0 && sp[0][1] <= n {
 		hold = maxHold + 1
 	}
 	if hold > maxHold {
+		// The first span is the placeholder that stops the copy. If it is a
+		// run that did not settle, it ends at the edge of the buffer. Then
+		// its slot and its kind are the part that arrived.
+		var slot, kind string
+		if len(sp) > 0 {
+			slot, kind = secrets.PlaceholderParts(g.Buf, sp[0])
+		}
 		g.err = &StreamPlaceholderError{Slot: slot, Kind: kind}
 		// EOF stops more reads by the pump. Read answers with err.
 		g.Out, g.Buf, g.EOF = nil, nil, true

@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"bufio"
 	"net"
 	"os"
 	"path/filepath"
@@ -32,6 +33,8 @@ func TestNonOriginFormTargetRefused(t *testing.T) {
 			"GET * HTTP/1.1\r\nHost: api.anthropic.com\r\nAuthorization: Bearer " + oat + "\r\n\r\n", "request_target"},
 		{"no host",
 			"GET /v1/messages HTTP/1.1\r\nAuthorization: Bearer " + oat + "\r\n\r\n", "no_host"},
+		{"host port that is not the dialled port",
+			"GET /v1/messages HTTP/1.1\r\nHost: api.anthropic.com:8443\r\nAuthorization: Bearer " + oat + "\r\n\r\n", "host_port_mismatch"},
 		{"websocket absolute-form",
 			"GET https://evil.example/ws HTTP/1.1\r\nHost: api.anthropic.com\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n" +
 				"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\nAuthorization: Bearer " + oat + "\r\n\r\n", "request_target"},
@@ -69,11 +72,13 @@ func TestNonOriginFormTargetRefused(t *testing.T) {
 	}
 }
 
-// What the refusal above must leave alone: origin-form, OPTIONS *, and
-// an HTTP/1.0 request, which has no Host to require.
+// What the refusal above must leave alone: origin-form, OPTIONS *, a
+// Host with the dialled port, and an HTTP/1.0 request, which has no Host
+// to require.
 func TestOriginFormTargetsForwarded(t *testing.T) {
 	for _, raw := range []string{
 		"GET /v1/models HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n",
+		"GET /v1/models HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n",
 		"OPTIONS * HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n",
 		"GET /v1/models HTTP/1.0\r\n\r\n",
 	} {
@@ -92,6 +97,46 @@ func TestOriginFormTargetsForwarded(t *testing.T) {
 		s.close()
 		if got, _ := target.Load().(string); got == "" || !strings.HasPrefix(raw, "GET "+got) && !strings.HasPrefix(raw, "OPTIONS "+got) {
 			t.Fatalf("%q: origin saw target %q", raw, got)
+		}
+	}
+}
+
+// The origin can route by the port in the Host. The fence and the
+// blocklist decide on the name only. Thus a Host port that is not the
+// port that the broker dialled refuses the request. A Host with no port,
+// or with the dialled port, goes out. A bracketed IPv6 literal has colons
+// of its own: only a colon after the ']' starts a port.
+func TestHostPortAgainstDialledPort(t *testing.T) {
+	for _, tc := range []struct {
+		host    string
+		dialled uint16
+		rule    string
+	}{
+		{"api.anthropic.com", 443, ""},
+		{"api.anthropic.com:443", 443, ""},
+		{"API.anthropic.com.:443", 443, ""},
+		{"api.anthropic.com:8443", 443, "host_port_mismatch"},
+		{"api.anthropic.com:80", 443, "host_port_mismatch"},
+		{"api.anthropic.com:443", 8443, "host_port_mismatch"},
+		{"api.anthropic.com:8443", 8443, ""},
+		{"api.anthropic.com", 8443, ""},
+		{"192.0.2.1:8443", 443, "host_port_mismatch"},
+		{"192.0.2.1:443", 443, ""},
+		{"[2001:db8::1]", 443, ""},
+		{"[2001:db8::443]", 443, ""},
+		{"[2001:db8::8443]", 443, ""},
+		{"[2001:db8::1]:443", 443, ""},
+		{"[2001:db8::1]:8443", 443, "host_port_mismatch"},
+		{"[::1]:443", 8443, "host_port_mismatch"},
+		// No dialled port is known (no original destination): no check.
+		{"api.anthropic.com:8443", 0, ""},
+	} {
+		req, err := httpwire.ReadRequest(bufio.NewReader(strings.NewReader("GET / HTTP/1.1\r\nHost: " + tc.host + "\r\n\r\n")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := targetRefusal(req, tc.dialled); got != tc.rule {
+			t.Errorf("Host %q on a dial to %d: rule %q, want %q", tc.host, tc.dialled, got, tc.rule)
 		}
 	}
 }

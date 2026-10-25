@@ -62,3 +62,24 @@ func TestSegmentsOmitsAnUnconfiguredHouse(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+// PF_SEGMENTS_DIR can end in a slash. filepath.Dir of "segments.d/" is
+// segments.d itself. The check directory must then still be beside
+// segments.d, not in it, because loadSegments lists segments.d.
+func TestCandidateSegmentsIsBesideATrailingSlash(t *testing.T) {
+	c := testConfig(t)
+	parent := t.TempDir()
+	dir := filepath.Join(parent, "segments.d")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	write(t, filepath.Join(dir, "desk.env"), "IF=eth0.79\nNET=10.79.0.0/30\nIP=10.79.0.1\n")
+	c.SegmentsDir = dir + "/"
+	cand, err := c.candidateSegments("desk", map[string]string{"ADMIN": "no"}, []string{"ADMIN"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := filepath.Dir(cand); got != parent {
+		t.Fatalf("check directory %s is in %s, want %s", cand, got, parent)
+	}
+}

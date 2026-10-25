@@ -56,39 +56,55 @@ step 2. Details: [docs/cloud_lab.md](docs/cloud_lab.md).
 
 ## Install on a Pi 5
 
+Pi Fortress has no binary releases yet. Release builds start at v1, when
+the project is stable. Until then, build from the latest stable tag, as
+below. The project signs each stable tag.
+
 You need these items ([full list](docs/user_guide/pi_setup.md)):
 
 - A Raspberry Pi 5 with Raspberry Pi OS Lite 64-bit.
 - A USB Ethernet adapter.
 - A machine for the agent. The only network path of this machine is the Pi.
 
-Connect to the Pi with SSH over its uplink (for example Wi-Fi). Then run:
+Connect the Pi to its uplink (for example Wi-Fi), with SSH on. Then
+[install from source](#install-from-source). The installer asks which
+port is the uplink and which port is for the agent. It refuses to give
+the agent the port of your SSH session. Then follow
+[Getting started](docs/user_guide/getting_started.md).
 
-```
-curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install.sh | sudo bash
-```
-
-The installer gets the newest signed release and checks the signature
-of each download. It asks which port is the uplink and which port is for
-the agent. It refuses to give the agent the port of your SSH session.
-Then follow [Getting started](docs/user_guide/getting_started.md).
-
-Debian 12/13 or Ubuntu 24.04 on amd64 also works. Pinned versions,
-offline installs and upgrades: [docs/gateway_install.md](docs/gateway_install.md).
-
-Fixes go to `main` first and get a signed release later. To get the latest
-fixes now, [install from source](#install-from-source), and then
-[update from source](#update-from-source) when `main` changes.
+Debian 12/13 or Ubuntu 24.04 on amd64 also works. Use the `amd64`
+bundle there. Details: [docs/gateway_install.md](docs/gateway_install.md).
 
 ### Install from source
 
-Use this to get fixes from `main` before the next release. You build and
-sign the bundle on your desktop, then the Pi verifies it with your key.
-You need git, make, Go 1.27.3 (the `toolchain` line of `go.mod`) and an
-SSH key. On a new Pi, run on the desktop:
+You build and sign the bundle on your desktop. Then the Pi verifies it
+with your key. You need git, make, Go 1.27.3 (the `toolchain` line of
+`go.mod`) and an SSH key.
+
+On the desktop, get the source and find the newest stable tag:
 
 ```
 git clone https://github.com/praneos/pi-fortress && cd pi-fortress
+git tag -l 'v*' --sort=-v:refname | head -1
+```
+
+The newest stable tag now is `v0.1.6`. Verify the tag against the key
+of the project, then check it out:
+
+```
+echo 'release@pi-fortress namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKVK/2pcp/J483O0Q/NvHVZr6jAR3uzMQfTabUh5B96R' > ~/pi-fortress.allowed_signers
+git -c gpg.ssh.allowedSignersFile="$HOME/pi-fortress.allowed_signers" verify-tag v0.1.6
+git checkout v0.1.6
+```
+
+`verify-tag` must print `Good "git" signature for release@pi-fortress`.
+Keep the key file outside the clone: `make release` refuses a tree with
+files that git does not track. The fingerprint of the key, and why you
+take it from this page: [verify the source](docs/user_guide/verify.md).
+
+Then build, sign and install. On a new Pi, run on the desktop:
+
+```
 make release RELEASE_UNSIGNED=1
 V=$(scripts/release.sh version)
 ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n pi-fortress-dist dist/$V/SHA256SUMS dist/$V/pf-bundle-$V-arm64.tar
@@ -96,15 +112,20 @@ scp install.sh dist/$V/SHA256SUMS* dist/$V/pf-bundle-$V-arm64.tar* <user>@<pi>:
 ssh -t <user>@<pi> "sudo PF_SIGNER_PUBKEY='$(cut -d' ' -f1,2 ~/.ssh/id_ed25519.pub)' PF_BUNDLE=pf-bundle-$V-arm64.tar bash install.sh"
 ```
 
-`make release` builds only committed code. To build a tag, run
-`git checkout <tag>` first. A source install trusts the commit that you
-build and your own key, not the release key of the project. After this,
+`make release` builds only committed code, here the tag that you checked
+out. The Pi trusts the bundle because your own key signed it. After this,
 the Pi accepts only bundles that your key signed.
 
 ### Update from source
 
+Get the new tags and find the newest stable tag. Verify it and check it
+out, as above. Then build, sign and upgrade. In the clone, run:
+
 ```
-git pull
+git fetch --tags
+git tag -l 'v*' --sort=-v:refname | head -1
+git -c gpg.ssh.allowedSignersFile="$HOME/pi-fortress.allowed_signers" verify-tag <tag>
+git checkout <tag>
 make release RELEASE_UNSIGNED=1
 V=$(scripts/release.sh version)
 ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n pi-fortress-dist dist/$V/SHA256SUMS dist/$V/pf-bundle-$V-arm64.tar

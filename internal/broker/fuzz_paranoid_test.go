@@ -72,7 +72,7 @@ func FuzzParanoidHostDecision(f *testing.F) {
 			t.Fatalf("Host %q derived the uncased %q", host, h)
 		}
 		// The broker does not change the header that it sends to the origin
-		// server. Thus the name that the oracle approved must be the authority of
+		// server (the fence half: FuzzDecideAnyRequest). Thus the name that the oracle approved must be the authority of
 		// that header, and not a prefix of a longer authority. If a header
 		// normalises to nothing, the SNI decides instead. The engine already
 		// examined the SNI.

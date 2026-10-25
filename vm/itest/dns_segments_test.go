@@ -275,6 +275,16 @@ func dnsSegmentTests(t *testing.T) {
 			t.Fatalf("%s came back with %v left, more than the %v it had before the reload", ips[0], after, before)
 		}
 		t.Logf("%s carried across the reload: %v left, was %v", ips[0], after, before)
+		// The apply can end before the new pf dns listens. Wait for an
+		// answer, so that the next subtest does not ask in that gap. This
+		// comes after the checks: the answer renews the element.
+		eventually(t, 15*time.Second, func() string {
+			back := "back-" + strconv.FormatInt(time.Now().UnixNano(), 36) + ".pf-open-echo.test"
+			if len(digA(t, back, piIP)) > 0 {
+				return ""
+			}
+			return "the agent segment does not resolve after the apply"
+		})
 	}))
 
 	// Phase 3. The rest of the suite assumes PARANOID=0 (it resolves

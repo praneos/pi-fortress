@@ -92,8 +92,12 @@ work_tree() {
 # secretscan FILE...: nothing key-shaped in what is about to be signed
 # (internal/secretscan). A bundle is an uncompressed tar, so the bytes of
 # its files are scanned as they are.
+#
+# The scan runs on this host. Thus GOOS and GOARCH are unset for it: make
+# pi-bundle GOARCH=arm64 exports GOARCH, and an arm64 test binary does not
+# start on an amd64 desktop.
 secretscan() {
-	(cd "$ROOT" && SECRETSCAN_FILES="$*" go test -count=1 -run TestArtifactsHoldNoSecrets ./internal/secretscan >/dev/null) ||
+	(cd "$ROOT" && env -u GOOS -u GOARCH SECRETSCAN_FILES="$*" go test -count=1 -run TestArtifactsHoldNoSecrets ./internal/secretscan >/dev/null) ||
 		die "something key-shaped in $*: SECRETSCAN_FILES=\"$*\" go test -v -run TestArtifactsHoldNoSecrets ./internal/secretscan"
 }
 
@@ -189,14 +193,14 @@ sums() {
 		LC_ALL=C sort | xargs -r sha256sum >SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS)
 }
 
-KEY=${SIGN_KEY:-$HOME/.ssh/pi_fortress_release}
+KEY=${SIGN_KEY:-$HOME/.ssh/pi_fortress_dist}
 KEY=${KEY/#\~/$HOME}
 
 # signable: 0 to sign, 1 for a sanctioned unsigned build. It dies
 # otherwise, before any build output exists.
 signable() {
 	if [ ! -r "$KEY" ]; then
-		[ "${RELEASE_UNSIGNED:-}" = 1 ] || die "no signing key at $KEY (set SIGN_KEY, or RELEASE_UNSIGNED=1 for a local build)"
+		[ "${RELEASE_UNSIGNED:-}" = 1 ] || die "no signing key at $KEY (set DIST_KEY for make, SIGN_KEY for this script, or RELEASE_UNSIGNED=1 for a local build)"
 		return 1
 	fi
 	[ -r "$KEY.pub" ] || die "no public key at $KEY.pub"
@@ -205,7 +209,7 @@ signable() {
 	local pinned
 	pinned=$(sed -n 's/.*PF_SIGNER_PUBKEY:-\(ssh-[^ ]* [A-Za-z0-9+\/=]*\)}.*/\1/p' "$ROOT/install.sh")
 	[ -n "$pinned" ] && [ "$pinned" = "$(cut -d' ' -f1,2 "$KEY.pub")" ] ||
-		die "$KEY.pub is not the key that install.sh pins as PF_SIGNER_PUBKEY (set SIGN_KEY)"
+		die "$KEY.pub is not the key that install.sh pins as PF_SIGNER_PUBKEY (set DIST_KEY for make, SIGN_KEY for this script)"
 }
 
 sign() {

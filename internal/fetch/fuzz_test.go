@@ -11,7 +11,8 @@ import (
 // checkDomain fails when a domains feed gives an entry that is not one
 // canonical name of two or more labels. An empty entry, a bare label, a
 // wildcard, a root, an address or a local name would block much more
-// than one site.
+// than one site. numericOK lets a plain line that is only an address stay
+// an entry.
 func checkDomain(t *testing.T, feed, d string, numericOK bool) {
 	t.Helper()
 	if got, ok := policycompile.ParseDomain(d); !ok || got != d {
@@ -79,6 +80,16 @@ func FuzzParseFeeds(f *testing.F) {
 		}
 		for _, d := range plain {
 			checkDomain(t, "plain", d, true)
+		}
+		// A sink address with a field after it gives the name or nothing,
+		// never an address.
+		for line := range strings.SplitSeq(body, "\n") {
+			if f := strings.Fields(policycompile.StripLine(line)); len(f) < 2 || !sinkAddr(f[0]) {
+				continue
+			}
+			for _, d := range ParsePlain(line, "domains") {
+				checkDomain(t, "plain after a sink address", d, false)
+			}
 		}
 		ips := ParsePlain(body, "ips")
 		if len(ips) > lines {

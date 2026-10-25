@@ -35,6 +35,54 @@ if ! diff -u "${golden}" "${tmp}/no-house.nft"; then
   fail "no-house ruleset drifted from testdata/nft.no-house.golden"
 fi
 
+# With a checkout, the lists come from the checkout. pf tui edits the
+# checkout, and provision seeds /etc/pi-fortress only once. So apply names
+# a list only when its copy in /etc/pi-fortress differs and is newer than
+# the checkout copy: a hand edit that has no effect. For a list that this
+# apply then copies into /etc/pi-fortress, the line says that apply
+# replaces the edit. It is quiet when the copies are equal, when the
+# checkout copy is newer, or when /etc/pi-fortress has no copy. The copy
+# of apply in a temp tree stops at the lib lookup; the line comes before
+# that. A box with a /vagrant checkout uses that tree, so the check skips
+# there.
+if [[ ! -f /vagrant/vm/pi/net.env ]]; then
+  pt="${tmp}/pt"
+  mkdir -p "${pt}/vm/pi" "${pt}/vm/policy" "${tmp}/pt-etc"
+  cp "${apply}" "${pt}/vm/pi/apply.sh"
+  cp "${tmp}/net.env" "${pt}/vm/pi/net.env"
+  for _n in a b c d e f g; do
+    echo "${_n}.example" >"${pt}/vm/policy/${_n}.domains"
+  done
+  echo "192.0.2.1" >"${pt}/vm/policy/blacklist.ips"
+  echo "example.com" >"${pt}/vm/policy/allow.domains"
+  tree_run() {
+    PF_TEST_ETC="${tmp}/pt-etc" PF_NET_ENV_LOCAL=/nonexistent \
+      bash "${pt}/vm/pi/apply.sh" --render-nft 2>&1 || true
+  }
+  tree_head="pi-fortress: lists come from ${pt}/vm/policy, not ${tmp}/pt-etc;"
+  tree_run | grep -q 'lists come from' && fail "tree warning with no copy in /etc/pi-fortress"
+  cp "${pt}/vm/policy/"* "${tmp}/pt-etc/"
+  tree_run | grep -q 'lists come from' && fail "tree warning when the copies are equal"
+  # The seed is older than a later TUI edit of the checkout.
+  touch -d @1700000000 "${tmp}/pt-etc/"*
+  echo "203.0.113.7" >>"${pt}/vm/policy/blacklist.ips"
+  echo "x.example" >>"${pt}/vm/policy/allow.domains"
+  touch -d @1700000100 "${pt}/vm/policy/"*
+  tree_run | grep -q 'lists come from' && fail "tree warning for a checkout edit after the seed: $(tree_run)"
+  # A hand edit in /etc/pi-fortress after the checkout edit.
+  echo "203.0.113.5" >>"${tmp}/pt-etc/blacklist.ips"
+  tree_run | grep -qxF "${tree_head} edits there have no effect: blacklist.ips" ||
+    fail "no tree warning for a newer /etc copy: $(tree_run)"
+  echo "y.example" >>"${tmp}/pt-etc/allow.domains"
+  tree_run | grep -qxF "${tree_head} edits there have no effect: blacklist.ips; this apply replaces edits there: allow.domains" ||
+    fail "no replace warning for a newer /etc copy that apply installs: $(tree_run)"
+  for _n in a b c d e f g; do
+    echo "x.example" >>"${tmp}/pt-etc/${_n}.domains"
+  done
+  tree_run | grep -qxF "${tree_head} edits there have no effect: a.domains b.domains c.domains d.domains e.domains (+3 more); this apply replaces edits there: allow.domains" ||
+    fail "the tree warning is not bounded: $(tree_run)"
+fi
+
 cat >"${tmp}/house.env" <<'EOF'
 HOUSE_IF=eth1
 HOUSE_ADMIN_IP=10.78.0.20
@@ -1430,6 +1478,42 @@ grep -q '^OnCalendar=\*:0/15$' "${here}/logrotate.timer" ||
 grep -q 'logrotate --state /var/lib/pi-fortress/logrotate.state /etc/pi-fortress/logrotate.conf' "${here}/logrotate.service" ||
   fail "logrotate.service does not run our conf with its own state file"
 
+# logrotate and the USB NIC switch stay root, with a sandbox, as
+# wg-alert does. logrotate writes only the log directory and its state
+# file. logrotate writes the state file through a rename, so the
+# directory of the state file must be writable.
+for _l in NoNewPrivileges=yes PrivateTmp=yes PrivateDevices=yes ProtectHome=yes ProtectSystem=strict \
+  ProtectKernelTunables=yes ProtectKernelModules=yes ProtectKernelLogs=yes ProtectControlGroups=yes \
+  RestrictNamespaces=yes RestrictSUIDSGID=yes SystemCallArchitectures=native SystemCallFilter=@system-service \
+  SystemCallErrorNumber=EPERM 'RestrictAddressFamilies=AF_UNIX' \
+  'CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH' \
+  'ReadWritePaths=/var/log/pi-fortress /var/lib/pi-fortress' \
+  'InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www'; do
+  grep -qxF "${_l}" "${here}/logrotate.service" || fail "logrotate.service has no '${_l}'"
+done
+# Each path that the conf rotates is in a writable directory.
+while read -r _p; do
+  [[ "$(dirname "${_p}")" == /var/log/pi-fortress ]] ||
+    fail "logrotate.conf rotates ${_p}, outside the ReadWritePaths of logrotate.service"
+done < <(grep -E '^/' "${here}/logrotate.conf" | tr -d '{' | tr ' ' '\n' | grep -E '^/')
+# postrotate runs systemctl, which needs AF_UNIX to reach systemd.
+grep -q 'systemctl kill' "${here}/logrotate.conf" ||
+  fail "logrotate.conf no longer runs systemctl; check RestrictAddressFamilies of logrotate.service again"
+
+# usb-nic-switch.sh opens the adapter in /dev/bus/usb (usb_modeswitch,
+# usbreset) and writes its authorized file in /sys. Thus no PrivateDevices
+# and no ProtectKernelTunables. AF_NETLINK is for libusb.
+for _l in NoNewPrivileges=yes ProtectHome=yes ProtectSystem=strict ProtectKernelModules=yes ProtectKernelLogs=yes \
+  ProtectControlGroups=yes RestrictNamespaces=yes RestrictSUIDSGID=yes SystemCallArchitectures=native \
+  SystemCallFilter=@system-service SystemCallErrorNumber=EPERM 'RestrictAddressFamilies=AF_UNIX AF_NETLINK' \
+  'CapabilityBoundingSet=CAP_SYS_ADMIN'; do
+  grep -qxF "${_l}" "${here}/usb-nic-switch.service" || fail "usb-nic-switch.service has no '${_l}'"
+done
+grep -qE '^(PrivateDevices|ProtectKernelTunables)=yes' "${here}/usb-nic-switch.service" &&
+  fail "usb-nic-switch.service blocks /dev/bus/usb or the writes to /sys"
+grep -qF '/authorized' "${here}/usb-nic-switch.sh" ||
+  fail "usb-nic-switch.sh no longer writes /sys; check ProtectKernelTunables of usb-nic-switch.service again"
+
 # git_push.allow (docs/git_push.md): the Pi owns it. apply installs or
 # removes it. A change restarts the fence. The broker points at it.
 grep -qE '^PI_OWNED = .*\bgit_push\.allow\b' "${here}/../../Makefile" || fail "git_push.allow is not in PI_OWNED"
@@ -2559,12 +2643,14 @@ EOF
       -e "s#(^|[^A-Za-z0-9_.~/-])/(etc|usr/local|var|run|vagrant)(/|[^A-Za-z0-9_.-]|\$)#\1$2/\2\3#g" "$1" >"$1.new"
     mv "$1.new" "$1"
   }
+  # $3 is the mode. The default is --local.
   local_apply() {
+    local _mode="${3:---local}"
     : >"$1.systemctl"
     : >"$1.nft"
     PATH="${lstub}:${lsafe}" PF_ALLOW_ANY_HOST=1 PF_INT_IF=lo PF_WAN_IF="${lwan}" SYSTEMCTL_LOG="$1.systemctl" \
       NFT_LOG="$1.nft" NFT_FAIL="${NFT_FAIL:-}" \
-      bash "$2" --local >"$1.log" 2>&1 || { tail -20 "$1.log" >&2; fail "apply --local failed under ${1##*/}"; }
+      bash "$2" "${_mode}" >"$1.log" 2>&1 || { tail -20 "$1.log" >&2; fail "apply ${_mode} failed under ${1##*/}"; }
   }
 
   # A /vagrant checkout: the policy tree and /etc/pi-fortress are two
@@ -2762,6 +2848,66 @@ EOF
   local_apply "${app2}" "${app2}/usr/local/lib/pi-fortress/apply.sh"
   cmp -s "${tmp}/key_prefixes.rules.app2" "${app2}/etc/pi-fortress/key_prefixes.rules" ||
     fail "same-file: a removed key_prefixes.rules.local left its rules in key_prefixes.rules"
+
+  # --refresh, the unattended timer path. A refresh that changes only the
+  # block list does not restart the fence: the sinkhole and the nft sets
+  # get the new list, and nobody is there to accept dropped connections.
+  # A refresh that also finds a change to another fence input restarts
+  # the fence, as --local does, and records the fence state. If not, the
+  # broker stays on the old core.hosts while the ruleset is new.
+  # The pf of this root is a wrapper. Its fetch writes FAKE_FEED as the
+  # feed output and never goes to the network. All other commands go to
+  # the real pf.
+  ref="${tmp}/lroot3"
+  mkdir -p "${ref}/etc/pi-fortress" "${ref}/usr/local/lib/pi-fortress" "${ref}/usr/local/sbin" \
+    "${ref}/etc/systemd/system"
+  cp -a "${lsrc}/vm/policy/." "${ref}/etc/pi-fortress/"
+  cp -a "${lsrc}/vm/pi/." "${ref}/usr/local/lib/pi-fortress/"
+  cp "${here}/net.env" "${ref}/etc/pi-fortress/net.env"
+  install -m 0755 "${pfbin}" "${tmp}/pf-real"
+  cat >"${ref}/usr/local/lib/pi-fortress/pf" <<EOF
+#!/bin/bash
+if [[ "\$1" == fetch ]]; then
+  while [[ \$# -gt 0 && "\$1" != --out ]]; do shift; done
+  printf '%s\n' "\${FAKE_FEED:?}" >"\$2/blacklist.domains"
+  exit 0
+fi
+exec "${tmp}/pf-real" "\$@"
+EOF
+  chmod 0755 "${ref}/usr/local/lib/pi-fortress/pf"
+  lrewrite "${ref}/usr/local/lib/pi-fortress/apply.sh" "${ref}"
+  _rapply="${ref}/usr/local/lib/pi-fortress/apply.sh"
+  _restarted() { grep -q "restart pi-fortress-$2.service" "$1.systemctl"; }
+  export FAKE_FEED='feed-a.example'
+  local_apply "${ref}" "${_rapply}"
+  _restarted "${ref}" broker || fail "refresh setup: the first --local did not start the fence"
+  # The list alone changes.
+  FAKE_FEED='feed-b.example'
+  local_apply "${ref}" "${_rapply}" --refresh
+  grep -q 'feed-b.example' "${ref}/etc/pi-fortress/blocked-domains.conf" ||
+    fail "a --refresh did not install the new feed list"
+  if _restarted "${ref}" broker || _restarted "${ref}" engine; then
+    fail "a --refresh that changed only the block list restarted the fence"
+  fi
+  grep -q 'fence keeps the old name list' "${ref}.log" ||
+    fail "a list-only --refresh did not say that the fence keeps the old list: $(tail -3 "${ref}.log")"
+  # The list and core.hosts.local change.
+  FAKE_FEED='feed-c.example'
+  printf '%s\n' 'gitlab.com GITLAB_TOKEN:PRIVATE-TOKEN' >"${ref}/etc/pi-fortress/core.hosts.local"
+  local_apply "${ref}" "${_rapply}" --refresh
+  if ! _restarted "${ref}" broker || ! _restarted "${ref}" engine; then
+    fail "a --refresh with a list change and a core.hosts.local change did not restart the fence"
+  fi
+  cmp -s "${ref}/etc/pi-fortress/core.hosts" "${ref}/etc/pi-fortress/fence.state/core.hosts" ||
+    fail "a --refresh that restarted the fence did not record the fence state"
+  # The state is recorded. Thus the same refresh again restarts nothing.
+  local_apply "${ref}" "${_rapply}" --refresh
+  _restarted "${ref}" broker && fail "an unchanged --refresh restarted the fence"
+  # --local is as before: a list change alone restarts the fence.
+  echo 'feed-d.example' >"${ref}/etc/pi-fortress/generated/blacklist.domains"
+  local_apply "${ref}" "${_rapply}"
+  _restarted "${ref}" broker || fail "a --local with only a list change did not restart the fence"
+  unset FAKE_FEED
 fi
 
 # Also the shape behind those runs: the restart decision comes from the

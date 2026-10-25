@@ -88,16 +88,16 @@ func TestDevicesTableDetailPerNetwork(t *testing.T) {
 	}
 }
 
-// The Blocked table of Activity is newest first. It names the source by
-// its device name when it has one.
+// The Blocked table of Activity is newest first. It gives the source as
+// its address, and the device name beside it when it has one.
 func TestActivityNewestFirstNamesTheSource(t *testing.T) {
 	c, _ := testConfig(t)
 	now := statsFixture(t, c)
 	last := run(t, c, NewFake(100, 24).Type(keys(netHouse, secActivity))).Last()
 	rows := strings.Split(last, "\n")
-	head := fmt.Sprintf(eventFmt, "time", "threat", "source", "destination")
-	r1 := fmt.Sprintf(eventFmt, when(now.Add(-30*time.Second)), "phishing-army", "10.78.0.102", "tracker.example")
-	r2 := fmt.Sprintf(eventFmt, when(now.Add(-time.Hour)), "hagezi-pro", "phone", "ads.example")
+	head := fmt.Sprintf(namedFmt, "time", "threat", "source", "name", "destination")
+	r1 := fmt.Sprintf(namedFmt, when(now.Add(-30*time.Second)), "phishing-army", "10.78.0.102", "", "tracker.example")
+	r2 := fmt.Sprintf(namedFmt, when(now.Add(-time.Hour)), "hagezi-pro", "10.78.0.101", "phone", "ads.example")
 	// Rows 1 and 2 are the section and tab strips; the table is under them.
 	for i, s := range []string{head, r1, r2} {
 		if got := contentOf(rows[3+i]); strings.TrimRight(got, " ") != s {
@@ -183,16 +183,20 @@ func TestAnAlertRowSaysItWasOnlySeenAndNotStopped(t *testing.T) {
 	}
 	house := keys(netHouse, secActivity)
 	last := run(t, c, NewFake(100, 24).Type(house)).Last()
-	if !strings.Contains(last, "! arp_flip") {
+	if !strings.Contains(last, "^ arp_flip") {
 		t.Errorf("the claim is not marked as seen-only:\n%s", last)
 	}
-	if !strings.Contains(last, "! = not stopped") {
+	if !strings.Contains(last, "^ = not stopped") {
 		t.Errorf("the table never says what the mark means:\n%s", last)
+	}
+	// "!" is a standing fault in the chrome. A data row does not use it.
+	if strings.Contains(last, "! arp_flip") || strings.Contains(last, "! =") {
+		t.Errorf("the alert row uses the mark of a standing fault:\n%s", last)
 	}
 	// The row that the Pi really stopped must not get the mark. If it
 	// does, the mark says nothing.
 	agent := run(t, c, NewFake(100, 24).Type(keys(netAgent, secActivity))).Last()
-	if !strings.Contains(agent, "credential_strip") || strings.Contains(agent, "! credential_strip") {
+	if !strings.Contains(agent, "credential_strip") || strings.Contains(agent, "^ credential_strip") {
 		t.Errorf("a blocked row was marked as seen-only:\n%s", agent)
 	}
 	// At 80 columns, the header alone fills the content width. Thus the
@@ -200,7 +204,7 @@ func TestAnAlertRowSaysItWasOnlySeenAndNotStopped(t *testing.T) {
 	// heading next to it. The mark on the row stays. Help says what it
 	// means.
 	small := run(t, c, NewFake(80, 24).Type(house)).Last()
-	if !strings.Contains(small, "! arp_flip") || !strings.Contains(lineWith(small, "threat"), "destination") {
+	if !strings.Contains(small, "^ arp_flip") || !strings.Contains(lineWith(small, "threat"), "destination") {
 		t.Errorf("80 columns lost the mark or the heading:\n%s", small)
 	}
 }

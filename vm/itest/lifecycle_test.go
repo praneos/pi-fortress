@@ -272,7 +272,9 @@ func lifecycleTests(t *testing.T) {
 
 	base := shipVersion(t)
 
-	t.Run("ship N-1 then N, post-upgrade doctor passes", func(t *testing.T) {
+	// The later steps roll back and revert the box. With no N-1 and N
+	// from this run, a rollback goes to a tree from before the run.
+	shipped := t.Run("ship N-1 then N, post-upgrade doctor passes", func(t *testing.T) {
 		bN1 := buildBundle(t, arch)
 		signBundle(t, release, bN1)
 		shipInstall(t, bN1, "")
@@ -296,6 +298,9 @@ func lifecycleTests(t *testing.T) {
 		}
 		pi(t, "sudo pf ship confirm")
 	})
+	if !shipped {
+		t.Fatal("N-1 and N did not ship; the rollback and revert steps do not run")
+	}
 
 	t.Run("pf rollback returns to N-1 with state intact", func(t *testing.T) {
 		before := shipVersion(t)

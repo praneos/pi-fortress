@@ -140,7 +140,16 @@ type Segment struct {
 // not in the policy tree, because the segment itself is box-local state
 // that a ship never changes.
 func SegmentAllowPath(segmentsDir, name string) string {
-	return filepath.Join(filepath.Dir(segmentsDir), "allow."+name+".domains")
+	return filepath.Join(SegmentsParent(segmentsDir), "allow."+name+".domains")
+}
+
+// SegmentsParent is the directory that holds segments.d. The path is
+// cleaned first. filepath.Dir of "segments.d/" is segments.d itself, but
+// dirname in apply.sh ignores a trailing slash and gives the parent. The
+// seed of apply.sh and the check of render must use the same file. The
+// check directory of internal/admin goes here too.
+func SegmentsParent(segmentsDir string) string {
+	return filepath.Dir(filepath.Clean(segmentsDir))
 }
 
 // SegmentDHCPUnit and SegmentLeases are the dnsmasq instance and the lease
@@ -350,6 +359,7 @@ func Load(o Options) (*Config, error) {
 		return nil, err
 	}
 	c.warnInspectAdmin(o.Stderr)
+	c.warnDNSTypes(o.Stderr)
 	if err := c.checkHouseCable(o.Stderr); err != nil {
 		return nil, err
 	}
@@ -553,6 +563,18 @@ func (c *Config) checkHouseCable(w io.Writer) error {
 	return nil
 }
 
+// minAgentNetBits is the shortest prefix that AGENT_NET may have.
+const minAgentNetBits = 8
+
+// envSrc is " (<net.env>)" for the end of a refusal, or "" when the caller
+// gave no EnvSrc. Thus a refusal never ends in "()".
+func (c *Config) envSrc() string {
+	if c.EnvSrc == "" {
+		return ""
+	}
+	return " (" + c.EnvSrc + ")"
+}
+
 // checkNet validates the network that each chain in the ruleset is built
 // on. The code reads house.env and segments.d field by field and checks
 // them against each other. net.env was copied in as strings, and only the
@@ -567,11 +589,11 @@ func (c *Config) checkHouseCable(w io.Writer) error {
 // --live: a render on a laptop writes the same nftables.conf that a Pi loads.
 func (c *Config) checkNet(o Options) error {
 	if !reCIDR4.MatchString(c.AgentNet) {
-		return fmt.Errorf("AGENT_NET='%s' is not an IPv4 CIDR (%s)", c.AgentNet, c.EnvSrc)
+		return fmt.Errorf("AGENT_NET='%s' is not an IPv4 CIDR%s", c.AgentNet, c.envSrc())
 	}
 	p, err := netip.ParsePrefix(c.AgentNet)
 	if err != nil {
-		return fmt.Errorf("AGENT_NET='%s' is not an IPv4 CIDR (%s)", c.AgentNet, c.EnvSrc)
+		return fmt.Errorf("AGENT_NET='%s' is not an IPv4 CIDR%s", c.AgentNet, c.envSrc())
 	}
 	// nft and the NAT rule use the prefix verbatim. For a reader, 10.77.0.1/24
 	// is the same network. For each comparison below, it is a different
@@ -579,7 +601,14 @@ func (c *Config) checkNet(o Options) error {
 	// mask it. An operator who wrote the host address had a reason
 	// for it.
 	if masked := p.Masked(); masked != p {
-		return fmt.Errorf("AGENT_NET=%s carries a host address; write the network itself, %s (%s)", c.AgentNet, masked, c.EnvSrc)
+		return fmt.Errorf("AGENT_NET=%s carries a host address; write the network itself, %s%s", c.AgentNet, masked, c.envSrc())
+	}
+	// The widest private range, 10.0.0.0/8, is a /8. A wider AGENT_NET always
+	// holds public addresses, and a /0 holds all of them. Thus no FAKEIP_NET
+	// can be outside it, and checkFakeIP would tell the operator to change
+	// the wrong key.
+	if p.Bits() < minAgentNetBits {
+		return fmt.Errorf("AGENT_NET=%s is wider than /%d; the agent network is one LAN, and a wider network holds public addresses%s", c.AgentNet, minAgentNetBits, c.envSrc())
 	}
 	for _, x := range []struct{ key, val string }{{"PI_IP", c.PiIP}, {"AGENT_IP", c.AgentIP}} {
 		if x.val == "" {
@@ -589,17 +618,17 @@ func (c *Config) checkNet(o Options) error {
 			if x.key == "AGENT_IP" {
 				continue
 			}
-			return fmt.Errorf("PI_IP is empty; it is the address the agent segment reaches the Pi on (%s)", c.EnvSrc)
+			return fmt.Errorf("PI_IP is empty; it is the address the agent segment reaches the Pi on%s", c.envSrc())
 		}
 		if !reIPv4.MatchString(x.val) {
-			return fmt.Errorf("%s='%s' is not an IPv4 address (%s)", x.key, x.val, c.EnvSrc)
+			return fmt.Errorf("%s='%s' is not an IPv4 address%s", x.key, x.val, c.envSrc())
 		}
 		if !netHas(c.AgentNet, x.val) {
-			return fmt.Errorf("%s=%s is not inside AGENT_NET=%s, so no packet on the agent segment can carry it (%s)", x.key, x.val, c.AgentNet, c.EnvSrc)
+			return fmt.Errorf("%s=%s is not inside AGENT_NET=%s, so no packet on the agent segment can carry it%s", x.key, x.val, c.AgentNet, c.envSrc())
 		}
 	}
 	if c.AgentIP != "" && c.AgentIP == c.PiIP {
-		return fmt.Errorf("AGENT_IP=%s is PI_IP; the agent and the Pi cannot share an address (%s)", c.AgentIP, c.EnvSrc)
+		return fmt.Errorf("AGENT_IP=%s is PI_IP; the agent and the Pi cannot share an address%s", c.AgentIP, c.envSrc())
 	}
 	// The forward goes to apply as DNS_FORWARD in the dnsmasq server= form:
 	// an address or address#port. apply.sh changes the second form into
@@ -608,25 +637,25 @@ func (c *Config) checkNet(o Options) error {
 	// refuses a typo in the file. It does not keep the typo until the
 	// day that DoT is disabled again.
 	if err := checkForward(c.DNSUpstream); err != nil {
-		return fmt.Errorf("DNS_UPSTREAM='%s' %s; it is the resolver the Pi forwards to (%s)", c.DNSUpstream, err, c.EnvSrc)
+		return fmt.Errorf("DNS_UPSTREAM='%s' %s; it is the resolver the Pi forwards to%s", c.DNSUpstream, err, c.envSrc())
 	}
 	// Absent means fakeip (above). A box that must keep real answers sets
 	// AGENT_DNS=forward in net.env.local. forward renders exactly the same
 	// ruleset as before (vm/pi/testdata/nft.no-house.forward.golden).
 	setDefault(&c.AgentDNS, AgentDNSFakeIP)
 	if c.AgentDNS != AgentDNSForward && c.AgentDNS != AgentDNSFakeIP {
-		return fmt.Errorf("AGENT_DNS='%s' is not %s or %s (%s)", c.AgentDNS, AgentDNSForward, AgentDNSFakeIP, c.EnvSrc)
+		return fmt.Errorf("AGENT_DNS='%s' is not %s or %s%s", c.AgentDNS, AgentDNSForward, AgentDNSFakeIP, c.envSrc())
 	}
 	setDefault(&c.FakeIPNet, DefaultFakeIPNet)
 	if err := CheckFakeIPNet(c.FakeIPNet); err != nil {
-		return fmt.Errorf("FAKEIP_NET='%s' %v (%s)", c.FakeIPNet, err, c.EnvSrc)
+		return fmt.Errorf("FAKEIP_NET='%s' %v%s", c.FakeIPNet, err, c.envSrc())
 	}
 	// This is the same grammar as for the interfaces in house.env and
 	// segments.d. These two go into the ruleset inside quoted iifname
 	// matches. Without --live, nothing else examines them.
 	for _, x := range []declaredIF{{"INT_IF", o.IntIF}, {"WAN_IF", o.WanIF}} {
 		if x.val != "" && !reIface.MatchString(x.val) {
-			return fmt.Errorf("%s='%s' is not an interface name (%s)", x.key, x.val, c.EnvSrc)
+			return fmt.Errorf("%s='%s' is not an interface name%s", x.key, x.val, c.envSrc())
 		}
 	}
 	return nil
@@ -668,7 +697,7 @@ func (c *Config) checkUplink(have map[string]bool, w io.Writer) error {
 		return nil
 	case "1":
 	default:
-		return fmt.Errorf("UNTRUSTED_UPLINK='%s' is not 0 or 1 (%s)", c.UntrustedUplink, c.EnvSrc)
+		return fmt.Errorf("UNTRUSTED_UPLINK='%s' is not 0 or 1%s", c.UntrustedUplink, c.envSrc())
 	}
 	var paths []declaredIF
 	if c.HouseIF != "" && c.HouseAdminIP != "" {
@@ -696,10 +725,16 @@ func (c *Config) checkUplink(have map[string]bool, w io.Writer) error {
 		}
 		names = append(names, p.key+"="+p.val)
 	}
+	// Here the source is part of the sentence. Without EnvSrc, the code
+	// names the file, not its path.
+	src := c.EnvSrc
+	if src == "" {
+		src = "net.env"
+	}
 	return fmt.Errorf(`UNTRUSTED_UPLINK=1 is about to close SSH on WAN_IF=%s, and the only admin way in, %s, is not an interface on this box (check ip -br link).
   Applying this would leave nothing to reach the Pi on: a headless box would need a monitor and a keyboard to get back.
   Plug the adapter in, or set %s in %s to the name the kernel actually gave it (a Pi 5 USB NIC usually comes up as enx<mac>, not eth1), or set UNTRUSTED_UPLINK=0 in %s to leave SSH open on the uplink.
-  Nothing was changed.`, c.WanIF, strings.Join(names, " and "), paths[0].key, houseSrc(paths[0].key), c.EnvSrc)
+  Nothing was changed.`, c.WanIF, strings.Join(names, " and "), paths[0].key, houseSrc(paths[0].key), src)
 }
 
 // declaredIF is an interface that a config asked for, with the key that
@@ -1226,6 +1261,39 @@ func (c *Config) checkSSHFrom(s Segment, file string) error {
 	return nil
 }
 
+// checkSSHFromReach refuses an SSH_FROM of segment i that no interface
+// can carry. The rule accepts it only on the house and on the other plain
+// segments (sshFromIFs). The source check of each of these drops a source
+// outside its own network (antiSpoof). Thus an address outside HOUSE_NET
+// and outside the NET of each other segment gives a rule that never
+// matches. checkSegments calls it, because all segments must be loaded.
+func (c *Config) checkSSHFromReach(i int) error {
+	s := c.Segments[i]
+	if s.SSHFrom == "" {
+		return nil
+	}
+	var nets []string
+	if c.HouseIF != "" && c.HouseNet != "" {
+		if netHas(c.HouseNet, s.SSHFrom) {
+			return nil
+		}
+		nets = append(nets, "HOUSE_NET "+c.HouseNet)
+	}
+	for j, t := range c.Segments {
+		if j == i || t.IF == "" || t.Net == "" {
+			continue
+		}
+		if netHas(t.Net, s.SSHFrom) {
+			return nil
+		}
+		nets = append(nets, "NET "+t.Net+" of segment "+t.Name)
+	}
+	if len(nets) == 0 {
+		return fmt.Errorf("segment %s: SSH_FROM=%s can never arrive: there is no house and no other segment, and only these can carry SSH_FROM. Remove SSH_FROM", s.Name, s.SSHFrom)
+	}
+	return fmt.Errorf("segment %s: SSH_FROM=%s is in no network that can carry it; it must be inside %s. The source check of each interface drops each other source, so the rule could never match", s.Name, s.SSHFrom, strings.Join(nets, " or "))
+}
+
 // reservedSegNames are the names, as nftName writes them, that a plain
 // segment cannot take. Each is already the prefix of a set, meter, log
 // prefix or dns-<name>.jsonl that the agent network, the house, the
@@ -1542,11 +1610,19 @@ func (c *Config) checkHouse() error {
 	if !netHas(c.HouseNet, c.HouseIP) {
 		return fmt.Errorf("house: HOUSE_IP=%s is not inside HOUSE_NET=%s", c.HouseIP, c.HouseNet)
 	}
+	if what := notHostAddr(c.HouseNet, c.HouseIP); what != "" {
+		return fmt.Errorf("house: HOUSE_IP=%s is the %s address of HOUSE_NET=%s, which no device can hold", c.HouseIP, what, c.HouseNet)
+	}
 	if netsOverlap(c.HouseNet, c.AgentNet) {
 		return fmt.Errorf("house: HOUSE_NET=%s overlaps AGENT_NET=%s", c.HouseNet, c.AgentNet)
 	}
 	if c.HouseAdminIP != "" && !netHas(c.HouseNet, c.HouseAdminIP) {
 		return fmt.Errorf("house: HOUSE_ADMIN_IP=%s is not inside HOUSE_NET=%s", c.HouseAdminIP, c.HouseNet)
+	}
+	// HOUSE_ADMIN_IP is the reservation of one device, so it must be a host
+	// address, as HOUSE_IP must.
+	if what := notHostAddr(c.HouseNet, c.HouseAdminIP); c.HouseAdminIP != "" && what != "" {
+		return fmt.Errorf("house: HOUSE_ADMIN_IP=%s is the %s address of HOUSE_NET=%s, which no device can hold", c.HouseAdminIP, what, c.HouseNet)
 	}
 	// HOUSE_SSH_TO widens the destination of the one house->agent ssh
 	// hole past AgentIP. The check uses AGENT_NET, not HOUSE_NET,
@@ -1582,6 +1658,17 @@ func (c *Config) checkHouse() error {
 		}
 		return fmt.Errorf("house: the DHCP range HOUSE_DHCP_START=%s to HOUSE_DHCP_END=%s covers %s=%s, so a house device would be leased an address the Pi already holds", c.HouseDHCPStart, c.HouseDHCPEnd, x.key, x.val)
 	}
+	// As in checkSegDHCP, the range never gives out the two addresses that
+	// are not host addresses.
+	p := netip.MustParsePrefix(c.HouseNet).Masked()
+	for _, x := range []struct {
+		what string
+		a    netip.Addr
+	}{{"network", p.Addr()}, {"broadcast", lastAddr(p)}} {
+		if x.a.Compare(start) >= 0 && x.a.Compare(end) <= 0 {
+			return fmt.Errorf("house: the DHCP range HOUSE_DHCP_START=%s to HOUSE_DHCP_END=%s covers %s, the %s address of HOUSE_NET=%s, which no device can hold", c.HouseDHCPStart, c.HouseDHCPEnd, x.a, x.what, c.HouseNet)
+		}
+	}
 	return nil
 }
 
@@ -1610,6 +1697,9 @@ func (c *Config) checkSegments() error {
 		if !netHas(s.Net, s.IP) {
 			return fmt.Errorf("segment %s: IP=%s is not inside NET=%s", s.Name, s.IP, s.Net)
 		}
+		if what := notHostAddr(s.Net, s.IP); what != "" {
+			return fmt.Errorf("segment %s: IP=%s is the %s address of NET=%s, which no device can hold", s.Name, s.IP, what, s.Net)
+		}
 		if netsOverlap(s.Net, c.AgentNet) {
 			return fmt.Errorf("segment %s: NET=%s overlaps AGENT_NET=%s", s.Name, s.Net, c.AgentNet)
 		}
@@ -1617,6 +1707,9 @@ func (c *Config) checkSegments() error {
 			return fmt.Errorf("segment %s: NET=%s overlaps HOUSE_NET=%s", s.Name, s.Net, c.HouseNet)
 		}
 		if err := c.checkSSHTo("segment "+s.Name, "SSH_TO", s.SSHTo); err != nil {
+			return err
+		}
+		if err := c.checkSSHFromReach(i); err != nil {
 			return err
 		}
 		for _, t := range c.Segments[:i] {
@@ -1679,6 +1772,29 @@ func checkSegDHCP(s Segment) error {
 		return fmt.Errorf("segment %s: %s covers %s, the broadcast address of NET=%s, which no device can hold. Nothing was changed.", s.Name, rng, bcast, s.Net)
 	}
 	return nil
+}
+
+// notHostAddr gives "network" or "broadcast" when ip is that address of
+// cidr, and "" for a host address. The Pi answers on IP as router and DNS
+// server, so IP must be a host address. A /31 has no network or broadcast
+// address (RFC 3021), and a /32 is one address. Thus both give "".
+func notHostAddr(cidr, ip string) string {
+	p, err := netip.ParsePrefix(cidr)
+	if err != nil || p.Bits() > 30 {
+		return ""
+	}
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ""
+	}
+	p = p.Masked()
+	switch a {
+	case p.Addr():
+		return "network"
+	case lastAddr(p):
+		return "broadcast"
+	}
+	return ""
 }
 
 // lastAddr is the highest address in an IPv4 prefix, its broadcast.
@@ -1777,7 +1893,7 @@ func (c *Config) checkFakeIP() error {
 	}
 	for _, n := range nets {
 		if netsOverlap(c.FakeIPNet, n.val) {
-			return fmt.Errorf("FAKEIP_NET=%s overlaps %s=%s; the pool must not share addresses with a network the Pi is on (%s)", c.FakeIPNet, n.key, n.val, c.EnvSrc)
+			return fmt.Errorf("FAKEIP_NET=%s overlaps %s=%s; the pool must not share addresses with a network the Pi is on%s", c.FakeIPNet, n.key, n.val, c.envSrc())
 		}
 	}
 	return nil
@@ -1821,6 +1937,24 @@ func ParsePorts(v string) (tcp, udp string, err error) {
 // (internal/dnsd, namedTypes). All other types are written TYPE<n>. A
 // test there keeps the two lists the same.
 var DNSTypeNames = []string{"A", "AAAA", "CNAME", "MX", "NS", "PTR", "SRV", "TXT", "SOA", "HTTPS", "SVCB"}
+
+// warnDNSTypes warns about a DNS_TYPES entry for AAAA, HTTPS or SVCB.
+// pf dns answers these empty on every segment, before DNS_TYPES
+// (internal/dnsd, alwaysEmpty). The entry stays accepted, so an existing
+// segment file still renders, but it has no effect.
+func (c *Config) warnDNSTypes(w io.Writer) {
+	if w == nil {
+		return
+	}
+	inert := map[string]string{"AAAA": "AAAA", "TYPE28": "AAAA", "HTTPS": "HTTPS", "TYPE65": "HTTPS", "SVCB": "SVCB", "TYPE64": "SVCB"}
+	for _, s := range c.Segments {
+		for _, tok := range strings.Fields(s.DNSTypes) {
+			if typ, ok := inert[tok]; ok {
+				fmt.Fprintf(w, "pi-fortress: WARNING segment %s DNS_TYPES: %s is always answered empty (IPv6 is dropped; HTTPS/SVCB would carry ECH and real addresses); this entry has no effect.\n", s.Name, typ)
+			}
+		}
+	}
+}
 
 // ValidDNSType reports whether pf dns will take tok as a DNS_TYPES entry.
 func ValidDNSType(tok string) bool {

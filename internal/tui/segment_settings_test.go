@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"pi-fortress/internal/admin"
 )
@@ -57,8 +58,16 @@ func TestSettingsShowsAPlainSegmentsOwnView(t *testing.T) {
 // The menu is Overview, the agent and home networks, and System.
 func TestMenuHasNoSegmentEntryOnABoxWithNoSegments(t *testing.T) {
 	c, _ := testConfig(t)
+	// A check time that ends in 5 puts "5 " on the screen, but not in the
+	// menu. The test reads only the menu column.
+	c.Now = func() time.Time { return time.Date(2026, 10, 25, 12, 0, 5, 0, time.Local) }
 	last := run(t, c, NewFake(120, 48)).Last()
-	if !strings.Contains(last, "4 System") || strings.Contains(last, "5 ") {
+	var menu []string
+	for _, l := range strings.Split(last, "\n")[1:] {
+		r := []rune(l)
+		menu = append(menu, strings.TrimSpace(string(r[:min(menuWidth-2, len(r))])))
+	}
+	if !slices.Contains(menu, "4 System") || slices.ContainsFunc(menu, func(l string) bool { return strings.HasPrefix(l, "5 ") }) {
 		t.Fatalf("the menu is not the four fixed entries:\n%s", last)
 	}
 	// And the three settings views it always had are still there.

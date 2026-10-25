@@ -84,9 +84,8 @@ type Ctx struct {
 var ErrBufferBudget = errors.New("fence: byte budget spent, body not buffered")
 
 type FieldPlan struct {
-	Index     int
-	Disp      Disposition
-	StripOnly bool
+	Index int
+	Disp  Disposition
 }
 
 type StripEvent struct {
@@ -294,15 +293,11 @@ func framingHeader(name string) bool {
 	return false
 }
 
-// stripOnlyHeader names fields that no credential belongs in. The fence
-// scans and strips them like all other fields, and never injects into them.
-// A placeholder in one refuses the request, as in all other non-credential headers.
-func stripOnlyHeader(name string) bool {
-	switch strings.ToLower(name) {
-	case "host", "connection":
-		return true
-	}
-	return false
+// connHeader names the fields that the broker reads to decide on a
+// WebSocket before the fence runs. The fence never changes them
+// (noteConn).
+func connHeader(name string) bool {
+	return strings.EqualFold(name, "connection") || strings.EqualFold(name, "upgrade")
 }
 
 // maxFieldLine is the httpwire limit on one request header line. The fence
@@ -351,9 +346,9 @@ func BasicCredentials(name, value string) (dec []byte, at int, ok bool) {
 type scanner struct {
 	inject bool
 	// quiet stops refusal records. The no-inject scanner sets it: a
-	// strip-only header and a WebSocket frame have no field that the fence
-	// injects into. Thus a placeholder there was never a substitution that
-	// the fence could refuse.
+	// WebSocket frame has no field that the fence injects into. Thus a
+	// placeholder there was never a substitution that the fence could
+	// refuse.
 	quiet  bool
 	kinds  []string
 	idx    *secrets.Index
@@ -637,6 +632,15 @@ func (s *scanner) strips(b []byte, where string) []StripEvent {
 	return ev
 }
 
+// allTokens is the set of every token rule: TokenRE, else all of Rules.
+func allTokens(ctx Ctx) *tokenSet {
+	allRE := ctx.TokenRE
+	if allRE == nil && ctx.Rules != nil {
+		allRE = ctx.Rules.All()
+	}
+	return tokensFor(allRE)
+}
+
 func newScanner(ctx Ctx, req *httpwire.Request, pol *corepolicy.Policy, idx *secrets.Index) *scanner {
 	host := req.Get("Host")
 	inject := !ctx.NoInject && pol != nil && pol.Authority(ctx.SNI, host)
@@ -649,11 +653,7 @@ func newScanner(ctx Ctx, req *httpwire.Request, pol *corepolicy.Policy, idx *sec
 			inject = false
 		}
 	}
-	allRE := ctx.TokenRE
-	if allRE == nil && ctx.Rules != nil {
-		allRE = ctx.Rules.All()
-	}
-	all := tokensFor(allRE)
+	all := allTokens(ctx)
 	tokens := all
 	if inject {
 		tokens = nil
@@ -671,16 +671,29 @@ func plan(s *scanner, req *httpwire.Request) PlanResult {
 	}
 	s.noteMethod(req.Method)
 	s.noteNames(req.Fields)
+	s.noteRepeats(req.Fields)
 	for i, f := range req.Fields {
 		if framingHeader(f.Name) {
 			continue
 		}
-		sc, stripOnly := s.header(f.Name), stripOnlyHeader(f.Name)
-		if stripOnly {
-			// The fence refuses this as in all other non-credential headers.
-			// It still strips each live value here, an allowed kind also.
+		sc := s.header(f.Name)
+		if strings.EqualFold(f.Name, "host") {
+			// The authority decision and the broker checks read this Host,
+			// and the origin routes by it. Thus the fence never changes it.
+			// A placeholder refuses as in all other non-credential headers.
+			// A live value refuses also.
 			sc.noteAll([]byte(f.Value), "header")
-			sc = s.noInject()
+			s.noteHost(f.Value)
+			continue
+		}
+		if connHeader(f.Name) {
+			// The broker decided on a WebSocket from these fields, and the
+			// origin switches the protocol by them. Thus the fence never
+			// changes them. A placeholder refuses as in all other
+			// non-credential headers. A live value refuses also.
+			sc.noteAll([]byte(f.Value), "header")
+			s.noteConn(f.Name, f.Value)
+			continue
 		}
 		sc.noteAll([]byte(f.Value), "header")
 		d := sc.classify([]byte(f.Value))
@@ -691,7 +704,7 @@ func plan(s *scanner, req *httpwire.Request) PlanResult {
 			}
 		}
 		if d != DispKeep {
-			out.Fields = append(out.Fields, FieldPlan{Index: i, Disp: d, StripOnly: stripOnly})
+			out.Fields = append(out.Fields, FieldPlan{Index: i, Disp: d})
 		}
 	}
 	u := s.at("url")
@@ -933,11 +946,7 @@ func DecideStream(ctx Ctx, req *httpwire.Request, pol *corepolicy.Policy, slots 
 
 	for _, fp := range plan.Fields {
 		f := req.Fields[fp.Index]
-		sc := s.header(f.Name)
-		if fp.StripOnly {
-			sc = s.noInject()
-		}
-		nv, ev, err := sc.rewriteHeader(f.Name, f.Value)
+		nv, ev, err := s.header(f.Name).rewriteHeader(f.Name, f.Value)
 		if err != nil {
 			return nil, nil, err
 		}

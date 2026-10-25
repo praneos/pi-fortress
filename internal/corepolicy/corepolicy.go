@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode"
@@ -39,6 +40,11 @@ type Policy struct {
 	// entry and kind, in lowercase.
 	HostHeaders   map[string]map[string]map[string]struct{}
 	SuffixHeaders map[string]map[string]map[string]struct{}
+	// Warnings are the lines that the load skipped because their host can
+	// never get a credential (hostProblem). A warning, not an error: the
+	// line did nothing before, and an error would stop the broker on a Pi
+	// that worked. pf compile prints them.
+	Warnings []string
 }
 
 func newPolicy() *Policy {
@@ -90,9 +96,12 @@ func (p *Policy) load(path string) error {
 		if len(bits) == 0 {
 			continue
 		}
-		suffix := strings.HasPrefix(bits[0], "*.")
-		host := normHost(strings.TrimPrefix(bits[0], "*."))
+		host, suffix := hostEntry(bits[0])
 		if host == "" {
+			continue
+		}
+		if why := hostProblem(bits[0], host); why != "" {
+			p.Warnings = append(p.Warnings, fmt.Sprintf("%s line %d: %q can never get a credential; skipped (%s)", filepath.Base(path), n, bits[0], why))
 			continue
 		}
 		kindsT, headersT := p.HostKinds, p.HostHeaders
@@ -132,6 +141,38 @@ func (p *Policy) load(path string) error {
 		}
 	}
 	return sc.Err()
+}
+
+// hostEntry reads the host column of a core.hosts line: the host, and if
+// the line is a "*." line. One leading dot goes, and the line is for the
+// exact host. It does not become a "*." line: that would give the
+// credential to all names below the host. Before, the dotted key matched
+// no name. Load and LoadForward both read the column with it.
+func hostEntry(tok string) (string, bool) {
+	if strings.HasPrefix(tok, "*.") {
+		return normHost(tok[2:]), true
+	}
+	return normHost(strings.TrimPrefix(tok, ".")), false
+}
+
+// hostProblem says why the host column tok, read as host by hostEntry,
+// can never get a credential, or it gives "". Load and LoadForward skip
+// such a line. The fence refuses a Host that is not a name (validName).
+// Thus a host with one label or with "_" never gets a credential. hostEntry
+// removes one "*." only. A "*" that is left (a bare "*", "*.*.name") is a
+// literal byte of the host, and it matches no name. It is not a match-all.
+func hostProblem(tok, host string) string {
+	switch {
+	case !IsASCII(host):
+		return ASCIIHint(tok)
+	case strings.Contains(host, "*"):
+		return `a host takes "*" only as one "*." before a name with a dot; a bare "*" or a second "*." matches no name`
+	case !strings.Contains(host, "."):
+		return "a host with one label is not a name that the fence accepts"
+	case strings.Contains(host, "_"):
+		return `a host with "_" is not a name that the fence accepts`
+	}
+	return ""
 }
 
 // DefaultHeaders carry all kinds that a host binds: Bearer and Basic
@@ -258,13 +299,43 @@ func LoadDomains(path string) (map[string]struct{}, error) {
 			continue
 		}
 
-		host := normHost(bits[0])
+		host, _, _ := AllowEntry(bits[0])
 		if host == "" {
 			continue
 		}
 		out[host] = struct{}{}
 	}
 	return out, sc.Err()
+}
+
+// AllowEntry reads the first token of an allow list line (allow.domains,
+// allow.<segment>.domains). It gives the name that the line allows, if
+// the line starts with "*.", and if the line is one label. Each line
+// allows the name and all names below it. Thus "*.name" is the same as
+// "name", as pf tui writes it. Before, the "*.name" line matched no name.
+// One "*." goes, and only before a name with a dot. If a "*" is left
+// ("*.*.name"), it gives "": the line allows nothing. A line with no dot
+// ("com", or "*.com" after the "*." goes) also gives "". It would allow
+// all names below it, all of .com. core.hosts refuses such a host too.
+func AllowEntry(tok string) (name string, star, oneLabel bool) {
+	host := normHost(tok)
+	if star = strings.HasPrefix(host, "*."); star {
+		if host = host[2:]; !validName(host) {
+			return "", true, isLabel(host)
+		}
+		return host, true, false
+	}
+	if !strings.Contains(host, ".") {
+		return "", false, isLabel(host)
+	}
+	return host, false, false
+}
+
+// isLabel says if s is one label that a name can hold: s and a dot and a
+// second label are a valid name. A token that is not a label ("*", "a/b")
+// allows nothing too, but it is not a one-label name.
+func isLabel(s string) bool {
+	return s != "" && !strings.Contains(s, ".") && validName(s+".x")
 }
 
 func (p *Policy) HostAllowed(name string) bool {

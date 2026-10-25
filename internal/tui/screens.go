@@ -326,7 +326,10 @@ func (a *App) buildHouseDevices() []row {
 		if c, ok := seen[h.IP]; ok {
 			q, bl, last = fmt.Sprint(c.Queries), fmt.Sprint(c.Blocked), age(c.LastSeen, now)
 		}
-		rows = append(rows, row{line(h.Name, h.IP, pin, q, bl, last, h.MAC, lease), true})
+		// A reservation name comes from house.hosts as written. A name that is
+		// not plain ASCII can look like a different name. Thus it shows as the
+		// name of a lease does, with '?' for each such character.
+		rows = append(rows, row{line(admin.Printable(h.Name), h.IP, pin, q, bl, last, h.MAC, lease), true})
 	}
 	if len(a.hosts) == 0 {
 		rows = append(rows, row{text: "no leases or reservations"})
@@ -670,12 +673,20 @@ func (a *App) said(verb string, args admin.Args, msg string) bool {
 	}
 	a.reload()
 	if w, _ := v.(string); w != "" {
-		a.msg = msg + " -- " + w
+		a.msg = msg + warnSep + w
 		return true
 	}
 	a.msg = msg
 	return true
 }
+
+// warnSep joins a save message and the warning that said gets back.
+const warnSep = " -- "
+
+// renderFails is in the warning of a save on a box that pf render refuses
+// (admin SetNetEnv and SetSegment). The next apply fails on such a box.
+// Thus the footer shows that message as an error.
+const renderFails = "does not render"
 
 func (a *App) do(verb string, args admin.Args, msg string) bool {
 	if _, err := a.call(verb, args); a.fail(err) {
@@ -745,13 +756,24 @@ func (a *App) screenKey(k Key) {
 }
 
 // feedKey is e on a feed, from System or from the Filtering of a network.
+// A feed that is off stops its blocklist for all networks, and no row on
+// this screen shows that cost. Thus disable asks first and names the feed.
+// Enable adds protection and does not ask.
 func (a *App) feedKey(k Key, i int) {
-	if k.Rune == 'e' && i >= 0 && i < len(a.feeds) {
-		f := a.feeds[i]
+	if k.Rune != 'e' || i < 0 || i >= len(a.feeds) {
+		return
+	}
+	f := a.feeds[i]
+	toggle := func() {
 		if a.do("feed.enable", admin.Args{Name: f.id, Value: fmt.Sprint(!f.on)}, f.id+" toggled") {
 			a.saved(applyFull)
 		}
 	}
+	if !f.on {
+		toggle()
+		return
+	}
+	a.confirm("disable feed "+f.id+" for the whole box", toggle)
 }
 
 func (a *App) secretsKey(k Key, i int) {
@@ -774,7 +796,10 @@ func (a *App) secretsKey(k Key, i int) {
 	case 'p':
 		a.confirmTyped("purge slot "+slot, func() { a.do("slot.purge", args, "purged "+slot) })
 	case 'd':
-		a.confirm("delete slot "+slot, func() { a.do("slot.delete", args, "deleted "+slot) })
+		// Delete removes the credentials at once, and nothing restores
+		// them. Thus it asks for the typed yes, as purge does. x and R are
+		// reversible and stay on one y.
+		a.confirmTyped("delete slot "+slot+"; its credentials go away at once", func() { a.do("slot.delete", args, "deleted "+slot) })
 	}
 }
 
@@ -856,10 +881,16 @@ func (a *App) devicesKey(k Key, i int) {
 		// The name and the address, and also the MAC. The MAC is the one
 		// of the three that nobody recognises. On the day of the wrong
 		// deletion of a reservation, the prompt showed only the MAC.
-		a.confirm(fmt.Sprintf("delete reservation %s %s (%s)", h.Name, h.IP, h.MAC), func() {
+		// One question covers the delete and the reload. A second question
+		// after the delete got Enter (= N), and the live resolver kept the
+		// old name while the screen said deleted. The name gets the cells
+		// that are left, so that [y/N] stays on the line at 80 columns.
+		tail := fmt.Sprintf(" %s (%s); reload dns [y/N]: _", h.IP, h.MAC)
+		room := max(a.w-len("delete reservation ")-len(tail), 6)
+		a.confirm(fmt.Sprintf("delete reservation %s %s (%s); reload dns", clip(h.Name, room), h.IP, h.MAC), func() {
 			if a.do("unreserve", admin.Args{MAC: h.MAC}, "") {
 				a.seekHost(h.MAC)
-				a.offerReload("deleted " + h.MAC)
+				a.reloadHouseDNS("deleted " + h.MAC)
 			}
 		})
 	}
@@ -881,11 +912,18 @@ func (a *App) seekHost(mac string) {
 
 func (a *App) offerReload(msg string) {
 	a.msg = msg
-	a.confirm(msg+"; reload house dns now", func() {
-		if _, err := a.call("dns.reload", admin.Args{}); !a.fail(err) {
-			a.msg = msg + "; house dns reloaded"
-		}
-	})
+	a.confirm(msg+"; reload house dns now", func() { a.reloadHouseDNS(msg) })
+}
+
+// reloadHouseDNS makes the live resolver read the reservations again. done
+// is the change that is already in the file. When the reload fails, the
+// message keeps done, so the operator knows that the change is not live.
+func (a *App) reloadHouseDNS(done string) {
+	if _, err := a.call("dns.reload", admin.Args{}); err != nil {
+		a.msg = "error: " + done + ", but house dns did not reload: " + err.Error()
+		return
+	}
+	a.msg = done + "; house dns reloaded"
 }
 
 func (a *App) listKey(k Key, i int) {
@@ -910,7 +948,13 @@ func (a *App) listKey(k Key, i int) {
 			return
 		}
 		it := a.items[i]
-		a.confirm("delete "+it, func() {
+		// Two networks have a list with the same label. Thus the question
+		// names the file, as the header does. The prompt line clips from
+		// the right, and a long item pushed the file name and [y/N] off.
+		// Thus the item gets the cells that are left, at least 20.
+		tail := " from " + name + " [y/N]: _"
+		room := max(a.w-len("delete ")-len(tail), 20)
+		a.confirm("delete "+clip(it, room)+" from "+name, func() {
 			if a.do(prefix+".del", admin.Args{List: name, Value: it}, "deleted "+it) {
 				a.saved(applyLocal)
 			}

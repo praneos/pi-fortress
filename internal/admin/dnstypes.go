@@ -25,8 +25,8 @@ var dnsTypeNames = map[string]uint16{
 }
 
 // dnsTypesInert are the types that pf dns filters before the list on all
-// segments. pf dns accepts a line with these types and changes nothing.
-// This screen exists to end that silent no-op, so the seat refuses them.
+// segments. pf dns accepts a line with these types, changes nothing and
+// writes only a journal warning. The seat refuses them.
 var dnsTypesInert = map[uint16]string{28: "AAAA", 64: "SVCB", 65: "HTTPS"}
 
 // CheckDNSTypesLine is one dns_types.allow line, "name TYPE [TYPE...]"

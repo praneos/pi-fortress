@@ -151,30 +151,42 @@ func ParseHosts(body string) []string {
 			continue
 		}
 		f := strings.Fields(tok)
-		if len(f) < 2 {
-			continue
-		}
-		switch f[0] {
-		case "0.0.0.0", "127.0.0.1", "::", "::1":
-		default:
+		if len(f) < 2 || !sinkAddr(f[0]) {
 			continue
 		}
 		for _, name := range f[1:] {
-			parsed, ok := parseToken(name, "domains")
-			if !ok {
-				continue
+			if parsed, ok := hostName(name); ok {
+				out = append(out, parsed)
 			}
-			// "0.0.0.0 0.0.0.0" and similar: an address is not a name,
-			// although four numeric labels satisfy the domain grammar.
-			// The check is on the parsed name, so "*.0.0.0.0" and
-			// "0.0.0.0." are also not names.
-			if _, err := netip.ParseAddr(parsed); err == nil {
-				continue
-			}
-			out = append(out, parsed)
 		}
 	}
 	return out
+}
+
+// sinkAddr says if a token is an address that a hosts file sends a blocked
+// name to. A line with a different address maps a name; it does not block
+// it.
+func sinkAddr(tok string) bool {
+	switch tok {
+	case "0.0.0.0", "127.0.0.1", "::", "::1":
+		return true
+	}
+	return false
+}
+
+// hostName parses one name of a hosts line.
+func hostName(token string) (string, bool) {
+	parsed, ok := parseDomain(token)
+	if !ok {
+		return "", false
+	}
+	// "0.0.0.0 0.0.0.0" and similar: an address is not a name, although
+	// four numeric labels satisfy the domain grammar. The check is on the
+	// parsed name, so "*.0.0.0.0" and "0.0.0.0." are also not names.
+	if _, err := netip.ParseAddr(parsed); err == nil {
+		return "", false
+	}
+	return parsed, true
 }
 
 type Fetcher struct {
@@ -227,10 +239,15 @@ func publicAddr(a netip.Addr) bool {
 
 // client resolves each host itself, and dials only addresses that passed
 // the public check. So a rebinding resolver cannot pass the check with one
-// answer and steer the dial with a different answer.
+// answer and steer the dial with a different answer. An address that does
+// not pass is skipped. A host with no public address fails.
 type client struct {
 	public func(netip.Addr) bool
 	tls    *tls.Config
+	// lookup and dialTo replace the resolver and the dialer in a test. nil
+	// means the system resolver and a net.Dialer.
+	lookup func(ctx context.Context, host string) ([]netip.Addr, error)
+	dialTo func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 type page struct {
@@ -243,22 +260,42 @@ func (c *client) dial(ctx context.Context, network, hostport string) (net.Conn, 
 	if err != nil {
 		return nil, err
 	}
-	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	lookup := c.lookup
+	if lookup == nil {
+		lookup = func(ctx context.Context, host string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		}
+	}
+	dialTo := c.dialTo
+	if dialTo == nil {
+		d := net.Dialer{Timeout: 10 * time.Second}
+		dialTo = d.DialContext
+	}
+	addrs, err := lookup(ctx, host)
 	if err != nil {
 		return nil, err
 	}
 	if len(addrs) == 0 {
 		return nil, fmt.Errorf("%s: no addresses", host)
 	}
-	for i, a := range addrs {
-		addrs[i] = a.Unmap()
-		if !c.public(addrs[i]) {
-			return nil, fmt.Errorf("%s resolves to %s: not public", host, addrs[i])
+	// A host can publish a private or ULA address beside its public ones.
+	// dial skips that address, and it fails only when no address is
+	// public. The error names the first address that it skipped.
+	var public []netip.Addr
+	var skipped netip.Addr
+	for _, a := range addrs {
+		a = a.Unmap()
+		if c.public(a) {
+			public = append(public, a)
+		} else if !skipped.IsValid() {
+			skipped = a
 		}
 	}
-	d := net.Dialer{Timeout: 10 * time.Second}
-	for _, a := range addrs {
-		conn, derr := d.DialContext(ctx, network, net.JoinHostPort(a.String(), port))
+	if len(public) == 0 {
+		return nil, fmt.Errorf("%s resolves to %s: not public", host, skipped)
+	}
+	for _, a := range public {
+		conn, derr := dialTo(ctx, network, net.JoinHostPort(a.String(), port))
 		if derr == nil {
 			return conn, nil
 		}
@@ -349,6 +386,15 @@ func parseToken(token, kind string) (string, bool) {
 	return parseDomain(token)
 }
 
+// ParsePlain reads one entry from each line: the first field.
+//
+// A domains feed with no format key reads as plain. When that feed is a
+// hosts file, the first field is the address, and the feed blocked 0.0.0.0
+// in place of its names. So a line that starts with a sink address and has
+// a name after it gives the name, and an address is not a name, as in
+// ParseHosts. All other lines give the first field. A line that is only an
+// address stays an entry. A line keeps one entry: a hosts feed with aliases
+// needs format hosts.
 func ParsePlain(body, kind string) []string {
 	var out []string
 	for line := range strings.SplitSeq(body, "\n") {
@@ -356,8 +402,14 @@ func ParsePlain(body, kind string) []string {
 		if tok == "" {
 			continue
 		}
-		token := strings.Fields(tok)[0]
-		if parsed, ok := parseToken(token, kind); ok {
+		f := strings.Fields(tok)
+		if kind == "domains" && len(f) > 1 && sinkAddr(f[0]) {
+			if parsed, ok := hostName(f[1]); ok {
+				out = append(out, parsed)
+			}
+			continue
+		}
+		if parsed, ok := parseToken(f[0], kind); ok {
 			out = append(out, parsed)
 		}
 	}
@@ -382,32 +434,40 @@ func ParseSpamhaus(body string) []string {
 	return out
 }
 
-func readListFile(path, kind string) []string {
+// readListFile reads a never_block file of the operator. pf compile reads
+// the same file with policycompile.LoadTokens, so each line goes through
+// the parser that LoadTokens uses for kind. Before, a domain line that did
+// not parse was kept as written. It then shielded nothing, or, as a single
+// label, it shielded names in fetch that compile still blocked. A skipped
+// line is a mistake of the operator, so it goes in the report as a WARN.
+func readListFile(path, kind string, report *[]string) []string {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
+	parse, what := policycompile.ParseDomain, "a domain"
+	if kind == "ips" {
+		parse, what = policycompile.ParseIPv4, "an IPv4 address or prefix"
+	}
 	var out []string
 	seen := map[string]struct{}{}
+	n := 0
 	for line := range strings.SplitSeq(string(raw), "\n") {
+		n++
 		tok := policycompile.StripLine(line)
 		if tok == "" {
 			continue
 		}
-		parsed, ok := parseToken(tok, kind)
-		if !ok && kind == "domains" {
-			name := strings.ToLower(strings.TrimRight(tok, "."))
-			if name != "" {
-				parsed, ok = name, true
-			}
+		parsed, ok := parse(tok)
+		if !ok {
+			*report = append(*report, fmt.Sprintf("WARN %s line %d: %q is not %s; skipped", filepath.Base(path), n, tok, what))
+			continue
 		}
-		if ok {
-			if _, dup := seen[parsed]; dup {
-				continue
-			}
-			seen[parsed] = struct{}{}
-			out = append(out, parsed)
+		if _, dup := seen[parsed]; dup {
+			continue
 		}
+		seen[parsed] = struct{}{}
+		out = append(out, parsed)
 	}
 	return out
 }
@@ -618,9 +678,9 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 	ua, timeout, maxIPs, maxDoms := spec.settings()
 	agent := policycompile.SegmentFor(policycompile.DenyByDefault)
 	house := policycompile.SegmentFor(policycompile.AllowByDefault)
-	neverNets := neverIPSet(readListFile(filepath.Join(policy, agent.File("never_block.ips")), "ips"))
-	neverDoms := toSet(readListFile(filepath.Join(policy, agent.File("never_block.domains")), "domains"))
-	houseNever := toSet(readListFile(filepath.Join(policy, house.File("never_block.domains")), "domains"))
+	neverNets := neverIPSet(readListFile(filepath.Join(policy, agent.File("never_block.ips")), "ips", &report))
+	neverDoms := toSet(readListFile(filepath.Join(policy, agent.File("never_block.domains")), "domains", &report))
+	houseNever := toSet(readListFile(filepath.Join(policy, house.File("never_block.domains")), "domains", &report))
 	// Each list holds the kept items of each feed apart, so capShare can
 	// give each feed its share of the cap.
 	var ips, domains, houseDomains, houseVPN [][]string
@@ -668,8 +728,13 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 			ips = append(ips, kept)
 		default:
 			domains = append(domains, kept)
-			if sample == "" && len(kept) > 0 {
-				sample = kept[0]
+			// Compile blocks an address as an address, not in the name
+			// sinkhole. Thus the sample is the first name.
+			for _, item := range kept {
+				if _, err := netip.ParseAddr(item); sample == "" && err != nil {
+					sample = item
+					break
+				}
 			}
 		}
 	}

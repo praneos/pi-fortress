@@ -27,6 +27,10 @@ type row struct {
 	sel  bool
 }
 
+// promptCap is the length in bytes after which a prompt refuses all
+// input. The prompt line shows [full] at that length.
+const promptCap = 253
+
 type prompt struct {
 	label string
 	buf   string
@@ -36,7 +40,11 @@ type prompt struct {
 	// reach the screen for the same reason that it does not reach the audit
 	// log.
 	mask bool
-	done func(string)
+	// typed is set on a confirm. Its answer must come from the keyboard. A
+	// pasted key does nothing on it, so a string that the operator is told
+	// to paste cannot answer it.
+	typed bool
+	done  func(string)
 }
 
 type event struct {
@@ -91,10 +99,12 @@ type App struct {
 	// --local covers it, "full" when it needs the full apply. A is the key
 	// that runs it, and the footer says so until it has run.
 	pending string
-	// edits counts saved edits. applying is the scope of the A apply that
-	// streams now, with the count at its start. The code clears pending only
-	// when that apply finishes cleanly and no save occurred in that time.
-	edits    int
+	// edits are the saved edits that wait for an apply, oldest first, each
+	// named as its save message names it, one for each key. The A confirm
+	// shows them. applying is the A apply that streams now, with the edits
+	// that it took from edits and pending. When that apply fails, the code
+	// gives them back.
+	edits    []string
 	applying *applyRun
 	pr       *prompt
 
@@ -112,6 +122,9 @@ type App struct {
 	// login manager must lock the console, not this code.
 	Idle    time.Duration
 	idleHit bool
+	// idleOut is true when the idle timer ended Run. Run then writes
+	// idleNote to the restored terminal.
+	idleOut bool
 	ctx     context.Context
 	cancel  context.CancelFunc
 
@@ -171,6 +184,19 @@ func (a *App) Run() error {
 	// after the cancel and after the restore.
 	var workers sync.WaitGroup
 	defer workers.Wait()
+	// After the restore, so that the line stays on the shell screen. An
+	// operator who comes back to a shell prompt must not read it as a
+	// logout. The idle exit does not ask about saved edits, as q does. Thus
+	// the second line names them.
+	defer func() {
+		if a.idleOut {
+			note := idleNote + "\n"
+			if n := len(a.edits); n > 0 {
+				note += unapplied(n) + "\n"
+			}
+			_ = a.t.Write([]byte(note))
+		}
+	}()
 	defer a.t.Restore()
 	a.ctx, a.cancel = context.WithCancel(context.Background())
 	defer a.cancel()
@@ -204,6 +230,7 @@ func (a *App) Run() error {
 				a.idleHit = true
 				continue
 			}
+			a.idleOut = true
 			return nil
 		}
 		if stop, err := a.dispatch(ev, idle); stop {
@@ -299,16 +326,17 @@ func (a *App) finishApply(done error) bool {
 	a.applying = nil
 	if _, ok := done.(doneMarker); ok {
 		a.pane = append(a.pane, "done")
-		if run != nil && run.edits == a.edits && (run.scope == applyFull || a.pending == applyLocal) {
-			a.pending = ""
-		}
 	} else {
 		a.pane = append(a.pane, "error: "+done.Error())
+		if run != nil {
+			a.untake(run)
+		}
 	}
 	if a.idleHit {
 		// Painted first: an apply that ran longer than the idle timer
 		// ends on its result, not on the line before it.
 		a.draw()
+		a.idleOut = true
 		return true
 	}
 	return false
@@ -326,6 +354,10 @@ func nonEmpty(s ...string) []string {
 	}
 	return out
 }
+
+// idleNote is the line that the idle exit leaves on the tty. The idle exit
+// is not a logout. The shell that started the TUI is still open.
+const idleNote = "session still open; the TUI did not lock the console"
 
 func (a *App) idleWait() time.Duration {
 	if a.Idle > 0 {
@@ -413,6 +445,12 @@ func (a *App) handle(k Key) {
 		a.promptKey(k)
 		return
 	}
+	// Outside a prompt, a key is a command. A paste is text, not commands:
+	// a pasted "q" must not quit, and a pasted "dyes" must not delete.
+	if k.Paste {
+		a.msg = "paste ignored outside a prompt"
+		return
+	}
 	a.paneFollow = false
 	if a.claim != nil {
 		a.closeClaim()
@@ -424,7 +462,7 @@ func (a *App) handle(k Key) {
 	}
 	switch k.Kind {
 	case KeyCtrlC:
-		a.quit = true
+		a.askQuit()
 	case KeyEsc:
 		if !a.closeDetail() {
 			a.focus = false
@@ -443,7 +481,7 @@ func (a *App) handle(k Key) {
 			case a.focus:
 				a.focus = false
 			default:
-				a.quit = true
+				a.askQuit()
 			}
 		case k.Rune == '?':
 			a.help = true
@@ -463,6 +501,36 @@ func (a *App) handle(k Key) {
 			a.menuKey(k)
 		}
 	}
+}
+
+// askQuit is q on the menu and Ctrl-C. With saved edits that no apply
+// took, it asks first and names the count. A silent quit leaves the
+// operator sure of a change that never took effect. While an action
+// streams, it also asks: the quit stops that action, and Ctrl-C is the
+// reflex of an operator who only wants the screen to stop. When both are
+// true, one prompt names both.
+func (a *App) askQuit() {
+	n := len(a.edits)
+	if n == 0 && !a.paneBusy {
+		a.quit = true
+		return
+	}
+	what := unapplied(n)
+	switch {
+	case a.paneBusy && n > 0:
+		what = "an action still runs; " + what
+	case a.paneBusy:
+		what = "an action still runs and quit stops it"
+	}
+	a.confirm(what+"; quit anyway", func() { a.quit = true })
+}
+
+// unapplied names n saved edits that no apply took.
+func unapplied(n int) string {
+	if n == 1 {
+		return "1 saved edit was never applied"
+	}
+	return fmt.Sprintf("%d saved edits were never applied", n)
 }
 
 // open shows menu entry i at the section where the operator last left it.
@@ -602,7 +670,7 @@ func (a *App) askSecret(label string, done func(string)) {
 }
 
 func (a *App) confirm(label string, done func()) {
-	a.pr = &prompt{label: label + " [y/N]", yn: true, done: func(s string) {
+	a.pr = &prompt{label: label + " [y/N]", yn: true, typed: true, done: func(s string) {
 		if s == "y" {
 			done()
 		} else {
@@ -619,10 +687,14 @@ func (a *App) confirmTyped(label string, done func()) {
 			a.msg = "cancelled"
 		}
 	})
+	a.pr.typed = true
 }
 
 func (a *App) promptKey(k Key) {
 	p := a.pr
+	if k.Paste && p.typed {
+		return
+	}
 	switch k.Kind {
 	case KeyEsc, KeyCtrlC:
 		a.pr = nil
@@ -636,6 +708,12 @@ func (a *App) promptKey(k Key) {
 			p.buf = p.buf[:len(p.buf)-n]
 		}
 	case KeyEnter:
+		// The line end of a paste is not an Enter of the operator. Before, it
+		// saved the pasted value before the operator saw it. The operator
+		// reads the value on the prompt line and then presses Enter.
+		if k.Paste {
+			return
+		}
 		a.pr = nil
 		p.done(strings.TrimSpace(p.buf))
 	case KeyRune:
@@ -644,7 +722,7 @@ func (a *App) promptKey(k Key) {
 			p.done(strings.ToLower(string(k.Rune)))
 			return
 		}
-		if k.Rune >= 0x20 && len(p.buf) < 253 {
+		if k.Rune >= 0x20 && len(p.buf) < promptCap {
 			p.buf += string(k.Rune)
 		}
 	}
@@ -703,6 +781,10 @@ func (a *App) stream(title, verb string, args admin.Args) {
 	}
 	a.paneBusy, a.paneFollow = true, true
 	a.pane = []string{"$ " + title}
+	// The message of the last action is old now. If it stays, it takes the
+	// footer from "running...", and a save message still says "A applies"
+	// while A runs.
+	a.msg = ""
 	ctx := a.ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -800,14 +882,11 @@ func (a *App) draw() {
 	b.line(0, 0, b.w, title, reverse)
 	// A stale blocklist is a standing fault with no other symptom. All
 	// screens continue to say ok while the lists decay. The warning goes on
-	// the title bar, so the operator sees it from all locations. It yields
-	// to msg, which is about the last operator action.
-	note := a.msg
-	if note == "" && a.warn != "" {
-		note = "! " + a.warn
-	}
-	if note != "" {
-		b.put(min(len(title)+2, b.w), 0, clip(note, b.w-len(title)-2), reverse)
+	// the title bar, so the operator sees it from all locations. The title
+	// bar holds only the warning. msg goes in the footer (drawFooter). When
+	// the two used one slot, one Esc on a prompt removed the warning.
+	if a.warn != "" {
+		b.put(min(len(title)+2, b.w), 0, clip("! "+a.warn, b.w-len(title)-2), reverse)
 	}
 	x := 0
 	// The claim overlay uses the full width. Its command carries a
@@ -1135,7 +1214,14 @@ func (a *App) drawFooter(b *buffer) {
 		if a.pr.mask {
 			shown = strings.Repeat("*", len(shown))
 		}
-		b.line(0, y, b.w, clip(a.pr.label+": "+shown, b.w-1)+"_", reverse)
+		// A full prompt refuses each next key. Before, it did this silently.
+		// Thus a pasted value that was too long was saved in cut form, and the
+		// operator did not know. The mark stays after the clip.
+		end := "_"
+		if len(a.pr.buf) >= promptCap {
+			end = "_ [full]"
+		}
+		b.line(0, y, b.w, clip(a.pr.label+": "+shown, b.w-len(end))+end, reverse)
 		return
 	}
 	hint := "j/k move  Enter open  1-9 jump  ? help  q quit"
@@ -1146,10 +1232,41 @@ func (a *App) drawFooter(b *buffer) {
 	if a.pending != "" && !a.paneBusy {
 		prefix = "A applies saved changes  "
 	}
+	if a.msg != "" {
+		a.drawMessage(b, y, prefix, hint)
+		return
+	}
 	if a.focus {
 		hint = footerHint(a.viewHint(), commonKeys, b.w-len(prefix))
 	}
 	b.line(0, y, b.w, clip(prefix+hint, b.w), reverse)
+}
+
+// drawMessage puts msg at the start of the footer, then the state and the
+// keys in the space that stays. When the space is short, the keys of the
+// screen go first, then the state. "? help" stays. The code cuts msg only
+// when "? help" alone does not leave space for it.
+func (a *App) drawMessage(b *buffer, y int, prefix, hint string) {
+	const help = "  ? help"
+	n := utf8.RuneCountInString(a.msg)
+	if a.focus {
+		hint = footerHint(a.viewHint(), commonKeys, b.w-n-2-len(prefix))
+	}
+	tail := help
+	for _, t := range []string{"  " + prefix + hint, "  " + prefix + strings.TrimPrefix(help, "  "), help} {
+		if n+len(t) <= b.w {
+			tail = t
+			break
+		}
+	}
+	msg := clip(a.msg, b.w-len(tail))
+	at := reverse
+	if _, w, ok := strings.Cut(a.msg, warnSep); strings.HasPrefix(a.msg, "error: ") || ok && strings.Contains(w, renderFails) {
+		at = alarm
+	}
+	b.line(0, y, b.w, "", reverse)
+	b.put(0, y, msg, at)
+	b.put(utf8.RuneCountInString(msg), y, tail, reverse)
 }
 
 // commonKeys are the three keys that all screens share. An operator cannot
@@ -1230,31 +1347,29 @@ func (a *App) viewHint() string {
 }
 
 // helpText fits the 64 columns an 80-column terminal leaves beside the
-// menu.
+// menu, and the 22 rows a 24-row terminal leaves between the bars. A line
+// past those rows is not shown, and the last line says how to close.
 var helpText = []string{
 	"pf tui: keyboard only; nothing listens on the network.",
-	"",
 	"1-9, j/k+Enter  open a network   Esc, q    back to the menu",
 	"Left/Right      section          Tab       next list or view",
 	"j/k, PgUp/PgDn  move             ^R, F5    refresh",
 	"A               apply edits      q (menu)  quit",
 	"",
 	"Every network has Devices, Filtering, Activity and Settings;",
-	"the agent network also has Keys. System is the Pi itself:",
-	"health, its DNS, feeds, the admin log and actions.",
-	"",
+	"the agent network also has Keys. System is the Pi itself.",
 	"An edit is saved at once and takes effect at the next apply.",
 	"A runs pf apply --local after a list or segment edit, else the",
-	"full pf apply (feeds fetched too), streamed on System > Actions,",
-	"one at a time under " + admin.ApplyLockPath + ", for as",
-	"long as it takes; quitting kills it, so wait for done. When a",
-	"fence input changed, open agent connections drop.",
-	"On Activity, ! before a threat is a row the Pi saw and did",
-	"not stop, such as a neighbour claiming an address.",
-	"",
-	"Keys never shows a slot's value. A sealed store refuses every",
-	"substitution until u takes the passphrase (masked, never",
-	"logged); the rest of the box does not wait for it.",
+	"full apply, on System > Actions, one at a time under",
+	admin.ApplyLockPath + "; quitting kills it: wait for done.",
+	"A fence change drops the open agent connections.",
+	"^ marks a threat seen and not stopped; ! a standing fault.",
+	"Keys never shows a value. A sealed store refuses substitution",
+	"until u takes the passphrase (masked, never logged).",
+	"A prompt takes 253 bytes, then shows [full]. Enter saves; the",
+	"line end of a paste does not; a paste is never a command.",
+	"No key for some time stops the TUI; its shell stays open. Only",
+	"the login manager can lock this seat.",
 	"",
 	"Any key closes this help.",
 }
@@ -1268,6 +1383,10 @@ func (a *App) drawClaim(b *buffer, x int) {
 		"    " + c.Code,
 		"",
 		fmt.Sprintf("expires in %ds, single use", left),
+		// The code redeems the slot for each person who reads it. The
+		// passphrase is masked for that reason, and this code is not. Thus
+		// the screen says why it is a secret too.
+		"secret until redeemed; do not share this screen",
 		"",
 		"on the agent, all of it (the hash checks the script):",
 	}

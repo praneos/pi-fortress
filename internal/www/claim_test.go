@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +32,7 @@ func TestClaimFlow(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, err := IssueClaim(claims, "A1B2C3D4E5F67890", []string{"CLAUDE_OAT", "CLAUDE_ORT"})
-	if err != nil || len(c.Code) != 6 || strings.ContainsAny(c.Code, "01OI") || time.Until(c.Expires) > ClaimTTL {
+	if err != nil || len(c.Code) != 8 || strings.ContainsAny(c.Code, "01OI") || time.Until(c.Expires) > ClaimTTL {
 		t.Fatal(c, err)
 	}
 	if fi, _ := os.Stat(filepath.Join(claims, c.Code+".json")); fi.Mode().Perm() != 0640 {
@@ -41,7 +42,7 @@ func TestClaimFlow(t *testing.T) {
 	if code != 200 || !strings.Contains(body, "curl -fsS \"http://$PI/setup.sh\" -o \"$S\"") || strings.Contains(body, "| sudo bash") || !strings.Contains(body, "pf_a1b2c3d4e5f67890_CLAUDE_OAT") || !strings.Contains(body, ".credentials.json") || !strings.Contains(body, "export CLAUDE_ORT='pf_a1b2c3d4e5f67890_CLAUDE_ORT'") || strings.Contains(body, "sk-ant") {
 		t.Fatalf("%d\n%s", code, body)
 	}
-	_, notFound := get(t, ts.URL+"/claim/ZZZZZZ")
+	_, notFound := get(t, ts.URL+"/claim/ZZZZZZZZ")
 	if code2, again := get(t, ts.URL+"/claim/"+c.Code); code2 != 404 || again != notFound {
 		t.Fatalf("second redeem: %d %q vs %q", code2, again, notFound)
 	}
@@ -262,5 +263,40 @@ func TestLimiterTableIsBounded(t *testing.T) {
 	}
 	if l.allow("10.77.0.10") {
 		t.Fatal("the limiter forgot an address inside its own window")
+	}
+}
+
+// tryClaim asks s for code as if from address ip, and gives the status.
+func tryClaim(s *Server, ip, code string) int {
+	r := httptest.NewRequest(http.MethodGet, "/claim/"+code, nil)
+	r.RemoteAddr = ip + ":40000"
+	w := httptest.NewRecorder()
+	s.serve(w, r)
+	return w.Code
+}
+
+// The anti-spoof rule admits each address of the agent segment. So a root
+// agent can add an alias for each free address and get limitPerMin tries
+// for each alias. All sources together get segmentPerMin tries a minute.
+func TestClaimSegmentSharesOneLimit(t *testing.T) {
+	s, _ := testServer(t)
+	_ = os.MkdirAll(ClaimsDir(s.Dir), 0770)
+	if segmentPerMin <= limitPerMin {
+		t.Fatalf("segment cap %d is not above the per-source cap %d", segmentPerMin, limitPerMin)
+	}
+	// One address in a loop spends its own budget, not the budget of the
+	// segment. A try that the per-source limit refuses does not count.
+	for range 5 * limitPerMin {
+		tryClaim(s, "10.77.0.10", "ABCDEFGH")
+	}
+	for i := limitPerMin; i < segmentPerMin; i++ {
+		if got := tryClaim(s, fmt.Sprintf("10.77.0.%d", 20+i), "ABCDEFGH"); got != http.StatusNotFound {
+			t.Fatalf("try %d from a new address got %d, want 404", i, got)
+		}
+	}
+	for _, ip := range []string{"10.77.0.200", "10.77.0.201"} {
+		if got := tryClaim(s, ip, "ABCDEFGH"); got != http.StatusTooManyRequests {
+			t.Fatalf("try from %s past the segment cap got %d, want 429", ip, got)
+		}
 	}
 }

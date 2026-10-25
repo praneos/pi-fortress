@@ -20,3 +20,8 @@ pf-core-echo.test *
 # this file. User-Agent, Referer, Origin, Host, Via, Forwarded,
 # X-Forwarded-*, X-Real-IP, Content-*, Transfer-Encoding, Connection,
 # Keep-Alive, Upgrade, TE, Trailer and Proxy-* can never be declared.
+#
+# pf compile and apply refuse these HOST forms with a warning and skip the
+# line: one label (localhost), a "_", a bare "*", a "*" after the first
+# "*." (*.*.example.com), and a non-ASCII name (the warning gives the
+# xn-- form to write). "*" as a KIND (the lab echo) still works.

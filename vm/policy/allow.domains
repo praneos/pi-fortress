@@ -6,7 +6,13 @@
 # unknown.jsonl. With PARANOID=1, this list and the host column of
 # core.hosts are the ONLY set of names that the agent segment may reach
 # on 443 (docs/paranoid_mode.md). A name allows itself and all its
-# subdomains. Thus do not list a subdomain of a name that is already here.
+# subdomains, at all depths. Thus do not list a subdomain of a name that is
+# already here. A "*.name" line is the same as "name": it allows name and
+# all names below it, and pf compile warns. Write "name". `pf tui` writes a
+# "*.name" that you type as "name". Write the narrowest name that works.
+# A line of one label ("com", "*.com") allows nothing, and pf compile warns.
+# A non-ASCII name is refused: pf compile warns, skips the line and gives
+# the xn-- form.
 github.com
 raw.githubusercontent.com
 objects.githubusercontent.com

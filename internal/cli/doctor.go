@@ -90,6 +90,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	rs = append(rs, doctor.RebootRung(doctor.DefaultRebootPaths(), time.Now()))
 	kp := doctor.DefaultKernelPaths()
 	rs = append(rs, doctor.MemoryCgroupRung(kp), doctor.PSIRung(kp))
+	rs = append(rs, doctor.NftTablesRung(doctor.NftTables()))
 	return doctor.Report(stdout, rs)
 }
 

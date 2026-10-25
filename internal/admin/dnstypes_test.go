@@ -17,8 +17,10 @@ import (
 // The check of the seat and the parser of pf dns are two copies, because
 // dnsd keeps its parser unexported. This test gives both the same lines.
 // pf dns gets them through New, as -check loads a segment, and the test
-// reads its "line ignored" reports. The test holds the one important
-// property: pf dns never skips a line that the seat accepts. Where they
+// reads its "line ignored" reports. A type that the seat refuses because it
+// changes nothing must get a "no effect" report from pf dns. The test holds
+// the one important property: pf dns never skips a line that the seat
+// accepts. Where they
 // differ, the seat is stricter, and this test names each such line.
 func TestDNSTypesLineMatchesPfDNS(t *testing.T) {
 	cases := []struct {
@@ -78,10 +80,22 @@ func TestDNSTypesLineMatchesPfDNS(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// report says whether pf dns logged a line for file line n with word in it.
+	report := func(n int, word string) bool {
+		for l := range strings.Lines(logged.String()) {
+			if strings.Contains(l, fmt.Sprintf("%s:%d: ", path, n)) && strings.Contains(l, word) {
+				return true
+			}
+		}
+		return false
+	}
 	for i, c := range cases {
-		pfdns := !strings.Contains(logged.String(), fmt.Sprintf("%s:%d: ", path, i+1))
+		pfdns := !report(i+1, "line ignored")
 		_, err := CheckDNSTypesLine(c.line)
 		seat := err == nil
+		if err != nil && strings.Contains(err.Error(), "changes nothing") && !report(i+1, "this entry has no effect") {
+			t.Errorf("%q: pf dns gave no warning for a type that changes nothing", c.line)
+		}
 		if pfdns != c.pfdns {
 			t.Errorf("%q: pf dns took it %v, the test says %v (the parser moved; update both)", c.line, pfdns, c.pfdns)
 		}

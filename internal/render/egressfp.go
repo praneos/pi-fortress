@@ -45,13 +45,15 @@ func (c *Config) houseEgressFP() string {
 		"udp="+c.HouseAllowUDP)
 }
 
-// segEgressFP covers EGRESS, ALLOW_PORTS and BLOCK_DIRECT_IP of a plain
-// segment, and the ssh_allow.ips elements, which open SSH from each plain
-// segment.
+// segEgressFP covers EGRESS, ALLOW_PORTS, BLOCK_DIRECT_IP and INSPECT of a
+// plain segment, and the ssh_allow.ips elements, which open SSH from each
+// plain segment. INSPECT=on sends 443 to the engine. A flow that was open
+// before goes to the origin, so a change of INSPECT must cut it.
 func segEgressFP(s Segment, e Elements) string {
 	return egressFP("segment",
 		"egress="+orDefault(s.Egress, "strict"),
 		"block_direct_ip="+orDefault(s.BlockDirectIP, "on"),
+		"inspect="+orDefault(s.Inspect, "off"),
 		"tcp="+s.AllowTCP,
 		"udp="+s.AllowUDP,
 		"ssh_allow="+e.SSHAllow)

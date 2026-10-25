@@ -124,9 +124,9 @@ func TestSectionsMoveAndAreRemembered(t *testing.T) {
 // there is one.
 func TestOverviewVerdict(t *testing.T) {
 	c, _ := testConfig(t)
-	writeReport(t, c.PolicyDir, "OK f1: 9 domains\n", time.Hour)
+	writeReport(t, c, "OK f1: 9 domains\n", time.Hour)
 	last := run(t, c, NewFake(120, 30).Type("1")).Last()
-	for _, want := range []string{"All good", "Agent network", "Home network", "ports strict", "Pi  cpu"} {
+	for _, want := range []string{"All good", "Agent network", "Home network", "ports strict", "Pi  checked ", "  cpu "} {
 		if !strings.Contains(last, want) {
 			t.Fatalf("no %q on Overview:\n%s", want, last)
 		}
@@ -232,7 +232,7 @@ func TestFilteringShowsTheNetworksFeeds(t *testing.T) {
 	for range admin.HouseLists {
 		f.Press(KeyTab)
 	}
-	last := run(t, c, f.Type("e")).Last()
+	last := run(t, c, f.Type("e").Type("y")).Last()
 	if !isPicked(f, "Feeds") || !strings.Contains(last, "f1") {
 		t.Fatalf("no feeds tab:\n%s", last)
 	}

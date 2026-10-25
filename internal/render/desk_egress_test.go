@@ -161,6 +161,26 @@ func TestPlainSegmentSSHOutOnlyToSSHAllow(t *testing.T) {
 	}
 }
 
+// ssh_allow.ips is an address list. The gate must let TCP 22 to it reach the
+// forward accept, also when the desk did not resolve the address. Other
+// ports to the same address still meet the gate.
+func TestPlainSegmentGateLetsSSHAllowThrough(t *testing.T) {
+	el := labElements
+	el.SSHAllow = "elements = { 140.82.112.0/20 }"
+	gate := chain(t, deskRuleset(t, deskBase, el), "resolver_gate")
+	pass := `iifname "eth3" tcp dport 22 ip daddr @ssh_allow_v4 accept`
+	p, drop := strings.Index(gate, pass), strings.Index(gate, `iifname "eth3" meta l4proto { tcp, udp } th dport != 53 ct state new`)
+	if p < 0 || drop < 0 || p > drop {
+		t.Fatalf("resolver_gate must pass TCP 22 to ssh_allow_v4 before the desk gate (%d %d):\n%s", p, drop, gate)
+	}
+	if strings.Count(gate, "ssh_allow_v4") != 1 {
+		t.Fatalf("the gate opens ssh_allow_v4 for more than TCP 22:\n%s", gate)
+	}
+	if strings.Contains(chain(t, deskRuleset(t, deskBase, labElements), "resolver_gate"), "ssh_allow_v4") {
+		t.Fatal("no ssh_allow.ips, yet the gate references the set")
+	}
+}
+
 func TestPlainSegmentNewKeysAreChecked(t *testing.T) {
 	// SSH_FROM inside AGENT_NET would give the agents SSH into the desk.
 	// Inside the NET of the desk itself, it is no hole at all.

@@ -83,8 +83,12 @@ type call struct {
 	req    *httpwire.Request
 	up     *upstream
 	expect bool
-	host   string
-	echo   bool
+	// authority is the Host as the decisions read it (prettyHost). host is
+	// the name that the rows of the request carry (rowHost). They differ
+	// only for a Host that holds a credential.
+	authority string
+	host      string
+	echo      bool
 	// echoRole is set with echo and names the fixture that answers. The two
 	// fixtures differ in what they may receive. The core fixture is lab-gated
 	// and reflects a substituted request on purpose. The open fixture is
@@ -213,14 +217,17 @@ func (b *Broker) serve(ctx context.Context, client net.Conn, br *bufio.Reader, p
 	}
 	if c.echo {
 		if !c.ws {
+			if done, err := b.echoBody(c, stream); done {
+				return err
+			}
 			return b.echo(client, p, req, c.slots, c.harvestSlot)
 		}
 		// The handshake meets a net.Pipe instead of the uplink. Every
 		// stage below is the one a real wss connection runs.
 		b.echoWSOrigin(c)
 	}
-	if !b.hostAllowed(c.host) {
-		_ = b.logUnknown(p, req, len(strips) > 0, "")
+	if !b.hostAllowed(c.authority) {
+		_ = b.logUnknown(p, req, c.host, len(strips) > 0, "")
 	}
 	// A chunked body announces no length. So the only honest count of its
 	// upload occurs while the body goes past. This is after bindHarvest,
@@ -316,16 +323,17 @@ func (b *Broker) serve(ctx context.Context, client net.Conn, br *bufio.Reader, p
 // done says that admit answered the request. A refusal that wrote without
 // error returns done with errRefused, so the caller tests done, not err.
 func (b *Broker) admit(c *call) (done bool, err error) {
-	c.host = prettyHost(c.req, c.p.SNI)
-	if rule := targetRefusal(c.req); rule != "" {
+	c.authority = prettyHost(c.req, c.p.SNI)
+	c.host = b.rowHost(c.p, c.req, c.authority)
+	if rule := targetRefusal(c.req, c.p.OrigDst.Port()); rule != "" {
 		_ = b.logStrip(&c.strips, clientIP(c.p), c.host, "target", rule)
 		return true, b.refuse(c.client, c.req, c.expect, 400, "400 Bad Request", "request\n")
 	}
-	if b.Blocked.Has(c.host) || b.Blocked.Has(c.p.SNI) {
+	if b.Blocked.Has(c.authority) || b.Blocked.Has(c.p.SNI) {
 		_ = b.logStrip(&c.strips, clientIP(c.p), c.host, "host", "blocklist")
 		return true, b.refuse(c.client, c.req, c.expect, 403, "403 Forbidden", "blocked\n")
 	}
-	c.echo = isEcho(c.p.OrigDst) || echoHost(c.p.SNI, c.host)
+	c.echo = isEcho(c.p.OrigDst) || echoHost(c.p.SNI, c.authority)
 	if c.echo {
 		c.echoRole = echoRole(c.p, c.req)
 	}
@@ -341,6 +349,7 @@ func (b *Broker) admit(c *call) (done bool, err error) {
 	// that runs end to end.
 	c.ws = isWebSocketUpgrade(c.req) && (!c.echo || b.echoUpgrade(c))
 	if isUpgrade(c.req) && !c.ws {
+		b.logLiveConn(c)
 		return true, b.refuse(c.client, c.req, c.expect, 501, "501 Not Implemented", "upgrade\n")
 	}
 	if c.ws {
@@ -367,8 +376,10 @@ func (b *Broker) admit(c *call) (done bool, err error) {
 // empty one, makes the routing of the origin a guess. Each origin can send
 // it to a different vhost than the one the SNI names. HTTP/1.0 has no
 // Host requirement, so there the decisions use the SNI. A Host that is
-// there must be a host and port (validHost).
-func targetRefusal(req *httpwire.Request) string {
+// there must be a host and port (validHost). Its port must be the port
+// that the broker dialled (hostPortMismatch). dialled is 0 when no
+// original destination is known.
+func targetRefusal(req *httpwire.Request, dialled uint16) string {
 	switch {
 	case req.Method == "CONNECT":
 		return "connect"
@@ -386,7 +397,29 @@ func targetRefusal(req *httpwire.Request) string {
 	if host != "" && !validHost(host) {
 		return "bad_host"
 	}
+	if host != "" && hostPortMismatch(host, dialled) {
+		return "host_port_mismatch"
+	}
 	return ""
+}
+
+// hostPortMismatch reports a Host port that is not the dialled port. The
+// fence, the blocklist and paranoid mode decide on the name and ignore
+// the port. An origin can route by the port in the Host, so a different
+// port can name a vhost that nobody judged. A Host with no port names no
+// other port, so it goes out. host is valid
+// (validHost). A bracketed IPv6 literal has colons of its own, so only a
+// colon after the ']' starts a port.
+func hostPortMismatch(host string, dialled uint16) bool {
+	if dialled == 0 || strings.HasSuffix(host, "]") {
+		return false
+	}
+	i := strings.LastIndexByte(host, ':')
+	if i < 0 {
+		return false
+	}
+	n, err := strconv.Atoi(host[i+1:])
+	return err != nil || n != int(dialled)
 }
 
 // validHost reports whether h is host[:port] (RFC 9110 §7.2): a DNS name,
@@ -430,10 +463,10 @@ func (b *Broker) paranoidRefuse(c *call) (done bool, err error) {
 	if !b.paranoidFor(c.p) || c.echo {
 		return false, nil
 	}
-	if b.forwardAllowed(c.host) && b.forwardAllowed(c.p.SNI) {
+	if b.forwardAllowed(c.authority) && b.forwardAllowed(c.p.SNI) {
 		return false, nil
 	}
-	_ = b.logUnknown(c.p, c.req, false, whereParanoid)
+	_ = b.logUnknown(c.p, c.req, c.host, false, whereParanoid)
 	return true, b.refuse(c.client, c.req, c.expect, 403, "403 Forbidden", "paranoid\n")
 }
 
@@ -443,7 +476,7 @@ func (b *Broker) paranoidRefuse(c *call) (done bool, err error) {
 // push never sends its pack. It answers with the one substitution
 // refusal, so the agent cannot tell a list miss from a sealed store.
 func (b *Broker) gitPushRefuse(c *call) (done bool, err error) {
-	refused, repo, clean := fence.GitPushRefused(b.GitPush, c.host, c.p.SNI, c.req.Method, c.req.Target)
+	refused, repo, clean := fence.GitPushRefused(b.GitPush, c.authority, c.p.SNI, c.req.Method, c.req.Target)
 	if !refused {
 		return false, nil
 	}
@@ -540,6 +573,12 @@ func (b *Broker) prepare(c *call) (strips []fence.StripEvent, stream *fence.Stre
 	// use and spends no budget.
 	if c.refresh = b.harvestAllowed(c.p.SNI, c.req); c.refresh {
 		c.jsonBody = jsonContentType(c.req.Get("Content-Type"))
+	}
+	// The bind reads the first Content-Type. A refresh with a second media
+	// type gets the one refusal, because the origin can read the other one.
+	if name := repeatedContentType(c.req.Fields); c.refresh && name != "" {
+		b.logRefusals(c, []fence.Refusal{{Cause: fence.CauseRepeatedContentType, Where: "header:" + name}})
+		return nil, nil, true, b.refuseSubstitution(c)
 	}
 	if c.refresh && !c.jsonBody && len(pending) > 0 {
 		if slot := injectedORT(bufferedBody(c.req), pending, c.slots); slot != "" {
@@ -660,20 +699,9 @@ func (b *Broker) roundTrip(ctx context.Context, c *call) (*httpwire.Response, er
 		// mutate the origin twice.
 		c.up.discard()
 		if errors.Is(err, fence.ErrPlaceholderInStream) {
-			// The copy stopped at a placeholder in a streamed body. The
-			// origin connection is gone with the head, so the request
-			// cannot complete. The agent gets the one refusal. The
-			// operator gets the cause.
-			r := fence.Refusal{Cause: fence.CausePlaceholderInStream, Where: "body"}
-			var sp *fence.StreamPlaceholderError
-			if errors.As(err, &sp) {
-				r.Slot, r.Kind = sp.Slot, sp.Kind
-			}
-			b.logRefusals(c, []fence.Refusal{r})
-			if werr := writeRefused(c.client); werr != nil {
-				return nil, werr
-			}
-			return nil, errRefused
+			// The origin connection is gone with the head, so the request
+			// cannot complete.
+			return nil, b.refuseStreamPlaceholder(c, err)
 		}
 		if reused && replayable && attempt == 0 && (wrote == 0 || idempotent(c.req.Method)) {
 			continue
@@ -681,6 +709,49 @@ func (b *Broker) roundTrip(ctx context.Context, c *call) (*httpwire.Response, er
 		_ = writeErr(c.client, 502, "502 Bad Gateway", "origin\n")
 		return nil, err
 	}
+}
+
+// refuseStreamPlaceholder answers a request whose streamed body stopped
+// at a placeholder (fence.ErrPlaceholderInStream). The agent gets the one
+// refusal. The operator gets the cause.
+func (b *Broker) refuseStreamPlaceholder(c *call, err error) error {
+	r := fence.Refusal{Cause: fence.CausePlaceholderInStream, Where: "body"}
+	var sp *fence.StreamPlaceholderError
+	if errors.As(err, &sp) {
+		r.Slot, r.Kind = sp.Slot, sp.Kind
+	}
+	b.logRefusals(c, []fence.Refusal{r})
+	if werr := writeRefused(c.client); werr != nil {
+		return werr
+	}
+	return errRefused
+}
+
+// echoBody reads a streamed body that goes to an echo fixture. The
+// fixture has no origin, so no copy reads the body. The read goes
+// through the same guard as the copy to an origin. Thus a placeholder in
+// the body gets the same refusal as at a real host. The scrub writes its
+// strip events while the read occurs. echoBody logs them on each exit, as
+// serve does after roundTrip. Thus the rows are the rows of a real host,
+// also for the strips before a placeholder. done says that echoBody
+// answered the request.
+func (b *Broker) echoBody(c *call, stream *fence.StreamStrips) (done bool, err error) {
+	if c.req.Body == nil {
+		return false, nil
+	}
+	defer func() {
+		for _, ev := range stream.Events() {
+			_ = b.logStrip(&c.strips, clientIP(c.p), c.host, ev.Where, ev.Rule)
+		}
+	}()
+	if _, err := io.Copy(io.Discard, c.req.Body); err != nil {
+		if errors.Is(err, fence.ErrPlaceholderInStream) {
+			return true, b.refuseStreamPlaceholder(c, err)
+		}
+		_ = writeErr(c.client, 502, "502 Bad Gateway", "origin\n")
+		return true, err
+	}
+	return false, nil
 }
 
 // decodeBody inflates a gzip body so that the scrub sees plaintext. It
@@ -871,10 +942,13 @@ func (b *Broker) writeStreamed(c *call, resp *httpwire.Response, reencode, origi
 // dropHopByHop removes the RFC 9110 hop-by-hop fields that the broker
 // does not already reframe or act on. TE: trailers would promise the
 // origin that trailers reach the client, but the broker drops trailers.
+// Trailer announces trailer fields that the broker drops (httpwire reads
+// them and does not forward them), and the fence does not scan them.
 // Keep-Alive states the connection limits of the origin, not the limits
 // of the broker to the client.
 func dropHopByHop(fs *httpwire.Fields) {
 	fs.Del("TE")
+	fs.Del("Trailer")
 	fs.Del("Keep-Alive")
 }
 

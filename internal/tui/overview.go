@@ -4,12 +4,17 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"pi-fortress/internal/admin"
 	"pi-fortress/internal/monitor"
 )
 
 const overviewFmt = "%-16s %7s %14s  %s"
+
+// alertRecent is the age up to which a threat that was seen and not stopped
+// is a problem on the Overview verdict.
+const alertRecent = 24 * time.Hour
 
 // buildOverview answers the first question of an operator who opens the
 // seat (is all correct?) before any detail: a verdict, then a line for each
@@ -54,13 +59,41 @@ func (a *App) buildOverview() []row {
 		}
 	}
 
+	// A threat that the Pi saw and did not stop is the most important fact
+	// on the box. Before, only Activity showed it. The notes of each network
+	// count the events that Activity shows: the newest rows of the observe
+	// ring, at most seven days. Only the events of the last 24 hours are a
+	// problem on the verdict. If not, one event holds "Needs attention" for
+	// seven days, and the operator learns to read past it. They are marked
+	// with seenMark, not with "!", because they are events, not a standing
+	// fault.
+	alerts, recent := map[string]int{}, map[string]int{}
+	since := a.now().Add(-alertRecent)
+	for _, e := range a.stats.Events {
+		if e.Alert {
+			alerts[e.Segment]++
+			if e.T.After(since) {
+				recent[e.Segment]++
+			}
+		}
+	}
+	var seen []string
+	for _, e := range a.netList() {
+		if n := recent[e.id]; n > 0 {
+			seen = append(seen, fmt.Sprintf("%d %s seen and not stopped on %s (Activity)", n, plural(n, "threat"), e.label))
+		}
+	}
+
 	var rows []row
-	if len(problems) == 0 {
+	if len(problems)+len(seen) == 0 {
 		rows = append(rows, row{text: "All good"})
 	} else {
 		rows = append(rows, row{text: "Needs attention"})
 		for _, p := range problems {
 			rows = append(rows, row{text: "  ! " + p})
+		}
+		for _, p := range seen {
+			rows = append(rows, row{text: "  " + seenMark + " " + p})
 		}
 	}
 	rows = append(rows, row{text: ""}, row{text: fmt.Sprintf(overviewFmt, "network", "devices", "blocked today", "notes")})
@@ -77,7 +110,11 @@ func (a *App) buildOverview() []row {
 		if days := a.stats.Series[e.id]; len(days) > 0 {
 			blocked = fmt.Sprint(days[len(days)-1].Blocked)
 		}
-		rows = append(rows, row{text: strings.TrimRight(fmt.Sprintf(overviewFmt, clip(e.label, 16), fmt.Sprint(devices), blocked, a.netNotes(e.id, house, st, ifaces)), " ")})
+		notes := a.netNotes(e.id, house, st, ifaces)
+		if n := alerts[e.id]; n > 0 {
+			notes = strings.TrimRight(fmt.Sprintf("%s %d not stopped  %s", seenMark, n, notes), " ")
+		}
+		rows = append(rows, row{text: strings.TrimRight(fmt.Sprintf(overviewFmt, clip(e.label, 16), fmt.Sprint(devices), blocked, notes), " ")})
 	}
 	rows = append(rows, row{text: ""}, row{text: a.piLine(st)})
 	return rows
@@ -108,20 +145,39 @@ func (a *App) netNotes(id string, house map[string]string, st admin.Status, ifac
 	return ""
 }
 
+// piLine starts with the time of the checks. A seat that froze continues
+// to show its last verdict, and without a time that verdict looks current.
+// The time goes before the figures, so a narrow terminal does not clip it.
 func (a *App) piLine(st admin.Status) string {
 	apply := "idle"
 	if st.ApplyRunning {
 		apply = "running"
 	}
+	pi := "Pi  checked " + a.now().Format("15:04:05")
 	s := get[*monitor.Sample](a, "sample", admin.Args{})
 	if s == nil {
-		return "Pi  no monitor sample yet  apply " + apply
+		return pi + "  no monitor sample yet  apply " + apply
 	}
-	return fmt.Sprintf("Pi  cpu %s  temp %s  mem %s  apply %s",
+	return fmt.Sprintf("%s  cpu %s  temp %s  mem %s  apply %s", pi,
 		figure(s.Has("cpu"), "%.0f%%", s.CPU),
 		figure(s.Has("temp"), "%.0fC", s.TempC),
 		figure(s.Has("mem"), "%.0f%%", s.MemUsedPct),
 		apply)
+}
+
+// now is the clock of the config, so a test can fix it.
+func (a *App) now() time.Time {
+	if a.cfg != nil && a.cfg.Now != nil {
+		return a.cfg.Now()
+	}
+	return time.Now()
+}
+
+func plural(n int, s string) string {
+	if n == 1 {
+		return s
+	}
+	return s + "s"
 }
 
 // checked is get for the verdict of the Overview. A verb that fails, or

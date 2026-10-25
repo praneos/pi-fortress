@@ -2,12 +2,15 @@ package broker
 
 import (
 	"bufio"
+	"encoding/json"
+	"io"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -121,4 +124,91 @@ func benchBroker(bm *testing.B) *Broker {
 		bm.Fatal(err)
 	}
 	return &Broker{Policy: pol, Store: secrets.Open(path), TokenRE: re, Idle: 5 * time.Second}
+}
+
+// The broker reads the Content-Type of a refresh to decide how the body
+// binds a slot. A second Content-Type field, or one field with a list of
+// media types, lets the origin read a different media type. Each such
+// refresh gets the one refusal and one alert row that holds no live value.
+// The origin gets nothing, the slot logs no use, and the store does not
+// change.
+func TestRefreshRepeatedContentTypeRefused(t *testing.T) {
+	body := `{"grant_type":"refresh_token","refresh_token":"pf_b0b1b2b3b4b5b6b7_CLAUDE_ORT"}`
+	for _, c := range []struct{ fields, where string }{
+		{"Content-Type: application/json\r\nContent-Type: application/x-www-form-urlencoded\r\n", "header:Content-Type"},
+		{"Content-Type: application/json\r\ncontent-type: application/json\r\n", "header:content-type"},
+		{"Content-Type: application/json;charset=utf-8, text/plain\r\n", "header:Content-Type"},
+		{"Content-Type: application/json, application/json\r\n", "header:Content-Type"},
+	} {
+		b, path := testBroker(t)
+		dir := t.TempDir()
+		b.Logs = &jsonl.Writer{StripPath: filepath.Join(dir, "strip.jsonl"), UsePath: filepath.Join(dir, "use.jsonl")}
+		var got atomic.Bool
+		rawUpstream(t, b, func(int, *httpwire.Request, net.Conn) bool { got.Store(true); return false })
+		before, _ := os.ReadFile(path)
+		raw := "POST /v1/oauth/token HTTP/1.1\r\nHost: api.anthropic.com\r\n" + c.fields + "Content-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n" + body
+		resp := rawRoundtrip(t, b, anthropic, raw)
+		if !strings.HasPrefix(resp, "HTTP/1.1 503 ") || !strings.HasSuffix(resp, RefusedBody) {
+			t.Fatalf("%q: not the one refusal: %q", c.fields, resp)
+		}
+		time.Sleep(20 * time.Millisecond)
+		if got.Load() {
+			t.Fatalf("%q: a refused request reached the origin", c.fields)
+		}
+		strip, _ := os.ReadFile(b.Logs.StripPath)
+		lines := strings.Split(strings.TrimSpace(string(strip)), "\n")
+		var r jsonl.Refused
+		if len(lines) != 1 || json.Unmarshal([]byte(lines[0]), &r) != nil || r.Cause != "repeated_content_type" || !r.Alert || r.Where != c.where {
+			t.Fatalf("%q: strip rows %s", c.fields, strip)
+		}
+		if strings.Contains(string(strip), "sk-ant-") {
+			t.Fatalf("%q: a live value in the strip log: %s", c.fields, strip)
+		}
+		if use, _ := os.ReadFile(b.Logs.UsePath); len(use) != 0 {
+			t.Fatalf("%q: use rows %s", c.fields, use)
+		}
+		if after, _ := os.ReadFile(path); string(after) != string(before) {
+			t.Fatalf("%q: the store changed", c.fields)
+		}
+	}
+}
+
+// Only the refresh path reads the first Content-Type. The other readers
+// take every field and every list item, so a repeat elsewhere still goes
+// to the origin.
+func TestRepeatedContentTypeOutsideRefreshForwards(t *testing.T) {
+	b, _ := testBroker(t)
+	var got atomic.Bool
+	rawUpstream(t, b, func(_ int, _ *httpwire.Request, conn net.Conn) bool {
+		got.Store(true)
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+		return false
+	})
+	body := `{"model":"m"}`
+	raw := "POST /v1/messages HTTP/1.1\r\nHost: api.anthropic.com\r\nContent-Type: application/json\r\nContent-Type: text/plain\r\nContent-Length: " + strconv.Itoa(len(body)) + "\r\n\r\n" + body
+	if resp := roundtrip(t, b, anthropic, raw); resp != "ok" || !got.Load() {
+		t.Fatalf("not forwarded: %q", resp)
+	}
+}
+
+// A comma in a quoted parameter value is not a list of media types.
+func TestRepeatedContentTypeField(t *testing.T) {
+	for _, c := range []struct{ fields, want string }{
+		{"Content-Type: application/json\r\n", ""},
+		{"", ""},
+		{"Content-Type: application/json; x=\"a,b\"\r\n", ""},
+		{"Content-Type: application/json; x=\"a\\\",b\"\r\n", ""},
+		{"Content-Type: application/json; x=\"a\\\"\", b/c\r\n", "Content-Type"},
+		{"Content-Type: application/json,\r\n", "Content-Type"},
+		{"X-Content-Type: a, b\r\nContent-Type: application/json\r\n", ""},
+		{"CONTENT-TYPE: a/b\r\ncontent-type: a/b\r\n", "content-type"},
+	} {
+		req, err := httpwire.ReadRequest(bufio.NewReader(strings.NewReader("POST / HTTP/1.1\r\nHost: h\r\n" + c.fields + "Content-Length: 0\r\n\r\n")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := repeatedContentType(req.Fields); got != c.want {
+			t.Errorf("%q: %q, want %q", c.fields, got, c.want)
+		}
+	}
 }

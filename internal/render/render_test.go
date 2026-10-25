@@ -492,6 +492,12 @@ func TestRefusals(t *testing.T) {
 		{name: "seg ssh cidr", seg: "one.env:IF=eth3\nNET=10.80.0.0/24\nIP=10.80.0.1\nSSH_TO=10.77.0.0/24\n", want: "SSH_TO is not an IPv4 address or a-b range"},
 		{name: "seg on agent", seg: "one.env:IF=eth0\nNET=10.80.0.0/24\nIP=10.80.0.1\n", want: "segment one: IF=eth0 collides with INT_IF=eth0, WAN_IF=wlan0 or HOUSE_IF=none"},
 		{name: "seg ip outside", seg: "one.env:IF=eth3\nNET=10.80.0.0/24\nIP=10.81.0.1\n", want: "IP=10.81.0.1 is not inside NET=10.80.0.0/24"},
+		{name: "seg ip network", seg: "one.env:IF=eth3\nNET=10.80.0.0/24\nIP=10.80.0.0\n", want: "segment one: IP=10.80.0.0 is the network address of NET=10.80.0.0/24"},
+		{name: "seg ip broadcast", seg: "one.env:IF=eth3\nNET=10.80.0.0/24\nIP=10.80.0.255\n", want: "segment one: IP=10.80.0.255 is the broadcast address of NET=10.80.0.0/24"},
+		{name: "house admin network", house: "HOUSE_IF=eth1\nHOUSE_ADMIN_IP=10.78.0.0\n", want: "house: HOUSE_ADMIN_IP=10.78.0.0 is the network address of HOUSE_NET=10.78.0.0/24"},
+		{name: "house admin broadcast", house: "HOUSE_IF=eth1\nHOUSE_ADMIN_IP=10.78.0.255\n", want: "house: HOUSE_ADMIN_IP=10.78.0.255 is the broadcast address of HOUSE_NET=10.78.0.0/24"},
+		{name: "house dhcp network", house: "HOUSE_IF=eth1\nHOUSE_IP=10.78.0.254\nHOUSE_DHCP_START=10.78.0.0\nHOUSE_DHCP_END=10.78.0.50\n", want: "covers 10.78.0.0, the network address of HOUSE_NET=10.78.0.0/24"},
+		{name: "house dhcp broadcast", house: "HOUSE_IF=eth1\nHOUSE_DHCP_START=10.78.0.200\nHOUSE_DHCP_END=10.78.0.255\n", want: "covers 10.78.0.255, the broadcast address of HOUSE_NET=10.78.0.0/24"},
 		{name: "seg overlaps agent", seg: "one.env:IF=eth3\nNET=10.77.0.0/25\nIP=10.77.0.1\n", want: "NET=10.77.0.0/25 overlaps AGENT_NET=10.77.0.0/24"},
 		{name: "seg overlaps house", house: "HOUSE_IF=eth1\n", seg: "one.env:IF=eth3\nNET=10.78.0.128/25\nIP=10.78.0.129\n", want: "overlaps HOUSE_NET=10.78.0.0/24"},
 		{name: "seg ssh outside", seg: "one.env:IF=eth3\nNET=10.80.0.0/24\nIP=10.80.0.1\nSSH_TO=10.77.0.10-10.78.0.5\n", want: "SSH_TO=10.77.0.10-10.78.0.5 is outside AGENT_NET"},
@@ -525,6 +531,19 @@ func TestRefusals(t *testing.T) {
 				t.Fatalf("got %v, want %q", err, tc.want)
 			}
 		})
+	}
+}
+
+// A /31 has no network or broadcast address (RFC 3021), and a /32 is one
+// address. Thus IP may be the first or the last address of such a NET.
+func TestSegmentIPOnPointToPointNet(t *testing.T) {
+	for _, seg := range []string{"NET=10.80.0.0/31\nIP=10.80.0.0\n", "NET=10.80.0.0/31\nIP=10.80.0.1\n", "NET=10.80.0.7/32\nIP=10.80.0.7\n"} {
+		segs := filepath.Join(t.TempDir(), "segments.d")
+		os.Mkdir(segs, 0755)
+		write(t, segs, "one.env", "IF=eth3\n"+seg)
+		if _, err := Load(Options{Net: lab, HouseEnv: "/nonexistent/house.env", SegmentsDir: segs}); err != nil {
+			t.Errorf("%q refused: %v", seg, err)
+		}
 	}
 }
 
@@ -794,6 +813,10 @@ func TestCheckHouse(t *testing.T) {
 			want: "covers HOUSE_IP=10.78.0.150, so a house device would be leased an address the Pi already holds"},
 		{name: "range covers admin ip", house: "HOUSE_IF=eth1\n" + net + "HOUSE_ADMIN_IP=10.78.0.150\n",
 			want: "covers HOUSE_ADMIN_IP=10.78.0.150, so a house device would be leased an address the Pi already holds"},
+		{name: "ip is the network address", house: "HOUSE_IF=eth1\n" + net + "HOUSE_IP=10.78.0.0\n",
+			want: "house: HOUSE_IP=10.78.0.0 is the network address of HOUSE_NET=10.78.0.0/24"},
+		{name: "ip is the broadcast address", house: "HOUSE_IF=eth1\n" + net + "HOUSE_IP=10.78.0.255\n",
+			want: "house: HOUSE_IP=10.78.0.255 is the broadcast address of HOUSE_NET=10.78.0.0/24"},
 		{name: "range is one address and it is the pi", house: "HOUSE_IF=eth1\n" + net + "HOUSE_DHCP_START=10.78.0.1\nHOUSE_DHCP_END=10.78.0.1\n",
 			want: "covers HOUSE_IP=10.78.0.1"},
 	}

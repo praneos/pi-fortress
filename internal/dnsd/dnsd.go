@@ -471,9 +471,10 @@ func (seg *Segment) setUnbound(network string, why *string) bool {
 
 // readSink reads the list of a segment but does not publish it. Thus a
 // reload that will fail can fail first. No segment then answers by a list
-// that the operator was told did not load.
+// that the operator was told did not load. Under fake-IP it refuses a
+// fixture inside the pool (loadHosts).
 func (seg *Segment) readSink() (*hosts, error) {
-	h, err := loadHosts(seg.SinkholeFiles)
+	h, err := loadHosts(seg.SinkholeFiles, seg.FakeIPNet)
 	if err != nil {
 		return nil, fmt.Errorf("segment %q: %w", seg.Name, err)
 	}
@@ -531,9 +532,9 @@ func (seg *Segment) readTypes() (*typeAllow, error) {
 	return ta, nil
 }
 
-// reportTypes says which dns_types.allow lines were skipped. -check and
-// the journal show this. A skipped line filters a pair that the operator
-// meant to forward. Nothing else would tell the operator why.
+// reportTypes says which dns_types.allow lines and entries were skipped.
+// -check and the journal show this. A skipped line filters a pair that the
+// operator meant to forward. Nothing else would tell the operator why.
 func (s *Server) reportTypes(seg *Segment, ta *typeAllow) {
 	if ta == nil {
 		return
@@ -933,6 +934,14 @@ func (s *Server) answer(ctx context.Context, seg *Segment, src netip.Addr, req [
 	if left < setTimeout {
 		raw = capTTLs(raw, uint32(left/time.Second))
 		ttl = min(ttl, uint32(left/time.Second))
+	}
+	// A negative answer has no answer records, so ttl is 0. Its cache time
+	// comes from the SOA (negTTL). It gives no address to the gate set, so
+	// left does not limit it. The SOA TTL in the reply goes down to the same
+	// time. Thus the client and a later cache hit count down from one value.
+	if neg, ok := negTTL(raw); ok {
+		raw = capTTLs(raw, neg)
+		ttl = neg
 	}
 	// A truncated answer is a stub, not an answer. A cached stub would go to
 	// each later asker. That includes the TCP retry, which exists to get past

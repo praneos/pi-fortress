@@ -30,9 +30,16 @@ func segHosts(t *testing.T, body, hosts string) (*Config, string, error) {
 
 const iotDHCP = "IF=eth2.30\nNET=10.30.0.0/24\nIP=10.30.0.1\nDHCP=on\nDHCP_START=10.30.0.100\nDHCP_END=10.30.0.199\n"
 
+// A trailing slash on --segments-dir names the same directory. apply.sh
+// takes the parent with dirname, which ignores the slash.
 func TestSegmentHostsPathIsBesideSegmentsD(t *testing.T) {
-	if got := SegmentHostsPath("/etc/pi-fortress/segments.d", "iot"); got != "/etc/pi-fortress/dhcp.iot.hosts" {
-		t.Fatalf("SegmentHostsPath = %s", got)
+	for _, dir := range []string{"/etc/pi-fortress/segments.d", "/etc/pi-fortress/segments.d/", "/etc/pi-fortress/segments.d//"} {
+		if got := SegmentHostsPath(dir, "iot"); got != "/etc/pi-fortress/dhcp.iot.hosts" {
+			t.Errorf("SegmentHostsPath(%q) = %s", dir, got)
+		}
+		if got := SegmentAllowPath(dir, "iot"); got != "/etc/pi-fortress/allow.iot.domains" {
+			t.Errorf("SegmentAllowPath(%q) = %s", dir, got)
+		}
 	}
 }
 

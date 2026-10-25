@@ -287,6 +287,17 @@ func TestLoadTypeAllow(t *testing.T) {
 			t.Errorf("%q: err %v, %d pairs, bad %q", bad, err, ta.Len(), ta.bad)
 		}
 	}
+	// AAAA, HTTPS and SVCB are answered empty before the list. The line
+	// stays, but each of these entries gives a warning and adds no pair.
+	ta, err = loadTypeAllow(write("# note\nx.example SRV aaaa TYPE65 SVCB\n"))
+	if err != nil || ta.Len() != 1 || len(ta.bad) != 3 {
+		t.Fatalf("err %v, %d pairs, bad %q", err, ta.Len(), ta.bad)
+	}
+	for i, typ := range []string{"AAAA", "HTTPS", "SVCB"} {
+		if want := ":2: " + typ + " is always answered empty"; !strings.Contains(ta.bad[i], want) || !strings.HasSuffix(ta.bad[i], "this entry has no effect") {
+			t.Errorf("bad[%d] %q, want %q", i, ta.bad[i], want)
+		}
+	}
 	var none *typeAllow
 	if none.allows("x.example", dnsmessage.TypeTXT) {
 		t.Fatal("a nil table allowed a pair")

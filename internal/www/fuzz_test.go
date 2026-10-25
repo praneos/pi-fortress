@@ -94,7 +94,7 @@ func FuzzReadClaim(f *testing.F) {
 // FuzzRedeemClaimCode: the code comes from the URL of a LAN client. With
 // no claim issued, no code redeems, and no code makes a file anywhere.
 func FuzzRedeemClaimCode(f *testing.F) {
-	for _, s := range []string{"ABCDEF", "abcdef", " ABCDEF ", "../../x", "ABCDE/", "ABC\x00EF", "ÄBCDEF", ""} {
+	for _, s := range []string{"ABCDEFGH", "abcdefgh", " ABCDEFGH ", "ABCDEF", "../../x", "ABCDEFG/", "ABC\x00EFGH", "ÄBCDEFGH", ""} {
 		f.Add(s)
 	}
 	f.Fuzz(func(t *testing.T, code string) {

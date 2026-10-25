@@ -1,7 +1,9 @@
 package fetch
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -124,6 +126,28 @@ func TestFetchMockFeeds(t *testing.T) {
 	}
 }
 
+// Compile blocks an address on a domain feed as an address, so the name
+// sinkhole never answers it. Thus the sample is the first name, not an address.
+func TestSampleDomainIsAName(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "1.70.76.187\nbad.example\n")
+	}))
+	t.Cleanup(ts.Close)
+	dir := t.TempDir()
+	spec := fmt.Sprintf(`{"feeds": [{"id": "d", "kind": "domains", "format": "plain", "url": %q}]}`, ts.URL+"/domains")
+	if err := os.WriteFile(filepath.Join(dir, "sources.json"), []byte(spec), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "generated")
+	f := &Fetcher{PolicyDir: dir, OutDir: out, web: lab(ts)}
+	if report, _, _, err := f.Run(); err != nil {
+		t.Fatal(err, report)
+	}
+	if got := strings.TrimSpace(testsupport.ReadFile(t, filepath.Join(out, "sample.domain"))); got != "bad.example" {
+		t.Fatalf("sample.domain = %q", got)
+	}
+}
+
 func TestAllFeedsFailKeepsGenerated(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "sources.json"), []byte(`{"feeds":[{"id":"x","kind":"ips","format":"plain","url":"https://127.0.0.1:1/nope"},{"id":"y","kind":"domains","format":"plain","url":"https://127.0.0.1:1/nope"}]}`), 0644); err != nil {
@@ -210,6 +234,54 @@ func TestPublicAddr(t *testing.T) {
 		if got := publicAddr(netip.MustParseAddr(addr)); got != want {
 			t.Errorf("%s: got %v want %v", addr, got, want)
 		}
+	}
+}
+
+// A feed host can publish a ULA or a private address beside its public
+// ones. One such address failed the whole feed on each run. Now dial skips
+// it, and dials only an address that passed the check. The host fails
+// only when no address passes.
+func TestDialSkipsAnAddressThatIsNotPublic(t *testing.T) {
+	var answer []netip.Addr
+	var dialled []string
+	c := &client{
+		public: publicAddr,
+		lookup: func(context.Context, string) ([]netip.Addr, error) { return answer, nil },
+		dialTo: func(_ context.Context, _, addr string) (net.Conn, error) {
+			dialled = append(dialled, addr)
+			if addr != "9.9.9.9:443" {
+				return nil, fmt.Errorf("%s: refused", addr)
+			}
+			conn, peer := net.Pipe()
+			peer.Close()
+			return conn, nil
+		},
+	}
+	addrs := func(s ...string) []netip.Addr {
+		var out []netip.Addr
+		for _, a := range s {
+			out = append(out, netip.MustParseAddr(a))
+		}
+		return out
+	}
+
+	answer = addrs("fd00::1", "::ffff:10.0.0.1", "1.1.1.1", "192.168.1.1", "9.9.9.9")
+	conn, err := c.dial(context.Background(), "tcp", "feed.test:443")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	conn.Close()
+	if want := "1.1.1.1:443,9.9.9.9:443"; strings.Join(dialled, ",") != want {
+		t.Fatalf("dialled %q, want %q", dialled, want)
+	}
+
+	dialled = nil
+	answer = addrs("fd00::1", "10.0.0.1")
+	if _, err := c.dial(context.Background(), "tcp", "feed.test:443"); err == nil || err.Error() != "feed.test resolves to fd00::1: not public" {
+		t.Fatalf("dial: %v", err)
+	}
+	if len(dialled) != 0 {
+		t.Fatalf("dialled %q", dialled)
 	}
 }
 
@@ -498,6 +570,29 @@ func TestSourcesSchemaIsRefused(t *testing.T) {
 				t.Fatal("a refused sources.json still wrote generated files")
 			}
 		})
+	}
+}
+
+// A hosts file that a sources.json gives no format reads as plain. The
+// first field of each line is then the address, and the feed blocked
+// 0.0.0.0 in place of its names.
+func TestParsePlainKeepsTheNameAfterAnAddress(t *testing.T) {
+	got := ParsePlain("0.0.0.0 ads.example\n127.0.0.1 track.example extra.example\n:: six.example\n0.0.0.0 0.0.0.0\nplain.example\n", "domains")
+	if want := "ads.example,track.example,six.example,plain.example"; strings.Join(got, ",") != want {
+		t.Fatalf("got %q, want %q", strings.Join(got, ","), want)
+	}
+	if ips := ParsePlain("0.0.0.0 ads.example\n", "ips"); len(ips) != 0 {
+		t.Fatalf("ips feed took %q", ips)
+	}
+}
+
+// A plain line that is only an address stays an entry of a domains feed.
+// Where such an entry goes is a separate question. Only a sink address with
+// a name after it gives the name.
+func TestParsePlainKeepsALoneAddress(t *testing.T) {
+	got := ParsePlain("1.2.3.4\nevil.example\n0.0.0.0 ads.example\n0.0.0.0 0.0.0.0\n", "domains")
+	if want := "1.2.3.4,evil.example,ads.example"; strings.Join(got, ",") != want {
+		t.Fatalf("got %q, want %q", strings.Join(got, ","), want)
 	}
 }
 

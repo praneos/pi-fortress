@@ -1,9 +1,11 @@
 package secrets
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -155,5 +157,66 @@ func TestDeleteSlotLeavesNoQuarantineLineBehind(t *testing.T) {
 	}
 	if _, held := m[other]; !held {
 		t.Fatalf("the other slot's quarantine went with it: %v", m)
+	}
+}
+
+// The rewrite of a harvest reads the store again. When that read fails,
+// the harvest fails. It does not take the store as empty and write it
+// back with only the harvested row. A store with no file is empty.
+func TestHarvestReadErrorKeepsStore(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.env")
+	slot, other := "a1b2c3d4e5f67890", "b0b1b2b3b4b5b6b7"
+	before := EnvKey(slot, "CLAUDE_OAT") + "=sk-ant-oat01-old\n" + EnvKey(other, "GITHUB_TOKEN") + "=ghp_other\n"
+	if err := os.WriteFile(path, []byte(before), 0600); err != nil {
+		t.Fatal(err)
+	}
+	testHookRead = func(string) error { return syscall.EIO }
+	t.Cleanup(func() { testHookRead = nil })
+	st := Open(path)
+	if err := st.Harvest(slot, func(cur []Slot) ([]Slot, error) {
+		return []Slot{{ID: slot, Kind: "CLAUDE_OAT", Live: "sk-ant-oat01-new"}}, nil
+	}); !errors.Is(err, syscall.EIO) {
+		t.Fatalf("harvest error %v, want EIO", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != before {
+		t.Fatalf("store rewritten after a failed read: %q", raw)
+	}
+	testHookRead = nil
+
+	fresh := Open(filepath.Join(dir, "new.env"))
+	if err := fresh.writeUpdates(map[string]string{EnvKey(slot, "CLAUDE_OAT"): "sk-ant-oat01-new"}); err != nil {
+		t.Fatalf("a store with no file: %v", err)
+	}
+}
+
+// The store reads a slot with upper-case hex as the same slot. Thus a
+// harvest replaces that row. It does not add a second row for the slot,
+// and the old value does not stay in the file.
+func TestHarvestReplacesUpperCaseSlotRow(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "secrets.env")
+	slot := "a1b2c3d4e5f67890"
+	other := EnvKey("b0b1b2b3b4b5b6b7", "GITHUB_TOKEN") + "=ghp_other"
+	if err := os.WriteFile(path, []byte(strings.ToUpper(slot)+"_CLAUDE_OAT=sk-ant-oat01-old\n"+other+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	st := Open(path)
+	if err := st.Harvest(slot, func(cur []Slot) ([]Slot, error) {
+		return []Slot{{ID: slot, Kind: "CLAUDE_OAT", Live: "sk-ant-oat01-new"}}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := EnvKey(slot, "CLAUDE_OAT") + "=sk-ant-oat01-new\n" + other + "\n"
+	if string(raw) != want {
+		t.Fatalf("store %q, want %q", raw, want)
 	}
 }

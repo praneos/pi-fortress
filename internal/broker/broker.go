@@ -176,6 +176,11 @@ func (b *Broker) Handle(ctx context.Context, conn net.Conn) error {
 		_ = writeErr(conn, 502, "502 Bad Gateway", "preamble\n")
 		return err
 	}
+	// The engine refused this connection. It sends only the cause, for the
+	// row (engrefused.go). Nothing is dialed or served.
+	if p.Refused != "" {
+		return b.engineRefused(p)
+	}
 	// A fake address is in a reserved range that dest.Allowed denies. Thus
 	// the broker examines it before that check sees it. In dialName, the
 	// real addresses that its name resolves to must pass dest.Allowed.
