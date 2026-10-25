@@ -555,12 +555,22 @@ func TestSourcesSchemaIsRefused(t *testing.T) {
 // first field of each line is then the address, and the feed blocked
 // 0.0.0.0 in place of its names.
 func TestParsePlainKeepsTheNameAfterAnAddress(t *testing.T) {
-	got := ParsePlain("0.0.0.0 ads.example\n127.0.0.1 track.example extra.example\n:: six.example\n0.0.0.0\n0.0.0.0 0.0.0.0\n1.2.3.4 mapped.example\n1.2.3.4\nplain.example\n", "domains")
+	got := ParsePlain("0.0.0.0 ads.example\n127.0.0.1 track.example extra.example\n:: six.example\n0.0.0.0 0.0.0.0\nplain.example\n", "domains")
 	if want := "ads.example,track.example,six.example,plain.example"; strings.Join(got, ",") != want {
 		t.Fatalf("got %q, want %q", strings.Join(got, ","), want)
 	}
 	if ips := ParsePlain("0.0.0.0 ads.example\n", "ips"); len(ips) != 0 {
 		t.Fatalf("ips feed took %q", ips)
+	}
+}
+
+// A plain line that is only an address stays an entry of a domains feed.
+// Where such an entry goes is a separate question. Only a sink address with
+// a name after it gives the name.
+func TestParsePlainKeepsALoneAddress(t *testing.T) {
+	got := ParsePlain("1.2.3.4\nevil.example\n0.0.0.0 ads.example\n0.0.0.0 0.0.0.0\n", "domains")
+	if want := "1.2.3.4,evil.example,ads.example"; strings.Join(got, ",") != want {
+		t.Fatalf("got %q, want %q", strings.Join(got, ","), want)
 	}
 }
 

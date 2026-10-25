@@ -390,9 +390,11 @@ func parseToken(token, kind string) (string, bool) {
 //
 // A domains feed with no format key reads as plain. When that feed is a
 // hosts file, the first field is the address, and the feed blocked 0.0.0.0
-// in place of its names. So a line that starts with a sink address gives
-// the name after it, and an address is not a name, as in ParseHosts. A
-// line keeps one entry: a hosts feed with aliases needs format hosts.
+// in place of its names. So a line that starts with a sink address and has
+// a name after it gives the name, and an address is not a name, as in
+// ParseHosts. All other lines give the first field. A line that is only an
+// address stays an entry. A line keeps one entry: a hosts feed with aliases
+// needs format hosts.
 func ParsePlain(body, kind string) []string {
 	var out []string
 	for line := range strings.SplitSeq(body, "\n") {
@@ -401,20 +403,13 @@ func ParsePlain(body, kind string) []string {
 			continue
 		}
 		f := strings.Fields(tok)
-		if kind != "domains" {
-			if parsed, ok := parseToken(f[0], kind); ok {
+		if kind == "domains" && len(f) > 1 && sinkAddr(f[0]) {
+			if parsed, ok := hostName(f[1]); ok {
 				out = append(out, parsed)
 			}
 			continue
 		}
-		token := f[0]
-		if sinkAddr(token) {
-			if len(f) < 2 {
-				continue
-			}
-			token = f[1]
-		}
-		if parsed, ok := hostName(token); ok {
+		if parsed, ok := parseToken(f[0], kind); ok {
 			out = append(out, parsed)
 		}
 	}

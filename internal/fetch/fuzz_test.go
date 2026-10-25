@@ -11,8 +11,9 @@ import (
 // checkDomain fails when a domains feed gives an entry that is not one
 // canonical name of two or more labels. An empty entry, a bare label, a
 // wildcard, a root, an address or a local name would block much more
-// than one site.
-func checkDomain(t *testing.T, feed, d string) {
+// than one site. numericOK lets a plain line that is only an address stay
+// an entry.
+func checkDomain(t *testing.T, feed, d string, numericOK bool) {
 	t.Helper()
 	if got, ok := policycompile.ParseDomain(d); !ok || got != d {
 		t.Fatalf("%s: entry %q is not a canonical domain (%q, %v)", feed, d, got, ok)
@@ -23,7 +24,7 @@ func checkDomain(t *testing.T, feed, d string) {
 	if strings.HasSuffix(d, ".local") || strings.HasSuffix(d, ".localhost") {
 		t.Fatalf("%s: local name %q", feed, d)
 	}
-	if _, err := netip.ParseAddr(d); err == nil {
+	if _, err := netip.ParseAddr(d); err == nil && !numericOK {
 		t.Fatalf("%s: address %q read as a name", feed, d)
 	}
 }
@@ -68,7 +69,7 @@ func FuzzParseFeeds(f *testing.F) {
 	f.Fuzz(func(t *testing.T, body string) {
 		lines := strings.Count(body, "\n") + 1
 		for _, d := range ParseHosts(body) {
-			checkDomain(t, "hosts", d)
+			checkDomain(t, "hosts", d, false)
 		}
 		if n := len(ParseHosts(body)); n > len(strings.Fields(body)) {
 			t.Fatalf("hosts: %d entries from %d tokens", n, len(strings.Fields(body)))
@@ -78,7 +79,17 @@ func FuzzParseFeeds(f *testing.F) {
 			t.Fatalf("plain: %d entries from %d lines", len(plain), lines)
 		}
 		for _, d := range plain {
-			checkDomain(t, "plain", d)
+			checkDomain(t, "plain", d, true)
+		}
+		// A sink address with a field after it gives the name or nothing,
+		// never an address.
+		for line := range strings.SplitSeq(body, "\n") {
+			if f := strings.Fields(policycompile.StripLine(line)); len(f) < 2 || !sinkAddr(f[0]) {
+				continue
+			}
+			for _, d := range ParsePlain(line, "domains") {
+				checkDomain(t, "plain after a sink address", d, false)
+			}
 		}
 		ips := ParsePlain(body, "ips")
 		if len(ips) > lines {
