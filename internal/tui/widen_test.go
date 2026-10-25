@@ -8,7 +8,7 @@ import (
 
 // A save that opens the fence does not ask: the confirm set is for the
 // changes that cost the way in. But its message says the cost at the press,
-// at the start of the title bar, where an 80-column clip does not reach it.
+// at the start of the footer, where an 80-column clip does not reach it.
 func TestWideningSaveSaysItsCost(t *testing.T) {
 	for _, tc := range []struct {
 		name, keys, cost string
@@ -29,9 +29,10 @@ func TestWideningSaveSaysItsCost(t *testing.T) {
 				}
 			}
 			last := run(t, c, NewFake(80, 24).Type(tc.keys).Press(KeyEnter)).Last()
-			title, _, _ := strings.Cut(last, "\n")
-			if !strings.Contains(title, tc.cost) {
-				t.Fatalf("the save does not say %q at 80 columns:\n%s", tc.cost, title)
+			rows := strings.Split(strings.TrimRight(last, "\n"), "\n")
+			footer := rows[len(rows)-1]
+			if !strings.Contains(footer, tc.cost) {
+				t.Fatalf("the save does not say %q at 80 columns:\n%s", tc.cost, footer)
 			}
 		})
 	}
