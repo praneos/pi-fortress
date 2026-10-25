@@ -503,7 +503,7 @@ func rebootTests(t *testing.T) {
 	needReboot(t)
 	e := netenv(t)
 	reboot(t, "pi")
-	eventually(t, 3*time.Minute, func() string {
+	eventuallyEvery(t, 3*time.Minute, 2*time.Second, func() string {
 		if out, err := ssh(t, 60*time.Second, "pi", "sudo pf doctor"); err != nil {
 			return fmt.Sprintf("pf doctor: %v\n%s", err, out)
 		}
@@ -540,7 +540,7 @@ func rebootTests(t *testing.T) {
 		// and the ssh of this suite runs with no tty. Checked manually.
 		t.Log("pf unlock itself needs a terminal, so only the locked state is checked here")
 	})
-	eventually(t, 2*time.Minute, func() string {
+	eventuallyEvery(t, 2*time.Minute, 2*time.Second, func() string {
 		if code := httpCode(t, "https://"+e["ALLOW_DOMAIN"]); !curlOK(code) {
 			return "agent HTTPS after reboot: " + code
 		}
@@ -549,7 +549,7 @@ func rebootTests(t *testing.T) {
 	if target() != "cloudlab" || !sshHosts["house"] {
 		return
 	}
-	eventually(t, 2*time.Minute, func() string {
+	eventuallyEvery(t, 2*time.Minute, 2*time.Second, func() string {
 		if out, _ := ssh(t, 20*time.Second, "pi", "systemctl is-active pi-fortress-dns-house"); strings.TrimSpace(out) != "active" {
 			return "house DNS after reboot: " + out
 		}

@@ -83,8 +83,8 @@ main() {
   [[ "${EUID}" -eq 0 || -n "${PF_TEST_SKIP_ROOT:-}" ]] || fail "must run as root (sudo ... bash install.sh)"
 
   # --- arch --------------------------------------------------------------
-  # PF_TEST_UNAME_M overrides `uname -m`, as PF_TEST_MODEL of apply.sh
-  # replaces /proc/device-tree/model. Thus scripts/shell_test.sh tests the
+  # PF_TEST_UNAME_M overrides `uname -m`, as PF_TEST_MODEL below replaces
+  # /proc/device-tree/model. Thus scripts/shell_test.sh tests the
   # refusal paths below without a second architecture or OS
   # available.
   case "${PF_TEST_UNAME_M:-$(uname -m)}" in
@@ -96,7 +96,8 @@ main() {
   # --- OS ------------------------------------------------------------------
   # The /etc/os-release of Raspberry Pi OS is the same as that of Debian,
   # byte for byte. Thus arm64 also needs the device-tree model (the same
-  # check as pf_host_guard of vm/pi/apply.sh). amd64 uses only os-release.
+  # model check as pf_guard_target of vm/pi/lib/guard.sh). amd64 uses only
+  # os-release.
   # pf install (internal/install/target.go) makes exactly the same decision
   # again when it runs. Thus, if a bug here lets a box through, pf install
   # still refuses it before it downloads or writes anything.

@@ -6,6 +6,11 @@
 # their correct positions.
 set -euo pipefail
 
+# The scripts and libs under test refuse to run when the user is not root
+# on a gateway (lib/guard.sh). This harness runs them with stub tools and
+# temporary paths, so it lets them run. The guard cases below remove it.
+export PF_TEST_HARNESS=1
+
 here="$(cd "$(dirname "$0")" && pwd)"
 apply="${here}/apply.sh"
 golden="${here}/testdata/nft.no-house.golden"
@@ -1185,18 +1190,60 @@ grep -q 'SRC="\${SRC:-/vagrant}"' "${prov}" || fail "provision.sh lost the /vagr
   _bad "# no key" pi-fortress-release 'holds no key line'
 )
 # A bad PF_ALLOWED_SIGNERS stops provision before apt and before install.
-# The host guard passes with PF_LAB=1. The stubs leave a mark if reached.
+# The guard passes in this harness (PF_TEST_HARNESS=1). The stubs leave a
+# mark if reached.
 mkdir -p "${tmp}/sigbin"
 for _c in apt-get install; do
   printf '#!/bin/bash\ntouch "%s"\nexit 1\n' "${tmp}/sig.acted" >"${tmp}/sigbin/${_c}"
   chmod +x "${tmp}/sigbin/${_c}"
 done
 printf 'release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest\n' >"${tmp}/signers.bad"
-if PATH="${tmp}/sigbin:${PATH}" PF_LAB=1 PF_ALLOWED_SIGNERS="${tmp}/signers.bad" SRC="${here}/../.." bash "${prov}" >/dev/null 2>"${tmp}/sig.err"; then
+if PATH="${tmp}/sigbin:${PATH}" PF_ALLOWED_SIGNERS="${tmp}/signers.bad" SRC="${here}/../.." bash "${prov}" >/dev/null 2>"${tmp}/sig.err"; then
   fail "provision.sh accepted a PF_ALLOWED_SIGNERS line with no namespaces"
 fi
 grep -q 'has no namespaces= option' "${tmp}/sig.err" || fail "provision.sh signer refusal is unclear: $(cat "${tmp}/sig.err")"
 [[ ! -e "${tmp}/sig.acted" ]] || fail "provision.sh acted before it refused PF_ALLOWED_SIGNERS"
+
+# provision.sh gives pfship its key only with rsync 3.2.7 or later. The
+# rsync stub prints the version line; PATH holds only the stub.
+mkdir -p "${tmp}/rsyncbin"
+(
+  # shellcheck source=/dev/null
+  source <(sed -n '/^check_rsync() {$/,/^}$/p' "${prov}")
+  _rs() { # version-line want(ok|old|bad)
+    printf '#!/bin/bash\nprintf "%%s\\n" "%s" "" "Copyright (C) 1996-2025"\n' "$1" >"${tmp}/rsyncbin/rsync"
+    chmod +x "${tmp}/rsyncbin/rsync"
+    if PATH="${tmp}/rsyncbin" check_rsync 2>"${tmp}/rsync.err"; then
+      [[ "$2" == ok ]] || fail "check_rsync accepted '$1'"
+    else
+      [[ "$2" != ok ]] || fail "check_rsync refused '$1': $(cat "${tmp}/rsync.err")"
+      case "$2" in
+        old) grep -qF 'is older than 3.2.7' "${tmp}/rsync.err" || fail "check_rsync refusal of '$1' is unclear: $(cat "${tmp}/rsync.err")" ;;
+        bad) grep -qF 'cannot read the rsync version' "${tmp}/rsync.err" || fail "check_rsync refusal of '$1' is unclear: $(cat "${tmp}/rsync.err")" ;;
+      esac
+    fi
+  }
+  _rs 'rsync  version 3.2.7  protocol version 31' ok
+  _rs 'rsync  version 3.4.1  protocol version 32' ok
+  _rs 'rsync  version 3.10.0  protocol version 32' ok
+  _rs 'rsync  version 4.0.0pre1  protocol version 33' ok
+  _rs 'rsync  version v3.2.3  protocol version 31' old
+  _rs 'rsync  version 3.2.6  protocol version 31' old
+  _rs 'rsync  version 3.1.3  protocol version 31' old
+  _rs 'rsync  version 2.6.9  protocol version 29' old
+  _rs 'rsync: unknown option' bad
+  mv "${tmp}/rsyncbin/rsync" "${tmp}/rsync.off"
+  PATH="${tmp}/rsyncbin" check_rsync 2>"${tmp}/rsync.err" && fail "check_rsync accepted a box with no rsync"
+  grep -qF 'cannot read the rsync version' "${tmp}/rsync.err" || fail "check_rsync with no rsync is unclear: $(cat "${tmp}/rsync.err")"
+)
+# The check stands between the rrsync check and the key, and a refusal
+# empties a key from an earlier provision.
+_chk="$(grep -nx 'elif ! check_rsync; then' "${prov}" | head -1 | cut -d: -f1)"
+_key="$(grep -n "printf 'restrict,command=" "${prov}" | head -1 | cut -d: -f1)"
+[[ -n "${_chk}" && -n "${_key}" && "${_chk}" -lt "${_key}" ]] || fail "provision.sh does not check the rsync version before it writes the pfship key"
+sed -n "${_chk},${_key}p" "${prov}" | grep -qF 'install -m 0644 -o root -g root /dev/null "${PF_SHIP_HOME}/.ssh/authorized_keys"' ||
+  fail "provision.sh keeps an old pfship key when rsync is too old"
+grep -qF 'doc/rsync/scripts/rrsync' "${prov}" && fail "provision.sh still takes an rrsync from outside the rsync package"
 
 # A second provision keeps the lists of the operator. On a box with no
 # tree, /etc/pi-fortress is the policy. provision.sh seeds each list of
@@ -1213,42 +1260,140 @@ for _l in ${_owned}; do
   fi
 done
 
-# The two scripts refuse a host that is not a Pi, a lab VM or the appliance.
-# They name the host and the override, before they change anything. A fake
-# device-tree model acts as a desktop. apt-get and systemctl are stubs that
-# leave a mark. Thus a guard that lets this through fails here, and does
-# not act. The test skips this in a lab VM, where /vagrant allows it.
-if [[ ! -d /vagrant/vm/pi && ! -f /etc/pi-fortress/appliance.role ]]; then
-  printf 'Some Desktop\0' >"${tmp}/model"
-  mkdir -p "${tmp}/guardbin"
-  for _c in apt-get systemctl nft nmcli install; do
-    printf '#!/bin/bash\ntouch "%s"\nexit 1\n' "${tmp}/guard.acted" >"${tmp}/guardbin/${_c}"
-    chmod +x "${tmp}/guardbin/${_c}"
+# The guard (lib/guard.sh): apply.sh, provision.sh and each lib run only
+# as root on a gateway. They refuse before they change anything. Each stub
+# below leaves a mark and fails. Thus a guard that lets a run through
+# fails this test, and does not act. Each run here removes the harness
+# flag and PF_ALLOW_ANY_HOST.
+gbin="${tmp}/guardbin"
+mkdir -p "${gbin}" "${tmp}/gwork"
+for _c in apt-get systemctl nft nmcli install useradd groupadd usermod sysctl ip dnsmasq chown unattended-upgrade sshd ssh-keygen; do
+  printf '#!/bin/bash\ntouch "%s"\nexit 1\n' "${tmp}/guard.acted" >"${gbin}/${_c}"
+  chmod +x "${gbin}/${_c}"
+done
+# unguarded CMD...: CMD with no harness flag and the stubs first on PATH.
+# The guard then reads the real EUID and the real box.
+unguarded() {
+  env -u PF_TEST_HARNESS -u PF_ALLOW_ANY_HOST PATH="${gbin}:${PATH}" SRC="${here}/../.." "$@"
+}
+# as_root_on ROOT CMD...: the same, in the test mode of the guard. The
+# guard takes EUID 0 (PF_TEST_GUARD_EUID if the caller set it), and reads
+# the model, /vagrant and /etc/pi-fortress under ROOT. Only lib/guard.sh
+# reads these values, and only with PF_TEST_HARNESS=guard. Thus these
+# cases give the same result on each host, also as root.
+as_root_on() {
+  local _r="$1"
+  shift
+  unguarded PF_TEST_HARNESS=guard PF_TEST_GUARD_EUID="${PF_TEST_GUARD_EUID:-0}" PF_TEST_GUARD_ROOT="${_r}" "$@"
+}
+# srclib.sh LIB sources LIB as the shell of an operator does. Exit 0: the
+# source passed and LIB defined its functions. Exit 3: the source refused
+# before LIB defined a function.
+cat >"${tmp}/srclib.sh" <<'EOF'
+_own() { [[ "$(declare -F | grep -vx 'declare -f pf_guard_target')" != "${_before}" ]]; }
+_before="$(declare -F)"
+if source "$1"; then
+  _own && exit 0
+  exit 5
+fi
+_own && exit 4
+exit 3
+EOF
+libs=("${here}/lib/harden.sh" "${here}/lib/dhcp.sh" "${here}/lib/netman.sh")
+mkdir -p "${tmp}/gr-none" "${tmp}/gr-desk/proc/device-tree" "${tmp}/gr-pi/proc/device-tree" \
+  "${tmp}/gr-lab/vagrant/vm/pi" "${tmp}/gr-app/etc/pi-fortress" "${tmp}/gr-gw/etc/pi-fortress"
+printf 'Some Desktop\0' >"${tmp}/gr-desk/proc/device-tree/model"
+printf 'Raspberry Pi 5 Model B Rev 1.0\0' >"${tmp}/gr-pi/proc/device-tree/model"
+: >"${tmp}/gr-app/etc/pi-fortress/appliance.role"
+: >"${tmp}/gr-gw/etc/pi-fortress/gateway.role"
+
+# Root on a box with no sign of a gateway, and root on a desktop model:
+# each lib and script refuses, names the reason, and does not act.
+for _r in gr-none gr-desk; do
+  for _l in "${libs[@]}"; do
+    _rc=0
+    as_root_on "${tmp}/${_r}" bash "${tmp}/srclib.sh" "${_l}" >"${tmp}/guard.out" 2>&1 || _rc=$?
+    [[ "${_rc}" == 3 ]] || fail "lib/${_l##*/} as root on ${_r}: exit ${_rc}, not a refusal before its functions: $(cat "${tmp}/guard.out")"
+    grep -q "lib/${_l##*/} refuses to run on .*the box is not a gateway.*make apply-test" "${tmp}/guard.out" ||
+      fail "lib/${_l##*/} refusal on ${_r} is unclear: $(cat "${tmp}/guard.out")"
+    grep -q 'not root' "${tmp}/guard.out" && fail "lib/${_l##*/} as root on ${_r}: the refusal says not root"
   done
   for _s in "${prov}" "${apply}"; do
-    if PATH="${tmp}/guardbin:${PATH}" PF_TEST_MODEL="${tmp}/model" SRC="${here}/../.." bash "${_s}" >"${tmp}/guard.out" 2>&1; then
-      fail "${_s##*/} ran on a host whose model is 'Some Desktop'"
+    if as_root_on "${tmp}/${_r}" bash "${_s}" >"${tmp}/guard.out" 2>&1; then
+      fail "${_s##*/} ran as root on ${_r}"
     fi
-    grep -q "refuses to run on .*Some Desktop.*PF_ALLOW_ANY_HOST=1" "${tmp}/guard.out" ||
-      fail "${_s##*/} host refusal is unclear: $(cat "${tmp}/guard.out")"
-    [[ ! -e "${tmp}/guard.acted" ]] || fail "${_s##*/} acted before refusing the host"
+    grep -q "${_s##*/} refuses to run on .*the box is not a gateway.*PF_ALLOW_ANY_HOST=1.*make apply-test" "${tmp}/guard.out" ||
+      fail "${_s##*/} refusal on ${_r} is unclear: $(cat "${tmp}/guard.out")"
   done
-  # The Pi model passes the guard and stops at the root check. Thus run it
-  # only as a non-root user. As root, it would continue and act on this host.
-  if [[ "${EUID}" -ne 0 ]]; then
-    printf 'Raspberry Pi 5 Model B Rev 1.0\0' >"${tmp}/model"
-    PATH="${tmp}/guardbin:${PATH}" PF_TEST_MODEL="${tmp}/model" bash "${apply}" --local >"${tmp}/guard.out" 2>&1 || true
-    grep -q 'refuses to run on' "${tmp}/guard.out" && fail "apply.sh refused a Raspberry Pi model"
+done
+grep -q 'not a gateway (Some Desktop;' "${tmp}/guard.out" || fail "the refusal does not name the model: $(cat "${tmp}/guard.out")"
+[[ ! -e "${tmp}/guard.acted" ]] || fail "a guarded script acted as root off a gateway"
+
+# Each sign of a gateway alone lets root through: a Raspberry Pi model, a
+# lab checkout, the appliance role, the gateway role, PF_ALLOW_ANY_HOST=1.
+for _r in gr-pi gr-lab gr-app gr-gw; do
+  for _l in "${libs[@]}"; do
+    as_root_on "${tmp}/${_r}" bash "${tmp}/srclib.sh" "${_l}" >"${tmp}/guard.out" 2>&1 ||
+      fail "lib/${_l##*/} refused root on ${_r}: $(cat "${tmp}/guard.out")"
+  done
+done
+as_root_on "${tmp}/gr-none" PF_ALLOW_ANY_HOST=1 bash "${tmp}/srclib.sh" "${here}/lib/harden.sh" >"${tmp}/guard.out" 2>&1 ||
+  fail "PF_ALLOW_ANY_HOST=1 did not let root through: $(cat "${tmp}/guard.out")"
+# A gateway sign does not replace root.
+if PF_TEST_GUARD_EUID=1000 as_root_on "${tmp}/gr-pi" bash "${tmp}/srclib.sh" "${here}/lib/harden.sh" >"${tmp}/guard.out" 2>&1; then
+  fail "lib/harden.sh passed for EUID 1000 on a Pi"
+fi
+grep -q 'refuses to run on .*the user is not root (EUID 1000)\. ' "${tmp}/guard.out" ||
+  fail "the refusal for a user that is not root is unclear: $(cat "${tmp}/guard.out")"
+
+# --render-nft changes nothing, so it needs no flag and no root.
+( unset PF_TEST_HARNESS; render /nonexistent/house.env ) >"${tmp}/noflag.nft" 2>"${tmp}/noflag.err" ||
+  fail "--render-nft with no harness flag failed: $(cat "${tmp}/noflag.err")"
+cmp -s "${golden}" "${tmp}/noflag.nft" || fail "--render-nft with no harness flag differs from the golden file"
+
+# With no harness flag on this real box, as a user that is not root. This
+# is the mistake that the guard is for: a lib sourced in the shell of a
+# developer, then a call of a function that changes the box. As root, the
+# result depends on this box, so these cases skip.
+if [[ "${EUID}" -ne 0 ]]; then
+  _rc=0
+  unguarded HARDEN_SYSCTL_D="${tmp}/gwork" HARDEN_APT_D="${tmp}/gwork" HARDEN_WORK="${tmp}/gwork" \
+    bash -c 'source "$1"; harden_apt' _ "${here}/lib/harden.sh" >"${tmp}/guard.out" 2>&1 || _rc=$?
+  [[ "${_rc}" != 0 ]] || fail "source lib/harden.sh; harden_apt passed as a user that is not root"
+  grep -q 'lib/harden.sh refuses to run on .*the user is not root' "${tmp}/guard.out" ||
+    fail "lib/harden.sh refusal is unclear: $(cat "${tmp}/guard.out")"
+  grep -q 'harden_apt: command not found' "${tmp}/guard.out" ||
+    fail "harden_apt was defined after a refused source: $(cat "${tmp}/guard.out")"
+  for _l in "${libs[@]}"; do
+    _rc=0
+    unguarded bash "${tmp}/srclib.sh" "${_l}" >"${tmp}/guard.out" 2>&1 || _rc=$?
+    [[ "${_rc}" == 3 ]] || fail "lib/${_l##*/} with no flag: exit ${_rc}, not a refusal before its functions: $(cat "${tmp}/guard.out")"
+  done
+  for _s in "${prov}" "${apply}"; do
+    if unguarded bash "${_s}" --local >"${tmp}/guard.out" 2>&1; then
+      fail "${_s##*/} ran with no flag as a user that is not root"
+    fi
+    grep -q "${_s##*/} refuses to run on .*the user is not root" "${tmp}/guard.out" ||
+      fail "${_s##*/} refusal with no flag is unclear: $(cat "${tmp}/guard.out")"
+  done
+  # The lab-VM scripts outside vm/pi have their own short check.
+  unguarded bash "${here}/../agent/provision.sh" >"${tmp}/guard.out" 2>&1 && fail "vm/agent/provision.sh ran as a user that is not root"
+  grep -q 'provision.sh refuses to run on .*lab agent VM' "${tmp}/guard.out" ||
+    fail "vm/agent/provision.sh refusal is unclear: $(cat "${tmp}/guard.out")"
+  unguarded bash "${here}/../appliance/install.sh" fence >"${tmp}/guard.out" 2>&1 && fail "vm/appliance/install.sh ran as a user that is not root"
+  grep -q 'run as root' "${tmp}/guard.out" || fail "vm/appliance/install.sh refusal is unclear: $(cat "${tmp}/guard.out")"
+  # A sign of a gateway lets the guard pass. apply.sh then stops at its own
+  # root check, before the lock. Thus this runs only as a user that is
+  # not root: as root, apply would continue and act on this host.
+  for _r in gr-pi gr-gw; do
+    as_root_on "${tmp}/${_r}" bash "${apply}" --local >"${tmp}/guard.out" 2>&1 || true
+    grep -q 'refuses to run on' "${tmp}/guard.out" && fail "apply.sh refused root on ${_r}"
     grep -q 'apply must run as root' "${tmp}/guard.out" ||
-      fail "apply.sh on a Pi model did not reach its root check: $(cat "${tmp}/guard.out")"
-    # A non-Pi box that pf install made a gateway passes because of its role file.
-    printf 'Some Desktop\0' >"${tmp}/model"
-    : >"${tmp}/gateway.role"
-    PATH="${tmp}/guardbin:${PATH}" PF_TEST_MODEL="${tmp}/model" PF_TEST_GATEWAY_ROLE="${tmp}/gateway.role" bash "${apply}" --local >"${tmp}/guard.out" 2>&1 || true
-    grep -q 'refuses to run on' "${tmp}/guard.out" && fail "apply.sh refused a box with a gateway role"
-    grep -q 'apply must run as root' "${tmp}/guard.out" ||
-      fail "apply.sh with a gateway role did not reach its root check: $(cat "${tmp}/guard.out")"
-  fi
+      fail "apply.sh on ${_r} did not reach its root check: $(cat "${tmp}/guard.out")"
+  done
+  [[ ! -e "${tmp}/guard.acted" ]] || fail "a guarded script acted with no harness flag"
+else
+  echo "apply_test: guard cases with no harness flag skipped as root" >&2
 fi
 
 # apply sources the operator overlay after net.env, and nothing ships it.
@@ -1451,9 +1596,9 @@ grep -q '^SystemCallErrorNumber=' "${hunit}" &&
   fail "dns-house.service turns a filtered call into an errno; the siblings all kill"
 # dnsmasq is unprivileged from the first instruction. Thus it can no longer
 # open these two as root and give them to itself when it drops privilege.
-for _f in /var/lib/pi-fortress/house.leases /var/log/pi-fortress/dnsmasq-house-dhcp.log; do
-  grep -qF "chown pf-dhcp-house:root ${_f}" "${apply}" ||
-    fail "apply.sh does not give ${_f} to the pf-dhcp-house account"
+for _f in pf-leases:/var/lib/pi-fortress/house.leases root:/var/log/pi-fortress/dnsmasq-house-dhcp.log; do
+  grep -qF "chown pf-dhcp-house:${_f%%:*} ${_f#*:}" "${apply}" ||
+    fail "apply.sh does not give ${_f#*:} to pf-dhcp-house:${_f%%:*}"
 done
 grep -qF 'chown root:root /var/lib/pi-fortress/house.leases' "${apply}" &&
   fail "apply.sh still leaves the lease file root-owned; an unprivileged dnsmasq cannot write it"
@@ -1491,12 +1636,17 @@ grep -A12 '^/var/log/pi-fortress/dnsmasq-house-dhcp.log {' "${conf}" | grep -qx 
   || fail "logrotate.conf: dnsmasq-house-dhcp.log is not rotated, or not recreated with the owner it had"
 grep -A12 '^/var/log/pi-fortress/dnsmasq-house-dhcp.log {' "${conf}" | grep -qF 'kill -s USR2 pi-fortress-dns-house.service' \
   || fail "logrotate.conf: dnsmasq is not told to reopen its DHCP log"
-grep -A8 "^/var/log/pi-fortress/notice.jsonl {" "${conf}" | grep -q "create 0640 root pf-fortress" \
-  || fail "logrotate.conf: notice.jsonl is not rotated, or not recreated readable by pf alert"
+# observe (pf-observe) cannot make a file in /var/log/pi-fortress. Thus a
+# rotation makes its two logs as its own, readable by pf alert.
+for _l in observe.jsonl notice.jsonl; do
+  grep -A10 "^/var/log/pi-fortress/${_l} {" "${conf}" | grep -qx "    create 0640 pf-observe pf-fortress" \
+    || fail "logrotate.conf: ${_l} is not rotated, or not recreated as pf-observe:pf-fortress 0640"
+done
 grep -q '^for _f in .*/var/lib/pi-fortress/alert-notice.offset' "${apply}" \
   || fail "apply.sh does not make alert-notice.offset for pf-sidecar, which cannot create it"
-grep -q '^chown root:pf-fortress /var/log/pi-fortress/notice.jsonl' "${apply}" \
-  || fail "apply.sh does not hand notice.jsonl to the group pf alert reads it as"
+grep -qxF 'for _f in /var/log/pi-fortress/observe.jsonl /var/log/pi-fortress/notice.jsonl; do' "${apply}" \
+  && grep -qxF '  chown pf-observe:pf-fortress "${_f}"' "${apply}" \
+  || fail "apply.sh does not make observe.jsonl and notice.jsonl as pf-observe:pf-fortress"
 grep -q 'install -m 0644 "${PI_LIB}/logrotate.conf" /etc/pi-fortress/logrotate.conf' "${apply}" ||
   fail "apply.sh does not install logrotate.conf"
 if grep -vE '^[[:space:]]*#' "${apply}" | grep '/etc/logrotate.d' | grep -qv 'rm -f'; then
@@ -1640,6 +1790,7 @@ harden_run() {
     # shellcheck source=lib/harden.sh
     source "${here}/lib/harden.sh"
     HARDEN_SYSCTL_D="${hroot}/sysctl.d" HARDEN_APT_D="${hroot}/apt.conf.d" HARDEN_WORK="${hroot}/work"
+    HARDEN_OS_RELEASE="${hroot}/os-release"
     PATH="${hroot}/bin"
     if [[ "${1:-}" == uu ]]; then
       PATH="${PATH}:${hroot}/uubin"
@@ -1649,6 +1800,7 @@ harden_run() {
     harden_apt
   )
 }
+printf 'PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"\nID=debian\nVERSION_CODENAME=bookworm\n' >"${hroot}/os-release"
 harden_run uu 2>"${hroot}/err" || fail "the hardening steps failed: $(cat "${hroot}/err")"
 cp "${hroot}/sysctl.d/99-pi-fortress.conf" "${tmp}/sysctl.conf"
 for _l in kernel.kptr_restrict=2 kernel.yama.ptrace_scope=2 fs.protected_regular=2 net.ipv4.tcp_syncookies=1; do
@@ -1670,6 +1822,33 @@ harden_run uu 2>/dev/null
 # A box without the package: one warning, the files still written.
 harden_run 2>"${hroot}/err" || fail "the hardening failed without unattended-upgrades"
 grep -q 'unattended-upgrades is not installed' "${hroot}/err" || fail "no warning when unattended-upgrades is missing"
+# The origins follow the OS. Debian and Raspberry Pi OS (ID=debian) keep
+# the Debian and Raspberry Pi lines, the same bytes as before.
+_uu="${hroot}/apt.conf.d/52-pi-fortress-upgrades"
+cp "${_uu}" "${tmp}/uu.debian"
+for _l in '"origin=Debian,codename=${distro_codename},label=Debian-Security";' \
+  '"origin=Debian,codename=${distro_codename}-security,label=Debian-Security";' \
+  '"origin=Raspberry Pi Foundation,codename=${distro_codename}";' \
+  'Unattended-Upgrade::Remove-Unused-Dependencies "true";' 'Unattended-Upgrade::Automatic-Reboot "false";'; do
+  grep -qxF "  ${_l}" "${_uu}" || grep -qxF "${_l}" "${_uu}" || fail "52-pi-fortress-upgrades on Debian lacks ${_l}"
+done
+grep -q 'Ubuntu' "${_uu}" && fail "52-pi-fortress-upgrades on Debian names an Ubuntu origin"
+# Ubuntu: its security pocket and the ESM security pockets, no Debian line.
+printf 'NAME="Ubuntu"\nID=ubuntu\nID_LIKE=debian\nVERSION_ID="24.04"\n' >"${hroot}/os-release"
+harden_run uu 2>"${hroot}/err" || fail "the hardening failed on Ubuntu: $(cat "${hroot}/err")"
+for _l in '"origin=Ubuntu,archive=${distro_codename}-security";' \
+  '"origin=UbuntuESMApps,archive=${distro_codename}-apps-security";' \
+  '"origin=UbuntuESM,archive=${distro_codename}-infra-security";' 'Unattended-Upgrade::Automatic-Reboot "false";'; do
+  grep -qF "${_l}" "${_uu}" || fail "52-pi-fortress-upgrades on Ubuntu lacks ${_l}"
+done
+grep -qE 'origin=(Debian|Raspberry)' "${_uu}" && fail "52-pi-fortress-upgrades on Ubuntu keeps a Debian origin"
+# A quoted ID, or no os-release at all: quotes do not count; no file is Debian.
+printf 'ID="ubuntu"\n' >"${hroot}/os-release"
+harden_run uu 2>/dev/null
+grep -qF '"origin=Ubuntu,archive=${distro_codename}-security";' "${_uu}" || fail "a quoted ID=\"ubuntu\" did not give the Ubuntu origins"
+mv "${hroot}/os-release" "${hroot}/os-release.off"
+harden_run uu 2>/dev/null || fail "the hardening failed with no os-release"
+cmp -s "${_uu}" "${tmp}/uu.debian" || fail "with no os-release, 52-pi-fortress-upgrades is not the Debian file"
 # Only on a full apply, after the --local exit, and from provision.sh.
 _local_exit="$(grep -n '^if \[\[ "${LOCAL_ONLY}" -eq 1 \]\]; then$' "${apply}" | tail -1 | cut -d: -f1)"
 for _f in harden_sysctl_write harden_sysctl_load harden_apt; do
@@ -1819,6 +1998,26 @@ mv "${hroot}/sshd.bad" "${hroot}/sshd.ok"
 ssh_run
 grep -qx 'PasswordAuthentication no' "${hconf}" || fail "harden_ssh did not write the key-only drop-in"
 grep -qx 'KbdInteractiveAuthentication no' "${hconf}" || fail "the key-only drop-in leaves keyboard-interactive on"
+for _l in 'MaxAuthTries 5' 'LoginGraceTime 30' 'MaxStartups 10:30:60' 'AllowTcpForwarding local' \
+  'AllowAgentForwarding no' 'AllowStreamLocalForwarding no' 'X11Forwarding no' 'PermitTunnel no' \
+  'GatewayPorts no' 'PermitUserEnvironment no' 'Compression no' 'ClientAliveInterval 120' 'ClientAliveCountMax 3'; do
+  grep -qxF "${_l}" "${hconf}" || fail "the sshd drop-in lacks ${_l}"
+done
+# ssh -J (ProxyJump) through the Pi is local TCP forwarding. These lines
+# would stop it.
+grep -qiE '^(AllowTcpForwarding (no|remote)|DisableForwarding yes)' "${hconf}" &&
+  fail "the sshd drop-in stops TCP forwarding; ssh -J through the Pi needs it"
+_n="$(grep -c . "${hconf}")"
+[[ "$(cut -d' ' -f1 "${hconf}" | sort -fu | wc -l)" == "${_n}" ]] || fail "the sshd drop-in sets one keyword two times"
+# With a real sshd on the host, it must accept the drop-in as the stock
+# sshd_config of Debian includes it: first, before the stock values.
+if _sshd="$(type -P sshd)" && _kg="$(type -P ssh-keygen)"; then
+  "${_kg}" -q -t ed25519 -N '' -f "${hroot}/hostkey"
+  printf 'Include %s\nKbdInteractiveAuthentication no\nUsePAM yes\nX11Forwarding yes\nHostKey %s\n' "${hconf}" "${hroot}/hostkey" >"${hroot}/sshd_main"
+  "${_sshd}" -t -f "${hroot}/sshd_main" 2>"${hroot}/sshd_t.err" || fail "sshd -t refuses the drop-in: $(cat "${hroot}/sshd_t.err")"
+  _eff="$("${_sshd}" -T -f "${hroot}/sshd_main" 2>/dev/null || true)"
+  grep -qx 'x11forwarding no' <<<"${_eff}" || fail "the drop-in does not win over the stock X11Forwarding yes"
+fi
 grep -q 'login keys for: op' "${hroot}/ssh.out" || fail "harden_ssh did not name the users with a key"
 [[ "$(grep -c '^reload ssh' "${hroot}/systemctl.log")" == 1 ]] || fail "harden_ssh did not reload sshd once"
 ssh_run
@@ -2227,8 +2426,12 @@ grep -q 'desk' "${droot}/systemctl.log" && fail "systemctl was asked about the d
 for _f in "${droot}/lib/dhcp-iot.leases" "${droot}/log/dhcp-iot.log"; do
   [[ "$(stat -c %a "${_f}")" == 640 ]] || fail "${_f##*/} is not 0640"
 done
-grep -qxF "pf-dhcp-iot:root ${droot}/lib/dhcp-iot.leases ${droot}/log/dhcp-iot.log" "${droot}/chown.log" ||
-  fail "the lease file and the log are not given to the pf-dhcp-iot account: $(cat "${droot}/chown.log")"
+# The lease file has the group pf-leases, which observe reads it through.
+# The log does not.
+grep -qxF "pf-dhcp-iot:pf-leases ${droot}/lib/dhcp-iot.leases" "${droot}/chown.log" ||
+  fail "the lease file is not given to pf-dhcp-iot:pf-leases: $(cat "${droot}/chown.log")"
+grep -qxF "pf-dhcp-iot:root ${droot}/log/dhcp-iot.log" "${droot}/chown.log" ||
+  fail "the log is not given to the pf-dhcp-iot account: $(cat "${droot}/chown.log")"
 grep -q 'dnsmasq' "${droot}/chown.log" && fail "a segment file is given to the shared dnsmasq account: $(cat "${droot}/chown.log")"
 [[ "$(grep -c ' pf-dhcp-iot$' "${droot}/useradd.log")" -eq 1 ]] ||
   fail "seg_dhcp_sync did not make the pf-dhcp-iot account: $(cat "${droot}/useradd.log")"
@@ -2728,6 +2931,42 @@ EOF
     fail "the carry re-added a compiled set, putting back what compile just took out"
   grep -q 'resolved addresses carried across the reload' "${lab2}.log" ||
     fail "apply --local said nothing about the addresses it carried"
+  # The DNS policy of each resolved set. The first apply has no state, so
+  # it flushes resolved_v4, while pf dns is stopped. A second apply with the
+  # same policy keeps the set. A changed key rule (below) flushes it again.
+  grep -qx 'stdin: flush set inet fortress resolved_v4' "${lab2}.nft" ||
+    fail "the first apply did not flush resolved_v4 for a DNS policy it had no state for"
+  grep -q 'the DNS policy of resolved_v4 changed' "${lab2}.log" ||
+    fail "apply --local did not say that it flushed resolved_v4"
+  _dstop="$(grep -n '^stop pi-fortress-dns-agent-go.service$' "${lab2}.systemctl" | head -1 | cut -d: -f1 || true)"
+  _dstart="$(grep -n '^restart pi-fortress-dns-agent-go.service$' "${lab2}.systemctl" | head -1 | cut -d: -f1 || true)"
+  [[ -n "${_dstop}" && -n "${_dstart}" && "${_dstop}" -lt "${_dstart}" ]] ||
+    fail "apply does not stop pf dns before the policy flush and start it after"
+  local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
+  grep -q '^stdin: flush set' "${lab2}.nft" &&
+    fail "an apply with the same DNS policy flushed a resolved set: $(grep '^stdin: flush' "${lab2}.nft")"
+  # A feed-only change: the compiled blocked-domains.conf changes, and no
+  # file of the operator does. The nightly refresh must not flush the sets.
+  _feedlist="${lab2}/vagrant/vm/policy/generated/blacklist.domains"
+  cp "${_feedlist}" "${tmp}/feed.seed"
+  echo 'feed-only-change.example' >>"${_feedlist}"
+  local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
+  grep -qF 'feed-only-change.example' "${lab2}/etc/pi-fortress/blocked-domains.conf" ||
+    fail "the feed change did not reach blocked-domains.conf; the next check proves nothing"
+  grep -q '^stdin: flush set' "${lab2}.nft" &&
+    fail "a feed-only change flushed a resolved set: $(grep '^stdin: flush' "${lab2}.nft")"
+  cp "${tmp}/feed.seed" "${_feedlist}"
+  # A name in the block list of the operator is operator policy: it
+  # flushes. (This run is not paranoid, so pf dns does not read
+  # allow.domains. The Go tests of pf nftsets policy cover the allowlist.)
+  _oplist="${lab2}/vagrant/vm/policy/blacklist.domains"
+  cp "${_oplist}" "${tmp}/oplist.seed"
+  echo 'operator-change.example' >>"${_oplist}"
+  local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
+  grep -qx 'stdin: flush set inet fortress resolved_v4' "${lab2}.nft" ||
+    fail "a change to the operator blacklist.domains did not flush resolved_v4"
+  cp "${tmp}/oplist.seed" "${_oplist}"
+  local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
 
   # core.hosts.local: the shipped seed has only comments and adds nothing
   # (the cmp above). With lines in it, the installed core.hosts is the
@@ -2780,6 +3019,8 @@ EOF
     if [[ "${_run}" -eq 1 ]]; then
       grep -q 'restart pi-fortress-broker.service' "${lab2}.systemctl" ||
         fail "a new key_prefixes.rules.local rule did not restart the fence"
+      grep -qx 'stdin: flush set inet fortress resolved_v4' "${lab2}.nft" ||
+        fail "a new key_prefixes.rules.local rule did not flush resolved_v4"
     fi
   done
   grep -q 'restart pi-fortress-broker.service' "${lab2}.systemctl" &&
@@ -3032,6 +3273,62 @@ grep -qF 'install -d -m 2770 -o root -g pf-fortress "${WWW}/claims-redeemed"' "$
   fail "observe.service must write only its state directory and the logs"
 [[ "$(grep '^ReadWritePaths=' "${here}/alert.service")" == "ReadWritePaths=-/var/lib/pi-fortress/alert.offset -/var/lib/pi-fortress/alert-notice.offset -/var/lib/pi-fortress/alert.last" ]] ||
   fail "alert.service must write only its three state files"
+# observe runs as its own account, with NET_ADMIN only (the conntrack
+# dump). It reads the leases through pf-leases, not through a DAC
+# capability.
+for _l in User=pf-observe Group=pf-fortress 'SupplementaryGroups=systemd-journal pf-leases' \
+  CapabilityBoundingSet=CAP_NET_ADMIN AmbientCapabilities=CAP_NET_ADMIN; do
+  grep -qxF "${_l}" "${here}/observe.service" || fail "observe.service has no '${_l}'"
+done
+grep -q '^\(CapabilityBoundingSet\|AmbientCapabilities\)=.*DAC_' "${here}/observe.service" &&
+  fail "observe.service has a DAC capability"
+grep -qxF '    useradd --system --no-create-home --gid pf-fortress --home /nonexistent --shell /usr/sbin/nologin pf-observe' "${apply}" ||
+  fail "apply.sh does not make the pf-observe account"
+grep -qxF '  getent group pf-leases >/dev/null || groupadd --system pf-leases' "${apply}" ||
+  fail "apply.sh does not make the pf-leases group"
+grep -qxF '  usermod -aG pf-leases pf-observe' "${apply}" || fail "pf-observe is not in pf-leases"
+# lib/dhcp.sh uses the group, so apply makes it before the DHCP sync.
+_mk="$(grep -nF 'groupadd --system pf-leases' "${apply}" | head -1 | cut -d: -f1 || true)"
+_use="$(grep -nxF 'seg_dhcp_sync || exit 1' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_use}" && "${_mk}" -lt "${_use}" ]] ||
+  fail "apply does not make pf-leases before the DHCP sync gives it the lease files"
+# apply gives the state directory and the old flock file to pf-observe
+# before it starts observe. It never follows a symlink in that directory,
+# because pf-observe can write there.
+_mk="$(grep -nxF 'chown pf-observe:pf-fortress "${OBSERVE_STATE}"' "${apply}" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nF 'systemctl restart pi-fortress-observe.service' "${apply}" | tail -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "apply does not give the observe state directory to pf-observe before it starts observe"
+# An observe from before (root, no DAC_OVERRIDE) stops before its logs
+# change owner, so its last write does not fail.
+_stop="$(grep -nxF "  ! grep -qx 'User=pf-observe' /etc/systemd/system/pi-fortress-observe.service; then" "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_stop}" && -n "${_mk}" && "${_stop}" -lt "${_mk}" ]] ||
+  fail "apply does not stop an observe from before before it gives the logs to pf-observe"
+(
+  ob="${tmp}/obsown"
+  mkdir -p "${ob}/observe" "${ob}/log"
+  # shellcheck disable=SC2329 # the eval of the apply step below calls it
+  chown() { printf '%s\n' "$*" >>"${ob}/chown.log"; }
+  _own="$(sed -n '/^chown pf-observe:pf-fortress "${OBSERVE_STATE}"$/,/^done$/p' "${apply}" | sed "s#/var/log/pi-fortress#${ob}/log#g")"
+  [[ -n "${_own}" ]] || fail "the observe ownership step is gone from apply.sh"
+  OBSERVE_STATE="${ob}/observe"
+  : >"${ob}/target"
+  ln -s "${ob}/target" "${ob}/observe/observe.json.lock"
+  eval "${_own}"
+  grep -q 'observe.json.lock' "${ob}/chown.log" && fail "apply gave a symlinked flock file to pf-observe"
+  grep -qxF "pf-observe:pf-fortress ${ob}/observe" "${ob}/chown.log" || fail "apply did not give the state directory to pf-observe"
+  for _l in observe.jsonl notice.jsonl; do
+    [[ -f "${ob}/log/${_l}" ]] || fail "apply did not make ${_l}"
+    [[ "$(stat -c %a "${ob}/log/${_l}")" == 640 ]] || fail "${_l} is not 0640"
+    grep -qxF "pf-observe:pf-fortress ${ob}/log/${_l}" "${ob}/chown.log" || fail "apply did not give ${_l} to pf-observe"
+  done
+  : >"${ob}/chown.log"
+  mv "${ob}/observe/observe.json.lock" "${ob}/observe/old.link"
+  : >"${ob}/observe/observe.json.lock"
+  eval "${_own}"
+  grep -qxF -- "-h pf-observe:pf-fortress ${ob}/observe/observe.json.lock" "${ob}/chown.log" ||
+    fail "apply did not give the old flock file to pf-observe with chown -h"
+)
 # The units name the paths that the daemons use.
 grep -qF 'const StateDir = "/var/lib/pi-fortress/observe"' "${here}/../../internal/observe/observe.go" ||
   fail "pf observe keeps its state outside the directory that observe.service can write"

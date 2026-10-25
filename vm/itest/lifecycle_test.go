@@ -162,8 +162,9 @@ func signBundle(t *testing.T, release, bundle string) {
 }
 
 // piApply is pi for a command that runs pf apply, sometimes two times. An
-// install whose doctor fails waits for the 90 s settle window, then does a
-// rollback and applies again, much longer than the 45 s of pi.
+// install whose doctor fails waits for the settle window (90 s by
+// default), then does a rollback and applies again, much longer than the
+// 45 s of pi.
 func piApply(t *testing.T, cmd string) string {
 	t.Helper()
 	out, err := ssh(t, 8*time.Minute, "pi", cmd)
@@ -330,7 +331,11 @@ func lifecycleTests(t *testing.T) {
 		before := shipVersion(t)
 		b := buildBrokenBundle(t, arch)
 		signBundle(t, release, b)
-		out := shipInstall(t, b, "")
+		// The unit does not exist, so the doctor cannot pass in any
+		// window. A 10 s window gives the same result as 90 s, but
+		// sooner. The good builds keep the 90 s default, so a slow
+		// unit start does not roll them back.
+		out := shipInstall(t, b, "-post-upgrade-settle 10s")
 		after := shipVersion(t)
 		if after != before {
 			t.Fatalf("a build that breaks DNS raised the version instead of reverting:\n%s", out)
@@ -344,7 +349,10 @@ func lifecycleTests(t *testing.T) {
 		before := shipVersion(t)
 		b := buildBundle(t, arch)
 		signBundle(t, release, b)
-		shipInstall(t, b, "-confirm-deadline 60s")
+		shipInstall(t, b, "-confirm-deadline 15s")
+		// The install arms the deadline before it returns. Thus at this
+		// time plus 15 s, the deadline is past. The 2 s more are margin.
+		due := time.Now().Add(17 * time.Second)
 		after := shipVersion(t)
 		if after == before {
 			t.Fatalf("ship did not raise the version")
@@ -356,7 +364,9 @@ func lifecycleTests(t *testing.T) {
 		// exactly one of them act. The other finds the lock held, and leaves
 		// ship.pending to the run that holds the lock. That run clears it
 		// only after its re-apply is done. Thus the test waits for the end state.
-		time.Sleep(70 * time.Second)
+		// A deadman run before the deadline does nothing. Then the timer
+		// of the box reverts in the next minute, inside the wait below.
+		time.Sleep(time.Until(due))
 		piApply(t, "sudo pf ship deadman")
 		eventually(t, 3*time.Minute, func() string {
 			if got := shipVersion(t); got != before {

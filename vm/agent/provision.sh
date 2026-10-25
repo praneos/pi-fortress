@@ -1,6 +1,14 @@
 #!/bin/bash
 set -euo pipefail
 
+# The Vagrant provisioner of a lab agent VM. It installs packages and
+# writes /etc. Thus it runs only as root in a lab VM, where the agent
+# scripts are at /vagrant/vm/agent. On a desktop, it stops here.
+if [[ "${EUID}" -ne 0 || ! -d /vagrant/vm/agent ]]; then
+  echo "pi-fortress: vm/agent/provision.sh refuses to run on ${HOSTNAME:-this host}: it runs only as root in a lab agent VM (/vagrant/vm/agent). It installs packages and writes /etc." >&2
+  exit 1
+fi
+
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update

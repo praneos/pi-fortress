@@ -63,32 +63,30 @@ case "${_mode}" in
   --render-nft) RENDER=1 ;;
 esac
 
-# Run only on a box that is a gateway: a Raspberry Pi, a lab VM (the
-# Vagrant and cloud-lab boxes have the checkout at /vagrant), the
-# appliance (install.sh writes appliance.role), or a box that pf install made a
-# gateway (gateway.role, written after the operator chose it). All other boxes
-# are a desktop where someone ran this by mistake. The code below rewrites
-# its firewall, network profiles and services. --render-nft changes
-# nothing and needs neither this check nor root. PF_TEST_MODEL is the
-# apply_test stand-in for the device-tree file.
-pf_host_guard() {
-  local model_file="${PF_TEST_MODEL:-/proc/device-tree/model}" model=""
-  local role="${PF_TEST_GATEWAY_ROLE:-/etc/pi-fortress/gateway.role}"
-  if [[ "${PF_ALLOW_ANY_HOST:-}" == 1 ]]; then
-    return 0
-  fi
-  model="$(tr -d '\0' 2>/dev/null <"${model_file}" || true)"
-  if [[ "${model}" == *"Raspberry Pi"* || -d /vagrant/vm/pi || -f /etc/pi-fortress/appliance.role || -f "${role}" ]]; then
-    return 0
-  fi
-  echo "pi-fortress: $(basename "$0") refuses to run on ${HOSTNAME:-this host} (${model:-no Raspberry Pi model in ${model_file}}; no /vagrant lab checkout; no appliance or gateway role). It rewrites the firewall, the network and system services. PF_ALLOW_ANY_HOST=1 runs it anyway." >&2
-  exit 1
-}
-
+# Run only as root on a box that is a gateway: a Raspberry Pi, a lab VM,
+# the appliance, or a box that pf install made a gateway. lib/guard.sh has
+# the rule. All other boxes are a desktop where someone ran this by
+# mistake. The code below rewrites its firewall, network profiles and
+# services. --render-nft changes nothing and needs neither this check nor
+# root. The Vagrant provisioner runs a copy of this file from /tmp. Thus
+# the guard is looked for in the same lib directories as the libs below.
 LOCK_DIR=/run/pi-fortress
 LOCK_FILE="${LOCK_DIR}/apply.lock"
 if [[ "${RENDER}" -eq 0 ]]; then
-  pf_host_guard
+  _guard=""
+  for _d in "$(dirname "$(readlink -f "$0")")/lib" "${PF_PI_LIB:-/nonexistent}/lib" /vagrant/vm/pi/lib /usr/local/lib/pi-fortress/lib; do
+    if [[ -f "${_d}/guard.sh" ]]; then
+      _guard="${_d}/guard.sh"
+      break
+    fi
+  done
+  if [[ -z "${_guard}" ]]; then
+    echo "pi-fortress: lib/guard.sh not found next to apply.sh, under PF_PI_LIB, /vagrant/vm/pi or /usr/local/lib/pi-fortress; nothing was changed" >&2
+    exit 1
+  fi
+  # shellcheck source=lib/guard.sh
+  source "${_guard}"
+  pf_guard_target apply.sh || exit 1
   if [[ "${EUID}" -ne 0 ]]; then
     echo "pi-fortress: apply must run as root" >&2
     exit 1
@@ -311,12 +309,17 @@ if [[ -z "${LIB_DIR}" ]]; then
   echo "pi-fortress: lib/ not found next to apply.sh, under PF_PI_LIB, /vagrant/vm/pi or ${PI_LIB}" >&2
   exit 1
 fi
-# shellcheck source=lib/netman.sh
-source "${LIB_DIR}/netman.sh"
-# shellcheck source=lib/dhcp.sh
-source "${LIB_DIR}/dhcp.sh"
-# shellcheck source=lib/harden.sh
-source "${LIB_DIR}/harden.sh"
+# Each lib stops a caller that is not root on a gateway (lib/guard.sh).
+# --render-nft uses none of their functions and runs with no root, so it
+# does not source them.
+if [[ "${RENDER}" -eq 0 ]]; then
+  # shellcheck source=lib/netman.sh
+  source "${LIB_DIR}/netman.sh"
+  # shellcheck source=lib/dhcp.sh
+  source "${LIB_DIR}/dhcp.sh"
+  # shellcheck source=lib/harden.sh
+  source "${LIB_DIR}/harden.sh"
+fi
 # The location where seg_dhcp_sync (lib/dhcp.sh) keeps the dnsmasq conf,
 # leases, log and unit of each segment. They are here, not in the lib, so
 # that this file names all that apply writes.
@@ -481,6 +484,17 @@ else
   usermod -aG pf-fakeip pf-broker
   usermod -aG pf-fence pf-broker
   usermod -aG pf-fence pf-engine
+  # pf-observe: pf observe run. It reads the logs of the other daemons
+  # through pf-fortress, and owns only its state and its two logs.
+  if ! id -u pf-observe >/dev/null 2>&1; then
+    useradd --system --no-create-home --gid pf-fortress --home /nonexistent --shell /usr/sbin/nologin pf-observe
+  fi
+  # pf-leases: observe only. It is the group of the DHCP lease files
+  # (house.leases here, dhcp-<name>.leases in lib/dhcp.sh), for the client
+  # names. Not pf-fortress: the leases have the MAC and the name of each
+  # client, and the other daemons do not read them.
+  getent group pf-leases >/dev/null || groupadd --system pf-leases
+  usermod -aG pf-leases pf-observe
   chown root:pf-fence "${LOCK_DIR}"
   chmod 0750 "${LOCK_DIR}"
   install -d -m 0755 /etc/tmpfiles.d
@@ -682,7 +696,9 @@ done
 # existed. A warm cache is never a reason to leave the fence
 # half-loaded.
 RESOLVED_CARRY="${WORKDIR}/resolved-sets.carry"
-if nft list table inet fortress >/dev/null 2>&1; then
+# -t: the probe needs only to know that the table exists. Without it, nft
+# also prints each element of each set, blacklist_v4 included.
+if nft -t list table inet fortress >/dev/null 2>&1; then
   "${PF}" nftsets save --table "inet fortress" --file "${RESOLVED_CARRY}" ||
     echo "pi-fortress: could not read the resolved-address sets; they come back empty and a client that answers from its own DNS cache waits out that cache before the gate lets it through again" >&2
 fi
@@ -1188,7 +1204,8 @@ fence_state_record() {
   done
 }
 
-# The logs are group-readable only. pf observe reads them as root.
+# The logs are group-readable only. pf observe (pf-observe) reads them
+# through the group pf-fortress.
 # The query log was dnsmasq.log while dnsmasq wrote it. Now pf dns writes
 # it and it has rows, so its name tells what it holds. The rename must
 # also move the offset sidecar: pf observe holds a byte count into the
@@ -1795,6 +1812,23 @@ if [[ -n "${HOUSE_IF}" ]]; then
 fi
 systemctl daemon-reload
 systemctl enable pi-fortress-dns-agent-go.service >/dev/null 2>&1 || true
+# An element of a resolved set does not name the DNS name that gave it.
+# Thus, when the DNS policy of the operator changes (an operator block
+# list, an allowlist, PARANOID, a key rule), apply cannot remove only the
+# addresses of the names that the new policy blocks. pf nftsets policy
+# flushes each set whose policy fingerprint changed since the last apply
+# (RESOLVED_POLICY_STATE), and keeps the other sets. It runs while pf dns
+# is stopped: the old pf dns adds no more addresses after the flush, and
+# the new pf dns adds only addresses under the new policy. A client that
+# answers from its own DNS cache waits out that cache, the same as after a
+# reboot. With no state file (the first apply), each set counts as changed.
+# The feeds are not in the fingerprint. Thus the nightly feed refresh does
+# not flush, and a name that a feed adds keeps the addresses that it
+# already has in a set until they expire (2h).
+RESOLVED_POLICY_STATE=/var/lib/pi-fortress/resolved-policy.state
+systemctl stop pi-fortress-dns-agent-go.service >/dev/null 2>&1 || true
+"${PF}" nftsets policy --table "inet fortress" --config /etc/pi-fortress/dns.json --policy "${POLICY}" --state "${RESOLVED_POLICY_STATE}" ||
+  echo "pi-fortress: could not compare the DNS policy of the resolved-address sets; a name that this apply blocks can keep its addresses in the set until they expire (2h)" >&2
 systemctl restart pi-fortress-dns-agent-go.service
 
 # House WireGuard egress. Nested on HOUSE_IF so that
@@ -1898,8 +1932,11 @@ if [[ -n "${HOUSE_IF}" ]]; then
   chmod 0644 /etc/pi-fortress/house.hosts
   # dnsmasq no longer starts as root. Thus it cannot open these two files
   # as root and give them to itself when it drops privilege: systemd starts
-  # it as pf-dhcp-house, and the files must already be its own. Group root,
-  # not nogroup -- the group of the daemon owns nothing on this box. The
+  # it as pf-dhcp-house, and the files must already be its own. Not
+  # nogroup -- the group of the daemon owns nothing on this box. The lease
+  # file has the group pf-leases, so that observe (pf-observe) can read
+  # the client names. dnsmasq writes the file in place, so the group stays.
+  # The log has the group root. The
   # chown is also the upgrade: a box installed before this unit dropped its
   # privilege has a root:root lease file, and an older box has files of
   # the shared dnsmasq account. dnsmasq would fail to open the lease file
@@ -1907,7 +1944,7 @@ if [[ -n "${HOUSE_IF}" ]]; then
   # instance has its own account (dhcp_account, lib/dhcp.sh).
   dhcp_account house
   touch /var/lib/pi-fortress/house.leases
-  chown pf-dhcp-house:root /var/lib/pi-fortress/house.leases
+  chown pf-dhcp-house:pf-leases /var/lib/pi-fortress/house.leases
   chmod 0640 /var/lib/pi-fortress/house.leases
   # The DHCP log. Before, dnsmasq did the fchown of this file itself at each
   # start, from root. CAP_CHOWN and CAP_DAC_OVERRIDE were on the unit
@@ -2038,21 +2075,37 @@ if [[ "${#_obs_old[@]}" -gt 0 ]]; then
   mv -f "${_obs_old[@]}" "${OBSERVE_STATE}/"
   rm -f /var/lib/pi-fortress/observe.json.lock
 fi
-# observe runs as root:pf-fortress with umask 027, so observe.json and
-# observe.jsonl are 0640 for the group. Correct the files that exist.
-for _f in "${OBSERVE_STATE}/observe.json" /var/log/pi-fortress/observe.jsonl; do
-  if [[ -f "${_f}" ]]; then
-    chown root:pf-fortress "${_f}"
-    chmod 0640 "${_f}"
-  fi
+# observe runs as pf-observe:pf-fortress (observe.service). It owns its
+# state directory. It replaces each state file with a rename, so a file
+# that root wrote there (an observe from before, or a sudo pf observe
+# once) does not stop it. The flock file is the one file that it opens
+# for write in place. An observe from before made it root:root 0640.
+# chown -h: apply changes the entry in the directory, and never follows
+# a symlink there to a different file.
+# An observe from before runs as root with no CAP_DAC_OVERRIDE. When its
+# logs belong to pf-observe, it cannot write them, and it fails on its
+# last write when it stops. Thus stop it before the owners change. The
+# restart below starts the new unit.
+if [[ -f /etc/systemd/system/pi-fortress-observe.service ]] &&
+  ! grep -qx 'User=pf-observe' /etc/systemd/system/pi-fortress-observe.service; then
+  systemctl stop pi-fortress-observe.service >/dev/null 2>&1 || true
+fi
+chown pf-observe:pf-fortress "${OBSERVE_STATE}"
+if [[ -f "${OBSERVE_STATE}/observe.json.lock" && ! -L "${OBSERVE_STATE}/observe.json.lock" ]]; then
+  chown -h pf-observe:pf-fortress "${OBSERVE_STATE}/observe.json.lock"
+fi
+# observe appends to observe.jsonl and notice.jsonl. It cannot make a
+# file in /var/log/pi-fortress, so apply makes both, owned by
+# pf-observe, 0640 for the group. pf alert (pf-sidecar, in the group)
+# reads notice.jsonl. apply makes it here, not its first writer: that can
+# be a sudo pf observe once from an operator, which makes it root:root.
+# The webhook then never gets the rows in it. logrotate.conf makes new
+# files with the same owner and mode.
+for _f in /var/log/pi-fortress/observe.jsonl /var/log/pi-fortress/notice.jsonl; do
+  [[ -f "${_f}" ]] || : >"${_f}"
+  chown pf-observe:pf-fortress "${_f}"
+  chmod 0640 "${_f}"
 done
-# pf alert (pf-sidecar, in the group) reads notice.jsonl. apply makes it
-# here, not its first writer: that can be a sudo pf observe once from
-# an operator, which makes it root:root. The webhook then never
-# gets the rows in it.
-[[ -f /var/log/pi-fortress/notice.jsonl ]] || : > /var/log/pi-fortress/notice.jsonl
-chown root:pf-fortress /var/log/pi-fortress/notice.jsonl
-chmod 0640 /var/log/pi-fortress/notice.jsonl
 if [[ -f "${PI_LIB}/observe.service" ]]; then
   install -m 0644 "${PI_LIB}/observe.service" /etc/systemd/system/pi-fortress-observe.service
 fi

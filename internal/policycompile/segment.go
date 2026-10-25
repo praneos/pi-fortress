@@ -94,3 +94,25 @@ func (s SegmentPolicy) Lists() []ListType {
 		{s.File("allow.domains"), "domains"},
 	}
 }
+
+// DNSInputs are the operator lists, relative to the policy dir, that
+// decide the compiled DNS block lists of pf dns: the block list and the
+// never_block list of each segment, the house defaults and private DNS
+// names, the shared parents, core.hosts and the DoH names, each with its
+// .local file where compile reads one. generated/ is not here: pf fetch
+// writes it. pf nftsets policy flushes the resolved sets when one of these
+// files changes, and not when only a feed changes. Keep this list the same
+// as what Compile reads for its DNS outputs.
+func DNSInputs() []string {
+	var out []string
+	for _, s := range Segments {
+		out = append(out, s.Sinkhole("domains"), s.File("never_block.domains"))
+	}
+	house := SegmentFor(AllowByDefault)
+	return append(out,
+		house.File("default.domains"),
+		house.File("private_dns.domains"),
+		SharedParentsFile,
+		"core.hosts", "core.hosts.local",
+		"doh.domains", "doh.domains.local")
+}

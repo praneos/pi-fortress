@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -335,6 +336,33 @@ next:
 			}
 		}
 		out = append(out, a)
+	}
+	return out
+}
+
+// maxGateA is the number of addresses that one answer can put in the gate
+// set when the client gets the full answer: the house, and a type that
+// dns_types.allow forwards. An address-only A answer uses maxFlatA, the
+// number of addresses that the client gets. Each answer adds its
+// addresses to a set with a size (render resolvedSetSize). Without a
+// limit, one large answer over TCP (about 4000 A records) could use a
+// large part of that size. 64 is four times maxFlatA. A client that
+// connects to an address after the first 64 meets the gate drop, the same
+// as for an address that this box did not resolve.
+const maxGateA = 64
+
+// gateAddrs returns the first n distinct addresses of addrs, in the order
+// of the answer. An address that is in the answer two times goes to nft
+// one time.
+func gateAddrs(addrs []netip.Addr, n int) []netip.Addr {
+	out := make([]netip.Addr, 0, min(len(addrs), n))
+	for _, a := range addrs {
+		if len(out) == n {
+			break
+		}
+		if !slices.Contains(out, a) {
+			out = append(out, a)
+		}
 	}
 	return out
 }

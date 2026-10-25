@@ -102,10 +102,15 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   with no capabilities. The state directories stay owned by root. `apply.sh`
   gives the sidecar exactly the files that the sidecar rewrites
   (`alert.offset`, `alert-notice.offset`, `alert.last`). `alert.service`
-  can write only these three files. observe stays root, for the conntrack
-  netlink dump. `observe.service` can write only
-  `/var/lib/pi-fortress/observe` (its ledger and checkpoints) and
-  `/var/log/pi-fortress`. The other state under `/var/lib/pi-fortress`,
+  can write only these three files.
+- A fourth user, `pf-observe`, runs observe. Its only capability is
+  `CAP_NET_ADMIN` (ambient), for the conntrack netlink dump. It reads the
+  query logs and `strip.jsonl` through `pf-fortress`, the kernel log
+  through `systemd-journal`, and the DHCP lease files through `pf-leases`.
+  It owns `/var/lib/pi-fortress/observe` (its ledger and checkpoints),
+  `observe.jsonl` and `notice.jsonl`. `observe.service` can write only
+  these paths and `/var/log/pi-fortress`, and in that directory only the
+  files that it owns. The other state under `/var/lib/pi-fortress`,
   `www/claims-redeemed` too, is read-only to both. There is no console
   daemon. For management, use `sudo pf tui`. This is a terminal program. Its only
   privilege is the sudo of the operator.
@@ -137,13 +142,16 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
 - There are two unix users:
   - `pf engine`: has the CA key. It cannot open `secrets.env`.
   - `pf broker`: owns `secrets.env` `0600`.
-- There are three groups:
+- There are four groups:
   - `pf-fortress` has all daemons, for the files that they share (logs,
     state, the claims directories).
   - `pf-fence` has the engine and the broker, and nobody else. It exists to
     gate the broker socket.
   - `pf-fakeip` has the broker only. It is the group of the fake-IP journal
     that `pf dns` writes.
+  - `pf-leases` has `pf-observe` only. It is the group of the DHCP lease
+    files (`pf-dhcp-<name>:pf-leases 0640`). They have the MAC and the
+    name of each client, so the other daemons do not read them.
 
   The broker runs `Group=pf-fence`, with `pf-fortress` as a supplementary
   group. The engine is the other way round. `/run/pi-fortress` is
@@ -168,8 +176,9 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   `/var/lib/pi-fortress/engine` (`pf-engine 0700`, `ca.pem` `0600`). Only
   `ca-cert.pem` is `0644`, and it is copied out for www.
 - The strip, unknown, and use logs are `pf-broker:pf-fortress 0640`.
-  `observe/observe.json` and `observe.jsonl` are `root:pf-fortress 0640` (observe
-  runs `Group=pf-fortress`, `UMask=0027`).
+  `observe/observe.json`, `observe.jsonl` and `notice.jsonl` are
+  `pf-observe:pf-fortress 0640` (observe runs `User=pf-observe`,
+  `Group=pf-fortress`, `UMask=0027`).
 - Both units run with:
   - An empty capability set.
   - `@system-service` seccomp.

@@ -3,11 +3,13 @@ package dnsd
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -353,6 +355,41 @@ func TestForwardsAndFillsTheSet(t *testing.T) {
 	}
 }
 
+// A segment that gets the full answer gets each address. The gate set gets
+// only the first maxGateA of them. Thus one large answer cannot fill the set.
+func TestAFullAnswerAdmitsAtMostMaxGateA(t *testing.T) {
+	h := newHarness(t, nil, map[string][4]byte{"wide.example": {93, 184, 216, 1}}, 300)
+	h.up.manyA.Store(maxGateA + 6)
+	_, answers := h.ask(t, "wide.example", dnsmessage.TypeA)
+	if len(answers) != maxGateA+6 {
+		t.Fatalf("client got %d addresses, want %d", len(answers), maxGateA+6)
+	}
+	set := h.nft.flat()
+	if len(set) != maxGateA {
+		t.Fatalf("gate set took %d, want %d", len(set), maxGateA)
+	}
+	if set[0] != "93.184.216.1" || set[maxGateA-1] != "93.184.216.64" {
+		t.Fatalf("gate set took %v, want the first %d of the answer", set, maxGateA)
+	}
+}
+
+// gateAddrs keeps the order of the answer, sends a repeated address one
+// time, and stops at n distinct addresses.
+func TestGateAddrsDropsRepeatsAndStopsAtN(t *testing.T) {
+	a := func(s string) netip.Addr { return netip.MustParseAddr(s) }
+	in := []netip.Addr{a("1.1.1.1"), a("1.1.1.1"), a("2.2.2.2"), a("1.1.1.1"), a("3.3.3.3"), a("4.4.4.4")}
+	got := gateAddrs(in, 3)
+	if want := []netip.Addr{a("1.1.1.1"), a("2.2.2.2"), a("3.3.3.3")}; !slices.Equal(got, want) {
+		t.Fatalf("gateAddrs %v, want %v", got, want)
+	}
+	if got := gateAddrs(nil, 3); len(got) != 0 {
+		t.Fatalf("gateAddrs of nothing %v", got)
+	}
+	if got := gateAddrs(in, 0); len(got) != 0 {
+		t.Fatalf("gateAddrs with n 0 %v", got)
+	}
+}
+
 // A public name rebound to a local address still gets an answer. But the
 // gate set never learns the address, so the gate drops the dial as a
 // direct one.
@@ -389,6 +426,20 @@ func TestASetWriteThatFailedCostsTheAnswer(t *testing.T) {
 	}
 	if got := firstA(t, answers); got != "" {
 		t.Fatalf("handed out %q with the set write failed", got)
+	}
+}
+
+// A refused add (a full set gives this) goes to the journal one time each
+// minute, not one time for each query.
+func TestASetWriteThatFailedIsLogged(t *testing.T) {
+	h := newHarness(t, nil, map[string][4]byte{"example.com": {1, 2, 3, 4}, "example.net": {1, 2, 3, 5}}, 300)
+	var said []string
+	h.srv.logf = func(f string, a ...any) { said = append(said, fmt.Sprintf(f, a...)) }
+	h.nft.fail = errors.New("nft: set is full")
+	h.ask(t, "example.com", dnsmessage.TypeA)
+	h.ask(t, "example.net", dnsmessage.TypeA)
+	if len(said) != 1 || !strings.Contains(said[0], "resolved_v4") || !strings.Contains(said[0], "set is full") {
+		t.Fatalf("log %q, want one line that names the set and the error", said)
 	}
 }
 

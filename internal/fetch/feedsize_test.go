@@ -129,3 +129,60 @@ func TestCapIsSharedBetweenFeeds(t *testing.T) {
 		t.Errorf("no TRUNCATED line:\n%s", strings.Join(report, "\n"))
 	}
 }
+
+// A feed with more entries than the cap is read only to one entry past the
+// cap. The list and the report are as before, and the last good copy holds
+// only the entries that were read.
+func TestFeedParseStopsAtTheCap(t *testing.T) {
+	dir := t.TempDir()
+	spec := `{"max_domains": 5, "feeds": [{"id": "a", "kind": "domains", "format": "plain", "url": "https://a.test/"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "sources.json"), []byte(spec), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var body strings.Builder
+	for i := 0; i < 1000; i++ {
+		fmt.Fprintf(&body, "n%d.example\nn%d.example\n", i, i)
+	}
+	out := filepath.Join(dir, "generated")
+	f := &Fetcher{PolicyDir: dir, OutDir: out, Get: func(string, string, time.Duration) (string, error) { return body.String(), nil }}
+	report, _, n, err := f.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(report, "\n")
+	if n != 5 {
+		t.Errorf("%d domains, want the cap of 5\n%s", n, joined)
+	}
+	if !strings.Contains(joined, "OK a: 6 domains (more than the cap of 5; the rest not read)") || !strings.Contains(joined, "TRUNCATED domains to 5 (had more than 6)") {
+		t.Errorf("the report does not tell that the feed was cut:\n%s", joined)
+	}
+	if raw, err := os.ReadFile(filepath.Join(out, "blacklist.domains")); err != nil || string(raw) != "n0.example\nn1.example\nn2.example\nn3.example\nn4.example\n" {
+		t.Errorf("list %q, %v", raw, err)
+	}
+	if items, _, ok := readCache(out, Feed{ID: "a", Kind: "domains", Format: "plain", URL: "https://a.test/"}); !ok || len(items) != 6 {
+		t.Errorf("last good copy: %d items, ok %v; want the 6 that were read", len(items), ok)
+	}
+}
+
+// When never_block removes entries of a feed that was cut, the list can fit
+// under the cap. The report still tells that entries were not read.
+func TestCutFeedIsReportedWhenNeverBlockMakesItFit(t *testing.T) {
+	dir := t.TempDir()
+	spec := `{"max_domains": 2, "feeds": [{"id": "a", "kind": "domains", "format": "plain", "url": "https://a.test/"}]}`
+	if err := os.WriteFile(filepath.Join(dir, "sources.json"), []byte(spec), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "never_block.domains"), []byte("keep.example\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	body := "keep.example\na.example\nb.example\nc.example\n"
+	f := &Fetcher{PolicyDir: dir, OutDir: filepath.Join(dir, "generated"), Get: func(string, string, time.Duration) (string, error) { return body, nil }}
+	report, _, n, err := f.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(report, "\n")
+	if n != 2 || !strings.Contains(joined, "TRUNCATED domains to 2 (had more than 2)") {
+		t.Errorf("%d domains; the report does not tell that the feed was cut:\n%s", n, joined)
+	}
+}

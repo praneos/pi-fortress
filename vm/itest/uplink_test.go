@@ -5,6 +5,7 @@ package itest
 import (
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -54,15 +55,27 @@ func uplinkTests(t *testing.T) {
 		if !onLink(addrs, ip) {
 			t.Skipf("this machine is not on the Pi's uplink subnet (%s)", ip)
 		}
-		if open := tcpOpen(ip, "22"); open == closed {
-			t.Errorf("tcp 22 from the uplink: open=%v, want open=%v", open, !closed)
+		// The probes do not depend on each other, and a dropped one waits
+		// for its full 3 s. Thus they run at the same time. The checks
+		// occur after, in the same order as before.
+		ports := []string{"22", "53", "80", "443", "853", "8080"}
+		open := make([]bool, len(ports))
+		var answers bool
+		var wg sync.WaitGroup
+		for i, p := range ports {
+			wg.Go(func() { open[i] = tcpOpen(ip, p) })
 		}
-		for _, p := range []string{"53", "80", "443", "853", "8080"} {
-			if tcpOpen(ip, p) {
+		wg.Go(func() { answers = dnsAnswers(ip) })
+		wg.Wait()
+		if open[0] == closed {
+			t.Errorf("tcp 22 from the uplink: open=%v, want open=%v", open[0], !closed)
+		}
+		for i, p := range ports[1:] {
+			if open[i+1] {
 				t.Errorf("tcp %s is open from the uplink", p)
 			}
 		}
-		if dnsAnswers(ip) {
+		if answers {
 			t.Error("udp 53 answered from the uplink")
 		}
 	})

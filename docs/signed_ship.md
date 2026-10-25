@@ -103,7 +103,9 @@ After a successful apply, `pf ship install` runs
 
 The doctor checks again for up to 90 s (`--settle`). A check that still
 fails then rolls back immediately. It uses the same `.prev` path as a
-failed apply (row `post_upgrade`).
+failed apply (row `post_upgrade`). `pf ship install -post-upgrade-settle`
+changes this window. It is for tests and labs only: on a real box, a
+short window can roll back a good build whose units start slowly.
 
 A passing check arms `/var/lib/pi-fortress/ship.pending` (`version`,
 `prev_version`, a 10-minute `deadline`; `-confirm-deadline` or
@@ -313,7 +315,9 @@ sudo PF_ALLOWED_SIGNERS=/tmp/allowed_signers PF_REMOVE_NOPASSWD=1 SRC=/opt/pi-fo
 ```
 
 The tail must not say `pfship gets no key` or `allowed_signers missing`.
-It says `removed /etc/sudoers.d/...`, or it says why the file was left.
+`provision.sh` gives `pfship` its key only with `/usr/bin/rrsync` and
+rsync 3.2.7 or later (`rsync --version`). With an older rsync, it empties
+the `authorized_keys` of `pfship`, and signed ship stays off. It says `removed /etc/sudoers.d/...`, or it says why the file was left.
 The removal occurs only when all of these are true:
 
 - Every rule in the file is `user ALL=(ALL) NOPASSWD: ALL`.

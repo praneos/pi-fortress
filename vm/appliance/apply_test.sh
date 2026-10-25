@@ -8,6 +8,11 @@
 # write the same ruleset, generated configs and units.
 set -euo pipefail
 
+# apply.sh and its libs refuse to run when the user is not root on a
+# gateway (vm/pi/lib/guard.sh). This harness runs them with stub tools in
+# a fake root, so it lets them run.
+export PF_TEST_HARNESS=1
+
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "${here}/../.." && pwd)"
 PF_BIN="${PF_BIN:-${repo}/bin/pf}"

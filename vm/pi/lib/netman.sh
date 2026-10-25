@@ -5,6 +5,13 @@
 # NetworkManager and resolver plumbing: the DNS pin of the box and its
 # check, trunk ports, VLAN children and segment profiles.
 
+# Off a gateway, the source stops here, before this file defines a
+# function (lib/guard.sh). The return also stops a set -e caller.
+_pf_lib="${BASH_SOURCE[0]%/*}"
+[[ "${_pf_lib}" != "${BASH_SOURCE[0]}" ]] || _pf_lib=.
+# shellcheck source=guard.sh
+source "${_pf_lib}/guard.sh" && pf_guard_target lib/netman.sh || return 1 2>/dev/null || exit 1
+
 # The resolver of the Pi itself. NetworkManager owns the WAN profile and
 # rewrites resolv.conf from it at each reconnect. Thus the pin must be in the
 # profile, and reapply pushes it without a restart of the link. This also

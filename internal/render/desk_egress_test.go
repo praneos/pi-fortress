@@ -3,6 +3,7 @@ package render
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -226,5 +227,30 @@ func TestPlainSegmentHardeningLeavesAgentAndHouseAlone(t *testing.T) {
 	got := strings.TrimRight(strings.Join(kept, "\n"), "\n") + "\n"
 	if got != string(want) {
 		t.Fatalf("non-desk rules changed; diff against testdata/plain_segment_others.nft:\n%s", got)
+	}
+}
+
+// Each set that the resolver fills has a size: the agent's, the house's and
+// the one of each plain segment. Thus the answers cannot grow a set without
+// a limit.
+func TestResolvedSetsHaveASize(t *testing.T) {
+	out := deskRuleset(t, deskBase, labElements)
+	want := map[string]bool{"resolved_v4": false, "resolved_house_v4": false, "resolved_desk_v4": false}
+	lines := strings.Split(out, "\n")
+	for i, l := range lines {
+		name, ok := strings.CutPrefix(l, "  set resolved_")
+		if !ok {
+			continue
+		}
+		name = "resolved_" + strings.TrimSuffix(name, " {")
+		if i+2 >= len(lines) || lines[i+2] != "    size "+strconv.Itoa(resolvedSetSize) {
+			t.Errorf("set %s has no size %d line", name, resolvedSetSize)
+		}
+		want[name] = true
+	}
+	for name, seen := range want {
+		if !seen {
+			t.Errorf("set %s is not in the ruleset", name)
+		}
 	}
 }

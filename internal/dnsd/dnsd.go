@@ -918,6 +918,16 @@ func (s *Server) answer(ctx context.Context, seg *Segment, src netip.Addr, req [
 	// filters. A fixture in the local list is the word of the operator. It
 	// goes in as written.
 	addrs = public(addrs)
+	// An address-only A answer gives the client the first maxFlatA
+	// addresses (flattenA). The gate set gets the first maxFlatA public
+	// addresses, which include each public address that the client gets.
+	// A full answer goes to the client as it is, and the gate set gets the
+	// first maxGateA addresses.
+	limit := maxGateA
+	if seg.AddressOnly && q.Type == dnsmessage.TypeA {
+		limit = maxFlatA
+	}
+	addrs = gateAddrs(addrs, limit)
 	// The gate drops a connection to an address that is not yet in the set.
 	// Thus the element must be in the set before the client can act on the
 	// answer. Here the order is important, not the throughput. Also, the

@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -159,18 +160,19 @@ func TestAddressOnlyFlattensAChain(t *testing.T) {
 	}
 }
 
-// Sixteen addresses get to the agent. Each address that the upstream sent
-// gets to the gate set. The gate needs this to keep its promise about each
-// address that this resolver ever gave.
+// Sixteen addresses get to the agent. The gate set gets the same sixteen
+// addresses: each address that this resolver gives is in the set, and an
+// address that the agent never gets does not use space in the set.
 func TestAddressOnlyCapsTheAddresses(t *testing.T) {
 	h := addrOnlyHarness(t, nil, nil, map[string][4]byte{"registry.example": {93, 184, 216, 1}}, nil, 300)
 	h.up.manyA.Store(20)
 	_, ans := h.ask(t, "registry.example", dnsmessage.TypeA)
-	if got := onlyAddrs(t, "registry.example", ans, 300); len(got) != maxFlatA {
+	got := onlyAddrs(t, "registry.example", ans, 300)
+	if len(got) != maxFlatA {
 		t.Fatalf("%d addresses, want %d", len(got), maxFlatA)
 	}
-	if got := h.nft.flat(); len(got) != 20 {
-		t.Fatalf("gate set took %d, want all 20", len(got))
+	if set := h.nft.flat(); !slices.Equal(set, got) {
+		t.Fatalf("gate set took %v, want the answer %v", set, got)
 	}
 }
 

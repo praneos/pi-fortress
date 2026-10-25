@@ -1,7 +1,10 @@
 package fetch
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -688,5 +691,114 @@ func TestHouseVPNRoleFeedIsItsOwnList(t *testing.T) {
 		if _, _, _, err := f.Run(); err == nil || !strings.Contains(err.Error(), "the only role is vpn") {
 			t.Fatalf("role accepted in %s: %v", bad, err)
 		}
+	}
+}
+
+// rawAnswer writes head and body as the full answer, through the TLS
+// connection. Then it closes the TCP connection under TLS, so no
+// close_notify goes out: the shape of a connection that drops.
+func rawAnswer(t *testing.T, w http.ResponseWriter, head string, body []byte) {
+	conn, buf, err := w.(http.Hijacker).Hijack()
+	if err != nil {
+		t.Error(err)
+		return
+	}
+	buf.WriteString(head)
+	buf.Write(body)
+	if err := buf.Flush(); err != nil {
+		t.Error(err)
+	}
+	conn.(*tls.Conn).NetConn().Close()
+}
+
+func gzipped(t *testing.T, s string) []byte {
+	var b bytes.Buffer
+	zw := gzip.NewWriter(&b)
+	if _, err := zw.Write([]byte(s)); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+// A body that ends only where the connection closes has no clean end that
+// fetch can check: crypto/tls reads a close with no close_notify as a
+// clean end. So fetch refuses that answer, whole or cut, and the run uses
+// the last good copy. An answer with Content-Length, with chunks or with
+// gzip still passes, and each of them that is cut short fails.
+func TestBodyMustHaveAnEnd(t *testing.T) {
+	feed := "a.example\nb.example\nc.example\n"
+	zipped := gzipped(t, feed)
+	var cut atomic.Bool
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		if path == "/feed" {
+			path = "/length"
+			if cut.Load() {
+				path = "/close-cut"
+			}
+		}
+		switch path {
+		case "/close-cut":
+			rawAnswer(t, w, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n", []byte(feed[:10]))
+		case "/close-whole":
+			rawAnswer(t, w, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n", []byte(feed))
+		case "/http10":
+			rawAnswer(t, w, "HTTP/1.0 200 OK\r\n\r\n", []byte(feed))
+		case "/length-cut":
+			rawAnswer(t, w, fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n", len(feed)), []byte(feed[:10]))
+		case "/chunked-cut":
+			rawAnswer(t, w, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n", []byte("a\r\na.example\n\r\n"))
+		case "/gzip-cut":
+			rawAnswer(t, w, "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nConnection: close\r\n\r\n", zipped[:len(zipped)-4])
+		case "/length":
+			fmt.Fprint(w, feed)
+		case "/chunked":
+			fmt.Fprint(w, feed[:10])
+			w.(http.Flusher).Flush()
+			fmt.Fprint(w, feed[10:])
+		case "/gzip":
+			w.Header().Set("Content-Encoding", "gzip")
+			w.Write(zipped)
+		case "/gzip-close":
+			rawAnswer(t, w, "HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nConnection: close\r\n\r\n", zipped)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	c := lab(ts)
+	for _, path := range []string{"/length", "/chunked", "/gzip", "/gzip-close"} {
+		if pg, err := c.get(ts.URL+path, "t", 5*time.Second); err != nil || pg.body != feed {
+			t.Errorf("%s: %q, %v; want the whole feed", path, pg.body, err)
+		}
+	}
+	for path, want := range map[string]string{
+		"/close-cut":   "no Content-Length",
+		"/close-whole": "no Content-Length",
+		"/http10":      "no Content-Length",
+		"/length-cut":  "unexpected EOF",
+		"/chunked-cut": "unexpected EOF",
+		"/gzip-cut":    "unexpected EOF",
+	} {
+		if pg, err := c.get(ts.URL+path, "t", 5*time.Second); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %q, %v; want an error with %q", path, pg.body, err, want)
+		}
+	}
+
+	dir := t.TempDir()
+	spec := fmt.Sprintf(`{"feeds": [{"id": "d", "kind": "domains", "format": "plain", "url": %q}]}`, ts.URL+"/feed")
+	_ = os.WriteFile(filepath.Join(dir, "sources.json"), []byte(spec), 0644)
+	f := &Fetcher{PolicyDir: dir, OutDir: filepath.Join(dir, "generated"), web: c}
+	if report, _, n, err := f.Run(); err != nil || n != 3 {
+		t.Fatalf("first run: %d, %v\n%s", n, err, strings.Join(report, "\n"))
+	}
+	cut.Store(true)
+	report, _, n, err := f.Run()
+	joined := strings.Join(report, "\n")
+	if err != nil || n != 3 || !strings.Contains(joined, "STALE d: 3 domains") || !strings.Contains(joined, "no Content-Length") {
+		t.Errorf("a cut body was used: %d domains, %v\n%s", n, err, joined)
 	}
 }

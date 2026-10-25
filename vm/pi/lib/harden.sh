@@ -12,8 +12,17 @@
 # The paths come from the caller, as HARDEN_SYSCTL_D, HARDEN_APT_D,
 # HARDEN_SSHD_D, HARDEN_HOME and HARDEN_WORK (a scratch directory). Thus
 # the path rewrite of apply.sh in the appliance test also reaches them.
+# HARDEN_OS_RELEASE is optional (default /etc/os-release); the tests set it.
 # The package installs stay in provision.sh. apply.sh only tells the
 # operator when a package that a step needs is missing.
+
+# Off a gateway, the source stops here, before this file defines a
+# function (lib/guard.sh). Thus `source lib/harden.sh; harden_apt` in a
+# desktop shell changes nothing. The return also stops a set -e caller.
+_pf_lib="${BASH_SOURCE[0]%/*}"
+[[ "${_pf_lib}" != "${BASH_SOURCE[0]}" ]] || _pf_lib=.
+# shellcheck source=guard.sh
+source "${_pf_lib}/guard.sh" && pf_guard_target lib/harden.sh || return 1 2>/dev/null || exit 1
 
 # harden_put SRC DST: install SRC at DST (0644) if DST is different.
 # Returns 0 when it wrote DST, 1 when DST was already the same.
@@ -81,20 +90,49 @@ harden_sysctl_load() {
     echo "pi-fortress: some values of ${HARDEN_SYSCTL_D}/99-pi-fortress.conf did not apply now; the file applies at the next boot" >&2
 }
 
+# harden_os_id prints the ID= value of os-release (HARDEN_OS_RELEASE,
+# default /etc/os-release), with no quotes. Raspberry Pi OS gives debian.
+# With no file, it prints nothing.
+harden_os_id() {
+  local f="${HARDEN_OS_RELEASE:-/etc/os-release}" line id=""
+  if [[ -r "${f}" ]]; then
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+      [[ "${line}" == ID=* ]] && id="${line#ID=}"
+    done <"${f}"
+  fi
+  id="${id//\"/}"
+  printf '%s\n' "${id//\'/}"
+}
+
 # Security updates from the distribution, with no automatic reboot.
 # The package itself is installed by provision.sh. Without it, the files
-# below do nothing, and this step says so.
+# below do nothing, and this step says so. The origins come from the OS:
+# Ubuntu (an amd64 gateway) gets its security pocket and the ESM security
+# pockets. An ESM pocket that the box does not use matches nothing. Each
+# other OS gets the Debian and Raspberry Pi origins.
 harden_apt() {
   cat >"${HARDEN_WORK}/20auto-upgrades" <<'EOF'
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 EOF
-  cat >"${HARDEN_WORK}/52-pi-fortress-upgrades" <<'EOF'
+  if [[ "$(harden_os_id)" == ubuntu ]]; then
+    cat >"${HARDEN_WORK}/52-pi-fortress-upgrades" <<'EOF'
+Unattended-Upgrade::Origins-Pattern {
+  "origin=Ubuntu,archive=${distro_codename}-security";
+  "origin=UbuntuESMApps,archive=${distro_codename}-apps-security";
+  "origin=UbuntuESM,archive=${distro_codename}-infra-security";
+};
+EOF
+  else
+    cat >"${HARDEN_WORK}/52-pi-fortress-upgrades" <<'EOF'
 Unattended-Upgrade::Origins-Pattern {
   "origin=Debian,codename=${distro_codename},label=Debian-Security";
   "origin=Debian,codename=${distro_codename}-security,label=Debian-Security";
   "origin=Raspberry Pi Foundation,codename=${distro_codename}";
 };
+EOF
+  fi
+  cat >>"${HARDEN_WORK}/52-pi-fortress-upgrades" <<'EOF'
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
 Unattended-Upgrade::Automatic-Reboot "false";
 EOF
@@ -140,6 +178,26 @@ harden_ssh_key_users() {
 # box with no usable authorized_keys is a lockout, not a hardening. sshd
 # -t checks the new file before the reload. If sshd refuses it, the old
 # file comes back (or none), so sshd always stays as it was.
+#
+# The same file also sets limits and turns off the forwarding kinds that
+# no pi-fortress path uses:
+# - MaxAuthTries 5: an ssh agent offers each of its keys, and each key
+#   that fails counts. A lower value can lock out an operator with many
+#   keys in the agent.
+# - LoginGraceTime 30 and MaxStartups 10:30:60: a connection that does
+#   not log in gives back its slot sooner, and sshd drops more new
+#   connections while many are not logged in.
+# - AllowTcpForwarding local: ssh -J (ProxyJump) through the Pi to the
+#   agent VM and the lab clients is local forwarding, so it stays on.
+#   Do not set it to no, and do not set DisableForwarding: that stops
+#   ProxyJump. Remote forwarding (ssh -R) is off.
+# - Agent, Unix-socket, X11 and tunnel forwarding, GatewayPorts,
+#   PermitUserEnvironment and Compression are off.
+# - ClientAliveInterval 120 and ClientAliveCountMax 3: sshd closes a
+#   session after about 6 minutes with no answer from the client.
+# sshd uses the first value that it reads, and the stock sshd_config
+# reads this directory first, so these values replace its
+# X11Forwarding yes.
 harden_ssh() {
   local conf="${HARDEN_SSHD_D}/99-pi-fortress.conf" users had=0 eff=""
   command -v sshd >/dev/null 2>&1 || return 0
@@ -155,7 +213,11 @@ harden_ssh() {
     fi
     return 0
   fi
-  printf '%s\n' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' 'PermitRootLogin no' >"${HARDEN_WORK}/sshd.conf"
+  printf '%s\n' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' 'PermitRootLogin no' \
+    'MaxAuthTries 5' 'LoginGraceTime 30' 'MaxStartups 10:30:60' \
+    'AllowTcpForwarding local' 'AllowAgentForwarding no' 'AllowStreamLocalForwarding no' \
+    'X11Forwarding no' 'PermitTunnel no' 'GatewayPorts no' 'PermitUserEnvironment no' 'Compression no' \
+    'ClientAliveInterval 120' 'ClientAliveCountMax 3' >"${HARDEN_WORK}/sshd.conf"
   if ! cmp -s "${HARDEN_WORK}/sshd.conf" "${conf}"; then
     if [[ -f "${conf}" ]]; then
       cp -p "${conf}" "${HARDEN_WORK}/sshd.prev"

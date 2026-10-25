@@ -34,7 +34,7 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	postUpgrade := fs.Bool("post-upgrade", false, "after a ship install: required units, sinkhole + public resolve per segment, broker + engine sockets, uplink; exit 0/1, none of the other rungs")
 	unitsFile := fs.String("units-file", "/var/lib/pi-fortress/units.required", "unit list apply.sh wrote, for -post-upgrade")
 	brokerSock := fs.String("broker-sock", "/run/pi-fortress/broker/broker.sock", "broker credential socket, for -post-upgrade")
-	settleFor := fs.Duration("settle", 90*time.Second, "for -post-upgrade: keep re-checking a failing ladder this long before failing it")
+	settleFor := fs.Duration("settle", postUpgradeSettle, "for -post-upgrade: keep re-checking a failing ladder this long before failing it")
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}
@@ -93,6 +93,10 @@ func runDoctor(args []string, stdout, stderr io.Writer) int {
 	rs = append(rs, doctor.NftTablesRung(doctor.NftTables()))
 	return doctor.Report(stdout, rs)
 }
+
+// postUpgradeSettle is the default settle window of pf doctor
+// --post-upgrade. pf ship install uses the same default.
+const postUpgradeSettle = 90 * time.Second
 
 // settle runs the post-upgrade ladder until it has no Fail or the
 // window closes. apply.sh restarts units and pf dns at its end. Thus

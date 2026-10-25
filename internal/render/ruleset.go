@@ -65,6 +65,8 @@ type fragments struct {
 	// the resolver. Forward mode checks @resolved_v4. fakeip checks the pool
 	// (fakeIPGate).
 	AgentGateAllow string
+	// AgentResolvedSet is the declaration of resolved_v4 (resolvedSet).
+	AgentResolvedSet string
 	// BrokerBlockCT is the fakeip output rules for the connections of the
 	// broker (fakeIPGate): the blocklists and the path to its resolver. Empty
 	// under forward.
@@ -99,7 +101,7 @@ type fragments struct {
 // segments and no DoT render byte-for-byte what they rendered before each
 // existed. vm/pi/testdata/nft.no-house.golden holds that.
 func (c *Config) Ruleset(e Elements) string {
-	f := fragments{Config: c, Elements: e, DirectCarve: " ip daddr != @direct_ip_v4", AgentGateAllow: " ip daddr != @resolved_v4"}
+	f := fragments{Config: c, Elements: e, DirectCarve: " ip daddr != @direct_ip_v4", AgentGateAllow: " ip daddr != @resolved_v4", AgentResolvedSet: resolvedSet("resolved_v4")}
 	if c.Paranoid {
 		f.DirectCarve = ""
 	}
@@ -638,7 +640,7 @@ func (f *fragments) house() {
 	// open an address on the other.
 	// It has its own direct-IP list too: an address opened for a house TV must
 	// not open for the agents, and an agent entry must not open for the house.
-	f.HouseSet = "\n\n  set resolved_house_v4 {\n    type ipv4_addr\n    flags timeout\n    timeout 2h\n  }" +
+	f.HouseSet = "\n\n" + resolvedSet("resolved_house_v4") +
 		"\n\n  set house_direct_ip_v4 {\n    type ipv4_addr\n    flags interval\n    " + f.HouseDirectIP + "\n  }"
 	// HOUSE_PRIVATE_DNS=on: the secure-DNS providers of the operator are an
 	// exception in three chains. The drops that stop DoT and DoH are in two
@@ -868,7 +870,7 @@ func (f *fragments) segments() {
 		// open an address on a different segment. The house already follows
 		// this rule.
 		set := "resolved_" + nftName(s.Name) + "_v4"
-		f.SegSet += "\n\n  set " + set + " {\n    type ipv4_addr\n    flags timeout\n    timeout 2h\n  }"
+		f.SegSet += "\n\n" + resolvedSet(set)
 		f.SegDNSFlood += in("tcp dport 53 meter "+nftName(s.Name)+"_dnsflood_tcp { ip saddr limit rate over 200/second burst 400 packets } counter drop") +
 			in("udp dport 53 meter "+nftName(s.Name)+"_dnsflood_udp { ip saddr limit rate over 200/second burst 400 packets } counter drop")
 		// The gate covers each new TCP and UDP flow and ping, not only
@@ -1098,6 +1100,23 @@ func segEgress(chain string, s Segment) string {
 	return "\n\n  chain " + chain + " {" + body + "\n  }"
 }
 
+// resolvedSetSize is the maximum number of elements in each set that the
+// resolver fills: resolved_v4, resolved_house_v4 and one set for each plain
+// segment. Each answer adds its addresses, and each element stays for the
+// timeout of the set. Thus without a size, the answers alone decide how much
+// kernel memory the set uses. 65535 is the size of the connlimit sets
+// (connlimit.go) and the meter default of nft. A segment that gets a new
+// address each second for 2 hours has 7200 elements. When the set is full, the kernel refuses the add. pf dns then logs the
+// error and answers SERVFAIL. The gate does not open. A full set gets space
+// again as its elements expire.
+const resolvedSetSize = 65535
+
+// resolvedSet is the declaration of one set that the resolver fills. The
+// elements get the 2h timeout of the set.
+func resolvedSet(name string) string {
+	return "  set " + name + " {\n    type ipv4_addr\n    size " + strconv.Itoa(resolvedSetSize) + "\n    flags timeout\n    timeout 2h\n  }"
+}
+
 // nftTemplate starts with `flush ruleset` on purpose: pf owns the whole
 // ruleset of the Pi. apply loads this file, and nftables.service loads it
 // again at each boot. Thus each table that pf did not write (docker,
@@ -1119,11 +1138,7 @@ table inet fortress {
     {{.DoH}}
   }
 
-  set resolved_v4 {
-    type ipv4_addr
-    flags timeout
-    timeout 2h
-  }
+{{.AgentResolvedSet}}
 
   set direct_ip_v4 {
     type ipv4_addr

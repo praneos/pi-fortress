@@ -147,6 +147,13 @@ func (s *Server) admitGate(seg *Segment, addrs []netip.Addr, now time.Time) (tim
 		}
 	}
 	if err := s.nft.Add(seg.NFTSet, addrs); err != nil {
+		// A full set (its size in the ruleset) also comes here: the kernel
+		// refuses the full add, and the set does not change. The caller
+		// answers SERVFAIL, so no client gets an address that the gate
+		// drops. The log line has the same rate limit as the refresh error.
+		if s.gate.sayErr(now) {
+			s.logf("dns segment %q: adding to %s: %v; answering SERVFAIL", seg.Name, seg.NFTSet, err)
+		}
 		return 0, err
 	}
 	s.gate.mark(seg.NFTSet, addrs, now, false, !canRefresh)

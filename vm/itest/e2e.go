@@ -205,6 +205,31 @@ func hostAliases(cfg string) map[string]bool {
 func mustFailOn(t *testing.T, host, cmd string) {
 	t.Helper()
 	out, err := ssh(t, 25*time.Second, host, cmd)
+	failedAsExpected(t, host, cmd, out, err)
+}
+
+// mustFailAllOn is mustFailOn for commands that do not depend on each
+// other. A dropped probe waits for its full timeout. Thus the commands
+// run at the same time, and the wait is that of the slowest one. The
+// checks then occur in the order of cmds, on the test goroutine.
+func mustFailAllOn(t *testing.T, host string, cmds ...string) {
+	t.Helper()
+	outs := make([]string, len(cmds))
+	errs := make([]error, len(cmds))
+	var wg sync.WaitGroup
+	for i, cmd := range cmds {
+		wg.Go(func() { outs[i], errs[i] = sshNoSkip(t, 25*time.Second, host, cmd) })
+	}
+	wg.Wait()
+	for i, cmd := range cmds {
+		sudoSkip(t, host, cmd, errs[i])
+		failedAsExpected(t, host, cmd, outs[i], errs[i])
+	}
+}
+
+// failedAsExpected fails the test unless cmd itself failed on host.
+func failedAsExpected(t *testing.T, host, cmd, out string, err error) {
+	t.Helper()
 	if err == nil {
 		t.Fatalf("%s: %s: expected failure\n%s", host, cmd, out)
 	}
@@ -214,9 +239,17 @@ func mustFailOn(t *testing.T, host, cmd string) {
 	}
 }
 
-// eventually retries fn every 2 s until it returns "" or d has passed,
-// then fails with fn's last message.
+// eventually retries fn every 0.5 s until it returns "" or d has passed,
+// then fails with fn's last message. Use it when fn only reads state.
 func eventually(t *testing.T, d time.Duration, fn func() string) {
+	t.Helper()
+	eventuallyEvery(t, d, 500*time.Millisecond, fn)
+}
+
+// eventuallyEvery is eventually with its own interval. Use 2 s when fn
+// sends traffic to a public host or runs a heavy command. Then a slow
+// recovery does not send a request every 0.5 s.
+func eventuallyEvery(t *testing.T, d, every time.Duration, fn func() string) {
 	t.Helper()
 	deadline := time.Now().Add(d)
 	for {
@@ -227,7 +260,7 @@ func eventually(t *testing.T, d time.Duration, fn func() string) {
 		if time.Now().After(deadline) {
 			t.Fatal(msg)
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(every)
 	}
 }
 

@@ -503,6 +503,11 @@ there is an address gate:
   segment into `resolved_v4` (`flags timeout`, 2 h). A cache hit does not
   write the set again. Thus pf dns cuts the TTL of a cached answer to the
   time that its elements have left in the set.
+- One answer puts at most 16 addresses into the set on an address-only
+  segment (the 16 that the client gets), and at most 64 on a segment that
+  gets the full answer. Each resolved set has `size 65535`. When a set is full, the
+  kernel refuses the add. pf dns logs the error and answers SERVFAIL, and
+  the set gets space again as its elements expire.
 - `chain resolver_gate` drops a *new* TCP 443 connection from the agent
   segment to any address outside that set, `PI_IP`, the TEST-NET-1 canaries,
   and the `direct_ip.allow` of the operator.
@@ -520,6 +525,19 @@ Without this, a client that answers from its own DNS cache never asks again.
 The gate then drops its *new* connections until that cache expires. This gate
 is what makes an IP-literal SNI fail too. The name check cannot see an
 IP-literal SNI.
+
+An element does not name the DNS name that gave it. Thus, when the DNS
+policy of the operator changes (an operator block list, an allowlist,
+`PARANOID`, a key rule), apply cannot remove only the addresses of the
+names that the new policy blocks. Apply keeps a fingerprint of the
+operator policy of each resolved set
+(`/var/lib/pi-fortress/resolved-policy.state`). When it changes, apply
+stops `pf dns`, flushes that set, and then starts `pf dns` on the new
+policy (`pf nftsets policy`). A set whose policy did not change keeps its
+elements. The feeds are not in the fingerprint. Thus a feed refresh does
+not flush the sets, and a name that a feed adds keeps the addresses that
+it already has in a set until they expire (2 h). An operator change
+flushes at once.
 
 The house segment has the same gate on 80 and 443, from its own
 `resolved_house_v4`. With `HOUSE_BLOCK_HTTP=on`, the gate covers only 443.
