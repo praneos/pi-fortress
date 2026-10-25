@@ -95,7 +95,7 @@ func (t *linuxTerm) EnterRaw() error {
 	signal.Notify(t.death, deathSignals...)
 	go t.watchDeath(t.death)
 	t.mu.Unlock()
-	if err := t.Write([]byte("\x1b[?1049h\x1b[?25l\x1b[H\x1b[2J")); err != nil {
+	if err := t.Write([]byte("\x1b[?1049h\x1b[?25l" + pasteOn + "\x1b[H\x1b[2J")); err != nil {
 		// The caller has no Restore installed yet, because it waits on
 		// this return. Thus the tty gets its restore here or not at all.
 		t.Restore()
@@ -136,7 +136,10 @@ func (t *linuxTerm) Restore() {
 		close(t.death)
 		t.death = nil
 	}
-	_ = t.Write([]byte("\x1b[0m\x1b[?25h\x1b[?1049l"))
+	// Each exit comes here: q, idle, end of input, a panic that unwinds Run
+	// and a signal (watchDeath). A shell that gets the tty with bracketed
+	// paste still on would read the brackets of the next paste as text.
+	_ = t.Write([]byte(pasteOff + "\x1b[0m\x1b[?25h\x1b[?1049l"))
 	_ = ioctl(t.in.Fd(), syscall.TCSETS, unsafe.Pointer(&t.saved))
 }
 
@@ -149,21 +152,27 @@ func (t *linuxTerm) ReadKey() (Key, error) {
 	if t.src == nil {
 		return Key{}, io.EOF
 	}
-	if b, ok := t.src.pending(); ok {
-		return parseKey(b, t.src.next, t.src.unread), nil
-	}
-	select {
-	case in := <-t.src.ch:
-		k := parseKey(in.b, t.src.next, t.src.unread)
-		k.Paste = in.paste && k.Kind == KeyEnter
-		return k, nil
-	case <-t.winch:
-		return Key{Kind: KeyResize}, nil
-	case err := <-t.src.err:
-		return Key{}, err
-	case <-t.wake:
-		// Restored: there is no tty to read from now, and the caller
-		// waits for this goroutine, not for a keystroke.
-		return Key{}, io.EOF
+	// The loop skips the paste brackets: they are not keys.
+	for {
+		if b, ok := t.src.pending(); ok {
+			if k, ok := t.src.key(b); ok {
+				return k, nil
+			}
+			continue
+		}
+		select {
+		case b := <-t.src.ch:
+			if k, ok := t.src.key(b); ok {
+				return k, nil
+			}
+		case <-t.winch:
+			return Key{Kind: KeyResize}, nil
+		case err := <-t.src.err:
+			return Key{}, err
+		case <-t.wake:
+			// Restored: there is no tty to read from now, and the caller
+			// waits for this goroutine, not for a keystroke.
+			return Key{}, io.EOF
+		}
 	}
 }

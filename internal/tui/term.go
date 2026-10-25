@@ -28,14 +28,18 @@ const (
 	KeyCtrlC
 	KeyCtrlR
 	KeyResize
+	// keyPasteStart and keyPasteEnd are the brackets that the terminal puts
+	// around a paste. ReadKey uses them, and never returns them.
+	keyPasteStart
+	keyPasteEnd
 )
 
 type Key struct {
 	Kind KeyKind
 	Rune rune
-	// Paste is set on an Enter that came at the end of one read, after text
-	// in that same read. That is the line end of a paste, not a key that the
-	// operator pressed.
+	// Paste is set on a key that came between the paste brackets of the
+	// terminal (bracketed paste, mode 2004). Thus a line end with Paste is
+	// part of a paste, not an Enter that the operator pressed.
 	Paste bool
 }
 
@@ -57,7 +61,16 @@ var escSeqs = map[string]KeyKind{
 	"[H": KeyHome, "[F": KeyEnd, "OH": KeyHome, "OF": KeyEnd,
 	"[1~": KeyHome, "[4~": KeyEnd, "[7~": KeyHome, "[8~": KeyEnd,
 	"[5~": KeyPgUp, "[6~": KeyPgDn, "[15~": KeyF5, "[[E": KeyF5,
+	"[200~": keyPasteStart, "[201~": keyPasteEnd,
 }
+
+// Bracketed paste. EnterRaw turns it on and Restore turns it off. A
+// terminal that does not know the mode ignores it, and then no key is a
+// paste.
+const (
+	pasteOn  = "\x1b[?2004h"
+	pasteOff = "\x1b[?2004l"
+)
 
 // parseKey changes one byte, plus all bytes that follow an escape within
 // escWait, into a Key. next returns the following byte, or false on
@@ -159,35 +172,35 @@ func utf8Rune(lead byte, next func(time.Duration) (byte, bool)) rune {
 // next touches the keyboard or the session closes. One goroutine, one time
 // per process, waits on a read that nobody waits for.
 type byteSource struct {
-	ch  chan inByte
+	ch  chan byte
 	err chan error
 	// back holds the bytes that parseKey gave back (unread). They come out of
 	// next and pending before newer bytes. Only the goroutine that reads keys
 	// touches it.
 	back []byte
+	// pasting is true between the start and the end bracket of a paste. Only
+	// the goroutine that reads keys touches it.
+	pasting bool
 }
 
-// inByte is one byte from the tty. paste says that the byte is a line end
-// at the end of a read, and that text came before it in that read.
-type inByte struct {
-	b     byte
-	paste bool
-}
-
-// pasteFrom returns the index of the line ends at the end of p, when text
-// comes before them. Else it returns len(p). A key that the operator types
-// comes in a read of its own. A paste comes in one read with its line end.
-// Thus a value with a trailing newline does not save before the operator
-// sees it on the prompt line.
-func pasteFrom(p []byte) int {
-	i := len(p)
-	for i > 0 && (p[i-1] == '\r' || p[i-1] == '\n') {
-		i--
+// key parses the key that starts with b. A paste bracket is not a key: key
+// records it and returns false. Each key between the brackets has Paste
+// set. Before, the code guessed a paste from a line end at the end of one
+// read. But an ssh session or a slow link also brings typed keys in one
+// read, so a typed Enter could count as a paste, and an arrow key and Enter
+// did.
+func (s *byteSource) key(b byte) (Key, bool) {
+	k := parseKey(b, s.next, s.unread)
+	switch k.Kind {
+	case keyPasteStart:
+		s.pasting = true
+		return k, false
+	case keyPasteEnd:
+		s.pasting = false
+		return k, false
 	}
-	if i == 0 {
-		return len(p)
-	}
-	return i
+	k.Paste = s.pasting
+	return k, true
 }
 
 func (s *byteSource) unread(b byte) { s.back = append(s.back, b) }
@@ -209,16 +222,14 @@ func (s *byteSource) pending() (byte, bool) {
 // of the process. stop cannot interrupt the read itself (refer to the
 // caveat on the type), but it does end the goroutine at the next byte.
 func newByteSource(r io.Reader, stop <-chan struct{}) *byteSource {
-	s := &byteSource{ch: make(chan inByte, 64), err: make(chan error, 1)}
+	s := &byteSource{ch: make(chan byte, 64), err: make(chan error, 1)}
 	go func() {
-		// Large enough for a full prompt value and its line end in one read.
 		buf := make([]byte, 512)
 		for {
 			n, err := r.Read(buf)
-			from := pasteFrom(buf[:n])
-			for i, b := range buf[:n] {
+			for _, b := range buf[:n] {
 				select {
-				case s.ch <- inByte{b, i >= from}:
+				case s.ch <- b:
 				case <-stop:
 					return
 				}
@@ -245,8 +256,8 @@ func (s *byteSource) next(d time.Duration) (byte, bool) {
 		return b, true
 	}
 	select {
-	case in := <-s.ch:
-		return in.b, true
+	case b := <-s.ch:
+		return b, true
 	case <-time.After(d):
 		return 0, false
 	}

@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"unsafe"
@@ -61,5 +62,30 @@ func TestEnterRawRestoresWhenTheSetupWriteFails(t *testing.T) {
 	if after.Lflag != before.Lflag || after.Iflag != before.Iflag {
 		t.Fatalf("terminal left raw: lflag %#x -> %#x, iflag %#x -> %#x",
 			before.Lflag, after.Lflag, before.Iflag, after.Iflag)
+	}
+}
+
+// The terminal turns bracketed paste on with the alternate screen, and off
+// again on restore. A shell that gets a tty with the mode still on reads
+// the brackets of the next paste as text.
+func TestRawModeTurnsBracketedPasteOnAndOff(t *testing.T) {
+	in := openPTY(t)
+	out, err := os.CreateTemp(t.TempDir(), "out")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer out.Close()
+	term := &linuxTerm{in: in, out: out}
+	if err := term.EnterRaw(); err != nil {
+		t.Fatal(err)
+	}
+	term.Restore()
+	raw, err := os.ReadFile(out.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	on, off := strings.Index(string(raw), pasteOn), strings.LastIndex(string(raw), pasteOff)
+	if on < 0 || off < on {
+		t.Fatalf("bracketed paste not on then off: %q", raw)
 	}
 }

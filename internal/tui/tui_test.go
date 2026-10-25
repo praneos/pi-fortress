@@ -388,7 +388,7 @@ func TestEscThenKeyInOneReadIsTwoKeys(t *testing.T) {
 	for _, in := range []string{"\x1bq", "\x1b3", "\x1b\x1b"} {
 		stop := make(chan struct{})
 		src := newByteSource(strings.NewReader(in), stop)
-		b := (<-src.ch).b
+		b := <-src.ch
 		// Let the pump deliver the rest. Thus it is there within escWait,
 		// as it is when both bytes came in one read.
 		time.Sleep(10 * time.Millisecond)
@@ -396,8 +396,7 @@ func TestEscThenKeyInOneReadIsTwoKeys(t *testing.T) {
 		b2, ok := src.pending()
 		if !ok {
 			select {
-			case in := <-src.ch:
-				b2 = in.b
+			case b2 = <-src.ch:
 			case <-time.After(time.Second):
 				t.Fatalf("%q: the key after Esc was lost", in)
 			}
