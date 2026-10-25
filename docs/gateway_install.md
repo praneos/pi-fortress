@@ -215,7 +215,9 @@ There are two different signer files:
 
 `pf install`/`pf upgrade` never touch `allowed_signers`.
 
-`ssh-keygen -Y verify` binds the namespace into the signature itself. Thus, a bundle signed for one namespace never verifies against the other. This is true for all contents of the two allowed_signers-format files. This is not a policy choice. This package cannot relax it, even if it wanted to.
+`ssh-keygen -Y verify` binds the namespace into the signature itself. Thus, a bundle signed for one namespace never verifies against the other.
+
+Each key line in the two files must have the `namespaces=` option of its file: `namespaces="pi-fortress-dist"` in `release-signers`, `namespaces="pi-fortress-release"` in `allowed_signers`. A key on a line with no `namespaces=` option can sign in each namespace. Thus `pf` refuses the file before each verify, `pf install` does not save it, and `provision.sh` does not install it. The error names the file and the line, and tells you which `namespaces="..."` to add.
 
 The use of two files is a policy choice. The public download key may be published anywhere and rotated in the open. It does not get the same trust as a `pfship` push key. A stolen push key would give unreviewed root on all Pis that trust it. A later decision can unify the two files. But that decision is for the owner of both flows. Do not make it here by default.
 

@@ -45,7 +45,10 @@ ship cannot swap an older `.prev` back over the push.
    again.
 4. `ssh-keygen -Y verify -I release -n pi-fortress-release` checks
    against `/etc/pi-fortress/allowed_signers`. A missing, non-root, or
-   group/world-writable file refuses everything.
+   group/world-writable file refuses everything. A file with a key line
+   that does not have `namespaces="pi-fortress-release"` as its one
+   namespaces option also refuses everything. `provision.sh` does not
+   install such a file from `PF_ALLOWED_SIGNERS`.
 5. Extraction:
    - The manifest must be first, and its version must be above
      `/var/lib/pi-fortress/ship.version`. If one of these two rules
