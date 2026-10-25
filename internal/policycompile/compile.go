@@ -455,6 +455,25 @@ func asciiWarnings(policyDir string) ([]string, error) {
 	return warn, nil
 }
 
+// splitAddrs takes the IPv4 addresses out of the items of a domain list.
+// ParseDomain accepts "192.0.2.1": four labels of digits obey the grammar
+// of a name. As a name, the address got only a sinkhole line, and no nft
+// drop. Thus addrs goes to the IP list. An address that ParseIPv4 refuses
+// (private or reserved, for example the 0.0.0.0 of a hosts feed) is in
+// neither half.
+func splitAddrs(items []string) (names, addrs []string) {
+	for _, item := range items {
+		if a, err := netip.ParseAddr(item); err != nil || !a.Is4() {
+			names = append(names, item)
+			continue
+		}
+		if ip, ok := ParseIPv4(item); ok {
+			addrs = append(addrs, ip)
+		}
+	}
+	return names, addrs
+}
+
 // dropFeed removes from items each entry that refuse matches, and adds it
 // to dropped.
 func dropFeed(items []string, refuse func(string) bool, dropped map[string]struct{}) []string {
@@ -989,6 +1008,13 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
+	// An address on a domain list blocks as an address. It keeps its half:
+	// the IP map labels a feed address with its feed and an operator line
+	// "local". never_block.ips applies to it.
+	feedDomains, feedAddrs := splitAddrs(feedDomains)
+	localDomains, localAddrs := splitAddrs(localDomains)
+	feedIPs = append(feedIPs, feedAddrs...)
+	localIPs = append(localIPs, localAddrs...)
 	sharedList, err := LoadTokens(filepath.Join(policyDir, SharedParentsFile), "domains")
 	if err != nil {
 		return Summary{}, err

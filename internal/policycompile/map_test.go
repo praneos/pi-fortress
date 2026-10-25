@@ -146,3 +146,59 @@ func TestFeedMapsLabelOperatorEntriesLocal(t *testing.T) {
 		t.Fatalf("ip map:\n%s", im)
 	}
 }
+
+// An IPv4 address on a domain list of the agent, from a feed or from the
+// operator, goes to the IP list: nft drops it. It is not a name in the
+// sinkhole. The IP map keeps its feed, or "local" for an operator line.
+// never_block.ips still applies to it, and an address that the IP list
+// refuses (private, reserved) compiles to nothing.
+func TestAddressOnDomainListBlocksAsAddress(t *testing.T) {
+	pol := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(pol, "generated"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"generated/blacklist.domains": "evil.example\n192.0.2.10\n0.0.0.0\n",
+		"generated/feeds.map":         "evil.example\turlhaus-domains-online\n192.0.2.10\turlhaus-domains-online\n",
+		"blacklist.domains":           "mine.example\n192.0.2.20\n10.0.0.1\n192.0.2.30\n",
+		"never_block.ips":             "192.0.2.30\n",
+	}
+	for name, text := range files {
+		if err := os.WriteFile(filepath.Join(pol, name), []byte(text), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tmp := t.TempDir()
+	out := Out{
+		NFT:       filepath.Join(tmp, "elements.nft"),
+		DNS:       filepath.Join(tmp, "blocked.domains"),
+		DomainMap: filepath.Join(tmp, "blocked-domains.map"),
+		IPMap:     filepath.Join(tmp, "blocked-ips.map"),
+	}
+	sum, err := Compile(pol, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(p string) string {
+		raw, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(raw)
+	}
+	if got := read(out.DNS); got != dnsLines([]string{"evil.example", "mine.example"}) {
+		t.Fatalf("sinkhole:\n%s", got)
+	}
+	if got := read(out.NFT); got != nftElements([]string{"192.0.2.10", "192.0.2.20"})+"\n" {
+		t.Fatalf("nft:\n%s", got)
+	}
+	if got, want := read(out.IPMap), "192.0.2.10\turlhaus-domains-online\n192.0.2.20\tlocal\n"; got != want {
+		t.Fatalf("ip map:\n%s", got)
+	}
+	if got := read(out.DomainMap); strings.Contains(got, "192.0.2.") {
+		t.Fatalf("domain map:\n%s", got)
+	}
+	if sum.IPs != 2 || sum.Domains != 2 {
+		t.Fatalf("summary %+v", sum)
+	}
+}
