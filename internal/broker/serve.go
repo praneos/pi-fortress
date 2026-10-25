@@ -574,6 +574,12 @@ func (b *Broker) prepare(c *call) (strips []fence.StripEvent, stream *fence.Stre
 	if c.refresh = b.harvestAllowed(c.p.SNI, c.req); c.refresh {
 		c.jsonBody = jsonContentType(c.req.Get("Content-Type"))
 	}
+	// The bind reads the first Content-Type. A refresh with a second media
+	// type gets the one refusal, because the origin can read the other one.
+	if name := repeatedContentType(c.req.Fields); c.refresh && name != "" {
+		b.logRefusals(c, []fence.Refusal{{Cause: fence.CauseRepeatedContentType, Where: "header:" + name}})
+		return nil, nil, true, b.refuseSubstitution(c)
+	}
 	if c.refresh && !c.jsonBody && len(pending) > 0 {
 		if slot := injectedORT(bufferedBody(c.req), pending, c.slots); slot != "" {
 			b.logRefusals(c, []fence.Refusal{{Cause: fence.CauseOutsideHeader, Slot: slot, Kind: "CLAUDE_ORT", Where: "body"}})

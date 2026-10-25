@@ -131,6 +131,11 @@ const (
 	// from the value that the fence decided on. httpwire refuses a repeated
 	// Authorization before the fence runs. Where names the second field.
 	CauseRepeatedCredHeader RefusalCause = "repeated_credential_header"
+	// CauseRepeatedContentType is a refresh request with more than one
+	// Content-Type field, or with a list of media types in one field. The
+	// broker reads the media type to decide how the body binds a slot, and
+	// the origin can read a different one. Where names the second field.
+	CauseRepeatedContentType RefusalCause = "repeated_content_type"
 )
 
 type Refusal struct {

@@ -17,6 +17,43 @@ func jsonContentType(ct string) bool {
 	return strings.EqualFold(strings.TrimSpace(mt), "application/json")
 }
 
+// repeatedContentType names the Content-Type field that makes the media
+// type of a request unclear: a second Content-Type field, or a field with
+// a list of media types. RFC 9110 §5.3 lets a recipient join repeated
+// fields into one list. Thus the two forms are the same, and the origin can
+// read a media type that jsonContentType did not read. A comma in a quoted
+// parameter value does not make a list. It returns "" for one field with
+// one media type, and for no field.
+func repeatedContentType(fields httpwire.Fields) string {
+	seen := false
+	for _, f := range fields {
+		if !strings.EqualFold(f.Name, "Content-Type") {
+			continue
+		}
+		if seen || commaList(f.Value) {
+			return f.Name
+		}
+		seen = true
+	}
+	return ""
+}
+
+// commaList reports a comma outside a quoted string in v.
+func commaList(v string) bool {
+	quoted := false
+	for i := 0; i < len(v); i++ {
+		switch {
+		case quoted && v[i] == '\\':
+			i++
+		case v[i] == '"':
+			quoted = !quoted
+		case !quoted && v[i] == ',':
+			return true
+		}
+	}
+	return false
+}
+
 // harvestAllowed: only where the fence would inject the Claude refresh
 // token, on an exact refresh path. SNI and Host agree on a core host that
 // carries that kind. Any other origin that returns access_token is

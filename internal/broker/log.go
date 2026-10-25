@@ -90,13 +90,14 @@ func (b *Broker) alertRefusal(cause fence.RefusalCause) bool {
 	// compresses its uploads with zstd gets a refusal on each request. A post
 	// for each would use all of the hourly cap of the webhook before a real
 	// strip arrives. It alerts one time, like the conditions below. A
-	// repeated credential header is an attempt to make the origin read a
-	// value that the fence did not decide on. No ordinary client sends it.
+	// repeated credential header or a repeated Content-Type on a refresh is
+	// an attempt to make the origin read a value that the fence did not
+	// decide on. No ordinary client sends it.
 	switch cause {
 	case fence.CauseKindNotAllowed, fence.CauseOutsideHeader, fence.CausePlaceholderInWS,
 		fence.CauseEncodedBodyToken, fence.CauseKeyInHeaderName, fence.CauseKeyInMethod,
 		fence.CauseEncodedURLToken, fence.CauseLiveInHost, fence.CauseLiveInConnection,
-		fence.CauseRepeatedCredHeader:
+		fence.CauseRepeatedCredHeader, fence.CauseRepeatedContentType:
 		return true
 	}
 	b.useMu.Lock()
