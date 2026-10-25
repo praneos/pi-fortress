@@ -7,8 +7,13 @@ import (
 	"testing"
 )
 
+// operatorLists stands in for the operator lists of the policy dir
+// (policycompile.DNSInputs). One of them is not there.
+var operatorLists = []string{"/policy/blacklist.domains", "/policy/doh.domains.local"}
+
 // policyBox is a pf dns config with the agent and one plain segment, and
-// the list files that they name.
+// the list files that they name. blocked-domains.conf and
+// doh-domains.conf are compiled: the feeds are in them.
 type policyBox struct {
 	config string
 	files  map[string]string
@@ -26,6 +31,7 @@ func newPolicyBox() *policyBox {
 			"/etc/pi-fortress/doh-domains.conf":     "address=/doh.example/0.0.0.0\n",
 			"/etc/pi-fortress/key_prefixes.rules":   "openai\tsk-[A-Za-z0-9]{20,}\tOPENAI_API_KEY\n",
 			"/etc/pi-fortress/allow.desk.domains":   "github.com\n",
+			"/policy/blacklist.domains":             "operator-block.example\n",
 		},
 	}
 }
@@ -40,7 +46,7 @@ func (b *policyBox) read(p string) ([]byte, error) {
 
 func (b *policyBox) policy(t *testing.T) map[string]string {
 	t.Helper()
-	fps, err := Policy([]byte(b.config), b.read)
+	fps, err := Policy([]byte(b.config), operatorLists, b.read)
 	if err != nil {
 		t.Fatalf("Policy: %v", err)
 	}
@@ -57,20 +63,24 @@ func TestPolicyGivesAFingerprintForEachResolvedSetOnly(t *testing.T) {
 	}
 }
 
-// Each change that can block a name changes the fingerprint of the set that
-// the change applies to, and only that set.
-func TestAPolicyChangeChangesOnlyTheSetsThatUseIt(t *testing.T) {
+// Each operator change that can block a name changes the fingerprint of
+// the set that the change applies to. A change to an operator list of the
+// policy dir changes each set.
+func TestAnOperatorPolicyChangeChangesTheSetsThatUseIt(t *testing.T) {
 	base := newPolicyBox().policy(t)
 	for _, c := range []struct {
 		name string
 		edit func(*policyBox)
 		want []string
 	}{
-		{"a name in the shared blocklist", func(b *policyBox) {
-			b.files["/etc/pi-fortress/blocked-domains.conf"] += "address=/new.example/0.0.0.0\n"
+		{"a name in the operator blocklist", func(b *policyBox) {
+			b.files["/policy/blacklist.domains"] += "new.example\n"
 		}, []string{"resolved_desk_v4", "resolved_v4"}},
-		{"a name in the agent DoH list", func(b *policyBox) {
-			b.files["/etc/pi-fortress/doh-domains.conf"] += "address=/doh2.example/0.0.0.0\n"
+		{"a new operator DoH list", func(b *policyBox) {
+			b.files["/policy/doh.domains.local"] = "doh2.example\n"
+		}, []string{"resolved_desk_v4", "resolved_v4"}},
+		{"a sinkhole file added to the agent", func(b *policyBox) {
+			b.config = replaceOnce(t, b.config, `"/etc/pi-fortress/doh-domains.conf"]`, `"/etc/pi-fortress/doh-domains.conf", "/etc/pi-fortress/more.conf"]`)
 		}, []string{"resolved_v4"}},
 		{"a name out of the desk allowlist", func(b *policyBox) {
 			b.files["/etc/pi-fortress/allow.desk.domains"] = ""
@@ -103,6 +113,20 @@ func replaceOnce(t *testing.T, s, old, new string) string {
 	return s[:i] + new + s[i+len(old):]
 }
 
+// A feed refresh changes the compiled sinkhole files and nothing of the
+// operator. It must not flush a set: a client with a long DNS cache would
+// lose its new connections after each refresh. A name that a feed adds
+// keeps its addresses in a set until they expire.
+func TestAFeedOnlyChangeKeepsEachFingerprint(t *testing.T) {
+	base := newPolicyBox().policy(t)
+	b := newPolicyBox()
+	b.files["/etc/pi-fortress/blocked-domains.conf"] += "address=/feed-new.example/0.0.0.0\n"
+	b.files["/etc/pi-fortress/doh-domains.conf"] = ""
+	if got := Changed(base, b.policy(t)); len(got) != 0 {
+		t.Fatalf("a feed change changed %v", got)
+	}
+}
+
 // The log file of a segment is output, not policy. The order and spacing
 // of the keys are not policy either.
 func TestTheSameEffectivePolicyKeepsItsFingerprint(t *testing.T) {
@@ -122,7 +146,7 @@ func TestPolicyRefusesAConfigItCannotRead(t *testing.T) {
 		`{"segments": [{"nft_set": "resolved_v4", "sinkhole": 7}]}`,
 		`{"segments": [{"nft_set": "resolved_v4"}, {"nft_set": "resolved_v4"}]}`,
 	} {
-		if _, err := Policy([]byte(bad), newPolicyBox().read); err == nil {
+		if _, err := Policy([]byte(bad), operatorLists, newPolicyBox().read); err == nil {
 			t.Errorf("Policy accepted %s", bad)
 		}
 	}

@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"pi-fortress/internal/nftsets"
+	"pi-fortress/internal/policycompile"
 )
 
 // pf nftsets is the helper of apply.sh around the ruleset reload. `nft
@@ -48,15 +50,16 @@ func runNFTSets(args []string, stdout, stderr io.Writer) int {
 	file := fs.String("file", "", "carry file: written by save, read by restore")
 	config := fs.String("config", "", "policy: the pf dns config that pf dns starts on next")
 	state := fs.String("state", "", "policy: the fingerprints of the last apply, read and then written")
+	policyDir := fs.String("policy", "", "policy: the policy dir that pf compile reads (the operator lists)")
 	if code, ok := parse(fs, args[1:]); !ok {
 		return code
 	}
 	if verb == "policy" {
-		if *config == "" || *state == "" {
+		if *config == "" || *state == "" || *policyDir == "" {
 			nftsetsUsage(stderr)
 			return 2
 		}
-		return nftsetsPolicy(nftsets.Exec, *table, *config, *state, stdout, stderr)
+		return nftsetsPolicy(nftsets.Exec, *table, *config, *policyDir, *state, stdout, stderr)
 	}
 	if *file == "" {
 		nftsetsUsage(stderr)
@@ -70,7 +73,7 @@ func runNFTSets(args []string, stdout, stderr io.Writer) int {
 
 func nftsetsUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: pf nftsets save|restore --file FILE [--table 'inet fortress']")
-	fmt.Fprintln(w, "       pf nftsets policy --config DNS_JSON --state FILE [--table 'inet fortress']")
+	fmt.Fprintln(w, "       pf nftsets policy --config DNS_JSON --policy DIR --state FILE [--table 'inet fortress']")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  save     write the resolved-address sets and their remaining timeouts")
 	fmt.Fprintln(w, "  restore  re-add them to the sets the loaded ruleset still has")
@@ -126,15 +129,20 @@ func nftsetsRestore(table, file string, stdout, stderr io.Writer) int {
 }
 
 // nftsetsPolicy compares the DNS policy of each resolved set in config
-// with the fingerprints in state, flushes each set that changed, and
-// writes the new fingerprints. If it cannot read config, it flushes all
+// and the operator lists in policyDir with the fingerprints in state,
+// flushes each set that changed, and writes the new fingerprints. A feed
+// change alone does not flush (nftsets.Policy). If it cannot read config, it flushes all
 // resolved sets: it cannot say which policy changed. If the flush fails,
 // it keeps the old state, so the next apply sees the change again.
-func nftsetsPolicy(run nftsets.Runner, table, config, state string, stdout, stderr io.Writer) int {
+func nftsetsPolicy(run nftsets.Runner, table, config, policyDir, state string, stdout, stderr io.Writer) int {
+	var operator []string
+	for _, name := range policycompile.DNSInputs() {
+		operator = append(operator, filepath.Join(policyDir, name))
+	}
 	var fps map[string]string
 	data, err := os.ReadFile(config)
 	if err == nil {
-		fps, err = nftsets.Policy(data, os.ReadFile)
+		fps, err = nftsets.Policy(data, operator, os.ReadFile)
 	}
 	if err != nil {
 		names, lerr := nftsets.Names(run, table)

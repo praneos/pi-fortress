@@ -2841,6 +2841,28 @@ EOF
   local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
   grep -q '^stdin: flush set' "${lab2}.nft" &&
     fail "an apply with the same DNS policy flushed a resolved set: $(grep '^stdin: flush' "${lab2}.nft")"
+  # A feed-only change: the compiled blocked-domains.conf changes, and no
+  # file of the operator does. The nightly refresh must not flush the sets.
+  _feedlist="${lab2}/vagrant/vm/policy/generated/blacklist.domains"
+  cp "${_feedlist}" "${tmp}/feed.seed"
+  echo 'feed-only-change.example' >>"${_feedlist}"
+  local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
+  grep -qF 'feed-only-change.example' "${lab2}/etc/pi-fortress/blocked-domains.conf" ||
+    fail "the feed change did not reach blocked-domains.conf; the next check proves nothing"
+  grep -q '^stdin: flush set' "${lab2}.nft" &&
+    fail "a feed-only change flushed a resolved set: $(grep '^stdin: flush' "${lab2}.nft")"
+  cp "${tmp}/feed.seed" "${_feedlist}"
+  # A name in the block list of the operator is operator policy: it
+  # flushes. (This run is not paranoid, so pf dns does not read
+  # allow.domains. The Go tests of pf nftsets policy cover the allowlist.)
+  _oplist="${lab2}/vagrant/vm/policy/blacklist.domains"
+  cp "${_oplist}" "${tmp}/oplist.seed"
+  echo 'operator-change.example' >>"${_oplist}"
+  local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
+  grep -qx 'stdin: flush set inet fortress resolved_v4' "${lab2}.nft" ||
+    fail "a change to the operator blacklist.domains did not flush resolved_v4"
+  cp "${tmp}/oplist.seed" "${_oplist}"
+  local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
 
   # core.hosts.local: the shipped seed has only comments and adds nothing
   # (the cmp above). With lines in it, the installed core.hosts is the

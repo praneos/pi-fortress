@@ -6,12 +6,24 @@ package nftsets
 // A name that the new policy blocks keeps its addresses in the set until
 // they expire, for up to 2h.
 //
-// Policy gives a fingerprint of the policy that fills each set: the
-// segment of the pf dns config, and the contents of each list file that
-// it names. apply keeps the last fingerprints. When a fingerprint
-// changes, apply stops pf dns, flushes that set, and starts pf dns on the
-// new config. Thus each element of the set comes from an answer under the
-// new policy. A set whose fingerprint did not change keeps its elements.
+// Policy gives a fingerprint of the operator policy that fills each set:
+// the segment of the pf dns config, the contents of the operator files
+// that it names (allow, core_hosts, key_rules, dns_types_allow, the SNI
+// lists), and the contents of the operator lists that pf compile reads
+// (policycompile.DNSInputs). apply keeps the last fingerprints. When a
+// fingerprint changes, apply stops pf dns, flushes that set, and starts
+// pf dns on the new config. Thus each element of the set comes from an
+// answer under the new policy. A set whose fingerprint did not change
+// keeps its elements.
+//
+// The feeds are not in the fingerprint. The sinkhole files of a segment
+// (blocked-domains.conf and the other compiled lists) hold the feeds that
+// pf fetch writes, so only their paths count, not their contents. Thus a
+// feed refresh does not flush the sets, and a client with a long DNS
+// cache does not lose its new connections after each refresh. A name
+// that a feed adds keeps the addresses that it already has in a set until
+// they expire (the 2h timeout of the set). An operator change flushes at
+// once.
 //
 // The flush is at the restart of pf dns, not in the carry across the
 // ruleset load. The load comes before apply installs the new lists, and
@@ -31,9 +43,11 @@ import (
 	"strings"
 )
 
-// policyFiles are the keys of a pf dns segment that name a file with
-// names, addresses or rules that decide what the segment answers.
-var policyFiles = []string{"sinkhole", "allow", "core_hosts", "key_rules", "dns_types_allow", "sni_ech_ips", "sni_opaque_ips"}
+// policyFiles are the keys of a pf dns segment that name an operator file
+// with names, addresses or rules that decide what the segment answers.
+// "sinkhole" is not here: those files are compiled with the feeds in
+// them. Its paths are part of the segment object.
+var policyFiles = []string{"allow", "core_hosts", "key_rules", "dns_types_allow", "sni_ech_ips", "sni_opaque_ips"}
 
 // notPolicy are the keys of a pf dns segment that name an output or a
 // state file. A change to them does not change what the segment answers.
@@ -42,16 +56,30 @@ var policyFiles = []string{"sinkhole", "allow", "core_hosts", "key_rules", "dns_
 var notPolicy = []string{"log", "fakeip_journal"}
 
 // Policy reads a pf dns config and gives the fingerprint of the policy of
-// each carried set that a segment names in nft_set. read gets the list
-// files. A file that does not exist counts as one value. pf dns -check
-// refuses a config that needs it.
-func Policy(config []byte, read func(string) ([]byte, error)) (map[string]string, error) {
+// each carried set that a segment names in nft_set. operator are the
+// paths of the operator lists that go into each fingerprint. read gets
+// the files. A file that does not exist counts as one value. pf dns
+// -check refuses a config that needs a file that is not there.
+func Policy(config []byte, operator []string, read func(string) ([]byte, error)) (map[string]string, error) {
 	var c struct {
 		Segments []map[string]json.RawMessage `json:"segments"`
 	}
 	if err := json.Unmarshal(config, &c); err != nil {
 		return nil, fmt.Errorf("pf dns config: %w", err)
 	}
+	// One digest of the operator lists. Each set gets it: a change to one
+	// list flushes each resolved set, also a set that does not use the list.
+	// The operator changes these files seldom, so this is simpler and costs
+	// little.
+	lists := sha256.New()
+	for _, p := range operator {
+		sum, err := fileSum(read, p)
+		if err != nil {
+			return nil, err
+		}
+		fmt.Fprintf(lists, "operator %q %s\n", p, sum)
+	}
+	listsSum := hex.EncodeToString(lists.Sum(nil))
 	fps := map[string]string{}
 	for i, seg := range c.Segments {
 		var set string
@@ -67,7 +95,7 @@ func Policy(config []byte, read func(string) ([]byte, error)) (map[string]string
 			return nil, fmt.Errorf("pf dns config: two segments name set %s", set)
 		}
 		h := sha256.New()
-		io.WriteString(h, "resolved-policy-v1\n")
+		io.WriteString(h, "resolved-policy-v2\n")
 		// encoding/json writes the keys of a map in sorted order. Thus the
 		// order of the keys in the file does not change the fingerprint.
 		// The keys of outputs and state are not policy.
@@ -80,20 +108,18 @@ func Policy(config []byte, read func(string) ([]byte, error)) (map[string]string
 			return nil, err
 		}
 		h.Write(whole)
-		io.WriteString(h, "\n")
+		fmt.Fprintf(h, "\noperator %s\n", listsSum)
+		if _, err := pathsOf(seg["sinkhole"]); err != nil {
+			return nil, fmt.Errorf("pf dns config set %s: sinkhole: %w", set, err)
+		}
 		for _, key := range policyFiles {
 			paths, err := pathsOf(seg[key])
 			if err != nil {
 				return nil, fmt.Errorf("pf dns config set %s: %s: %w", set, key, err)
 			}
 			for _, p := range paths {
-				sum := "missing"
-				data, err := read(p)
-				switch {
-				case err == nil:
-					s := sha256.Sum256(data)
-					sum = hex.EncodeToString(s[:])
-				case !errors.Is(err, fs.ErrNotExist):
+				sum, err := fileSum(read, p)
+				if err != nil {
 					return nil, fmt.Errorf("pf dns config set %s: %w", set, err)
 				}
 				fmt.Fprintf(h, "%s %q %s\n", key, p, sum)
@@ -102,6 +128,19 @@ func Policy(config []byte, read func(string) ([]byte, error)) (map[string]string
 		fps[set] = hex.EncodeToString(h.Sum(nil)[:16])
 	}
 	return fps, nil
+}
+
+// fileSum is the SHA-256 of a file, or "missing" when it does not exist.
+func fileSum(read func(string) ([]byte, error), p string) (string, error) {
+	data, err := read(p)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "missing", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	s := sha256.Sum256(data)
+	return hex.EncodeToString(s[:]), nil
 }
 
 // pathsOf reads a key that holds one path or a list of paths.
