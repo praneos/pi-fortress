@@ -1819,6 +1819,26 @@ mv "${hroot}/sshd.bad" "${hroot}/sshd.ok"
 ssh_run
 grep -qx 'PasswordAuthentication no' "${hconf}" || fail "harden_ssh did not write the key-only drop-in"
 grep -qx 'KbdInteractiveAuthentication no' "${hconf}" || fail "the key-only drop-in leaves keyboard-interactive on"
+for _l in 'MaxAuthTries 5' 'LoginGraceTime 30' 'MaxStartups 10:30:60' 'AllowTcpForwarding local' \
+  'AllowAgentForwarding no' 'AllowStreamLocalForwarding no' 'X11Forwarding no' 'PermitTunnel no' \
+  'GatewayPorts no' 'PermitUserEnvironment no' 'Compression no' 'ClientAliveInterval 120' 'ClientAliveCountMax 3'; do
+  grep -qxF "${_l}" "${hconf}" || fail "the sshd drop-in lacks ${_l}"
+done
+# ssh -J (ProxyJump) through the Pi is local TCP forwarding. These lines
+# would stop it.
+grep -qiE '^(AllowTcpForwarding (no|remote)|DisableForwarding yes)' "${hconf}" &&
+  fail "the sshd drop-in stops TCP forwarding; ssh -J through the Pi needs it"
+_n="$(grep -c . "${hconf}")"
+[[ "$(cut -d' ' -f1 "${hconf}" | sort -fu | wc -l)" == "${_n}" ]] || fail "the sshd drop-in sets one keyword two times"
+# With a real sshd on the host, it must accept the drop-in as the stock
+# sshd_config of Debian includes it: first, before the stock values.
+if _sshd="$(type -P sshd)" && _kg="$(type -P ssh-keygen)"; then
+  "${_kg}" -q -t ed25519 -N '' -f "${hroot}/hostkey"
+  printf 'Include %s\nKbdInteractiveAuthentication no\nUsePAM yes\nX11Forwarding yes\nHostKey %s\n' "${hconf}" "${hroot}/hostkey" >"${hroot}/sshd_main"
+  "${_sshd}" -t -f "${hroot}/sshd_main" 2>"${hroot}/sshd_t.err" || fail "sshd -t refuses the drop-in: $(cat "${hroot}/sshd_t.err")"
+  _eff="$("${_sshd}" -T -f "${hroot}/sshd_main" 2>/dev/null || true)"
+  grep -qx 'x11forwarding no' <<<"${_eff}" || fail "the drop-in does not win over the stock X11Forwarding yes"
+fi
 grep -q 'login keys for: op' "${hroot}/ssh.out" || fail "harden_ssh did not name the users with a key"
 [[ "$(grep -c '^reload ssh' "${hroot}/systemctl.log")" == 1 ]] || fail "harden_ssh did not reload sshd once"
 ssh_run

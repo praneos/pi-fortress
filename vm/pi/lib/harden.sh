@@ -140,6 +140,26 @@ harden_ssh_key_users() {
 # box with no usable authorized_keys is a lockout, not a hardening. sshd
 # -t checks the new file before the reload. If sshd refuses it, the old
 # file comes back (or none), so sshd always stays as it was.
+#
+# The same file also sets limits and turns off the forwarding kinds that
+# no pi-fortress path uses:
+# - MaxAuthTries 5: an ssh agent offers each of its keys, and each key
+#   that fails counts. A lower value can lock out an operator with many
+#   keys in the agent.
+# - LoginGraceTime 30 and MaxStartups 10:30:60: a connection that does
+#   not log in gives back its slot sooner, and sshd drops more new
+#   connections while many are not logged in.
+# - AllowTcpForwarding local: ssh -J (ProxyJump) through the Pi to the
+#   agent VM and the lab clients is local forwarding, so it stays on.
+#   Do not set it to no, and do not set DisableForwarding: that stops
+#   ProxyJump. Remote forwarding (ssh -R) is off.
+# - Agent, Unix-socket, X11 and tunnel forwarding, GatewayPorts,
+#   PermitUserEnvironment and Compression are off.
+# - ClientAliveInterval 120 and ClientAliveCountMax 3: sshd closes a
+#   session after about 6 minutes with no answer from the client.
+# sshd uses the first value that it reads, and the stock sshd_config
+# reads this directory first, so these values replace its
+# X11Forwarding yes.
 harden_ssh() {
   local conf="${HARDEN_SSHD_D}/99-pi-fortress.conf" users had=0 eff=""
   command -v sshd >/dev/null 2>&1 || return 0
@@ -155,7 +175,11 @@ harden_ssh() {
     fi
     return 0
   fi
-  printf '%s\n' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' 'PermitRootLogin no' >"${HARDEN_WORK}/sshd.conf"
+  printf '%s\n' 'PasswordAuthentication no' 'KbdInteractiveAuthentication no' 'PermitRootLogin no' \
+    'MaxAuthTries 5' 'LoginGraceTime 30' 'MaxStartups 10:30:60' \
+    'AllowTcpForwarding local' 'AllowAgentForwarding no' 'AllowStreamLocalForwarding no' \
+    'X11Forwarding no' 'PermitTunnel no' 'GatewayPorts no' 'PermitUserEnvironment no' 'Compression no' \
+    'ClientAliveInterval 120' 'ClientAliveCountMax 3' >"${HARDEN_WORK}/sshd.conf"
   if ! cmp -s "${HARDEN_WORK}/sshd.conf" "${conf}"; then
     if [[ -f "${conf}" ]]; then
       cp -p "${conf}" "${HARDEN_WORK}/sshd.prev"
