@@ -19,6 +19,10 @@ func TestWideningSaveSaysItsCost(t *testing.T) {
 		{"agent dns", settingsDown("AGENT_DNS", "desk"), "names may carry data out", ""},
 		{"desk direct ip", segmentDown("BLOCK_DIRECT_IP"), "only the blocklist will filter", ""},
 		{"desk paranoid", segmentDown("PARANOID"), "names outside the allowlist will resolve", "PARANOID=on\n"},
+		{"egress audit", settingsDown("HOUSE_EGRESS", "desk"), "what strict would drop will pass, logged", ""},
+		{"call udp", settingsDown("HOUSE_ALLOW_CALL_UDP", "desk"), "call apps' UDP media will pass", ""},
+		{"private dns", settingsDown("HOUSE_PRIVATE_DNS", "desk"), "the Pi may not filter devices' DNS", ""},
+		{"wifi calling", settingsDown("HOUSE_ALLOW_WIFI_CALLING", "desk"), "IPsec opens to anywhere; IKEv2 VPNs get through too", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, path := segSettings(t)

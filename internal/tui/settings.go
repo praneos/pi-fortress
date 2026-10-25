@@ -540,11 +540,15 @@ func (a *App) saved(scope string) {
 // But the message says the cost at the press. The cost comes first, so a
 // clip of the title bar at 80 columns does not remove it.
 var widens = map[string]string{
-	"HOUSE_BLOCK_VPN=off":       "devices may route around the filter",
-	"HOUSE_BLOCK_DIRECT_IP=off": "direct-IP web connections will pass",
-	"BLOCK_DIRECT_IP=off":       "only the blocklist will filter",
-	"PARANOID=off":              "names outside the allowlist will resolve",
-	"AGENT_DNS=forward":         "names may carry data out",
+	"HOUSE_BLOCK_VPN=off":         "devices may route around the filter",
+	"HOUSE_BLOCK_DIRECT_IP=off":   "direct-IP web connections will pass",
+	"BLOCK_DIRECT_IP=off":         "only the blocklist will filter",
+	"PARANOID=off":                "names outside the allowlist will resolve",
+	"AGENT_DNS=forward":           "names may carry data out",
+	"HOUSE_EGRESS=audit":          "what strict would drop will pass, logged",
+	"HOUSE_ALLOW_CALL_UDP=on":     "call apps' UDP media will pass",
+	"HOUSE_PRIVATE_DNS=on":        "the Pi may not filter devices' DNS",
+	"HOUSE_ALLOW_WIFI_CALLING=on": "IPsec opens to anywhere; IKEv2 VPNs get through too",
 }
 
 // confirmWidth is the label width that keeps a y/N prompt, with its
