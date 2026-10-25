@@ -42,7 +42,10 @@ const (
 	noStats = "no data yet; observe flushes every PF_OBSERVE_FLUSH_INTERVAL"
 	// The header of eventFmt is 62 wide. That is the content width at 80
 	// columns beside the menu. The source column is 15, the width of an address.
-	eventFmt   = "%-14s  %-18s %-15s %s"
+	eventFmt = "%-14s  %-18s %-15s %s"
+	// namedFmt is eventFmt with the name of the source after its address.
+	// The header is 77 wide.
+	namedFmt   = "%-14s  %-18s %-15s %-14s %s"
 	detailEvts = 20
 	// seriesFmt is the label column of the bar rows. Day cells follow, four
 	// wide, with one space between, so the numbers are under the bars.
@@ -202,12 +205,27 @@ func (a *App) buildEvents(seg string) []row {
 			evs = append(evs, e)
 		}
 	}
+	shown := evs[:min(len(evs), limit)]
+	// The source is the address. A device chooses its own name, so the name
+	// goes beside the address and never in its place. Before, the name
+	// replaced the address, and a device could show itself as a different
+	// one. The name gets a column only when the width has space for it. At
+	// 80 columns it does not, and Devices gives the name of each address.
+	named := false
+	for _, e := range shown {
+		named = named || e.Name != ""
+	}
+	head := fmt.Sprintf(eventFmt, "time", "threat", "source", "destination")
+	if wide := fmt.Sprintf(namedFmt, "time", "threat", "source", "name", "destination"); named && len(wide) <= a.contentWidth() {
+		head = wide
+	} else {
+		named = false
+	}
 	// The legend goes on only when the row has space. At 80 columns, the
 	// header already fills the content width exactly. Thus any addition
 	// removed the last character of "destination". That legend explained one
 	// mark and removed a different one. Where it does not fit, ? help has the
 	// same sentence.
-	head := fmt.Sprintf(eventFmt, "time", "threat", "source", "destination")
 	for _, e := range evs {
 		if e.Alert {
 			if legend := "  ! = not stopped"; len(head)+len(legend) <= a.w-menuWidth {
@@ -217,15 +235,12 @@ func (a *App) buildEvents(seg string) []row {
 		}
 	}
 	rows := []row{{text: head}}
-	for i, e := range evs {
-		if i == limit {
-			break
+	for _, e := range shown {
+		text := fmt.Sprintf(eventFmt, when(e.T), clip(threatOf(e), 18), e.Src, dstHits(e))
+		if named {
+			text = fmt.Sprintf(namedFmt, when(e.T), clip(threatOf(e), 18), e.Src, clip(e.Name, 14), dstHits(e))
 		}
-		src := e.Name
-		if src == "" {
-			src = e.Src
-		}
-		rows = append(rows, row{fmt.Sprintf(eventFmt, when(e.T), clip(threatOf(e), 18), clip(src, 15), dstHits(e)), true})
+		rows = append(rows, row{text, true})
 	}
 	if len(evs) == 0 {
 		rows = append(rows, row{text: noStats})

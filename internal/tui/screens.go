@@ -326,7 +326,10 @@ func (a *App) buildHouseDevices() []row {
 		if c, ok := seen[h.IP]; ok {
 			q, bl, last = fmt.Sprint(c.Queries), fmt.Sprint(c.Blocked), age(c.LastSeen, now)
 		}
-		rows = append(rows, row{line(h.Name, h.IP, pin, q, bl, last, h.MAC, lease), true})
+		// A reservation name comes from house.hosts as written. A name that is
+		// not plain ASCII can look like a different name. Thus it shows as the
+		// name of a lease does, with '?' for each such character.
+		rows = append(rows, row{line(admin.Printable(h.Name), h.IP, pin, q, bl, last, h.MAC, lease), true})
 	}
 	if len(a.hosts) == 0 {
 		rows = append(rows, row{text: "no leases or reservations"})
