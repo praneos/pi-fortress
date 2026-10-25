@@ -92,8 +92,12 @@ work_tree() {
 # secretscan FILE...: nothing key-shaped in what is about to be signed
 # (internal/secretscan). A bundle is an uncompressed tar, so the bytes of
 # its files are scanned as they are.
+#
+# The scan runs on this host. Thus GOOS and GOARCH are unset for it: make
+# pi-bundle GOARCH=arm64 exports GOARCH, and an arm64 test binary does not
+# start on an amd64 desktop.
 secretscan() {
-	(cd "$ROOT" && SECRETSCAN_FILES="$*" go test -count=1 -run TestArtifactsHoldNoSecrets ./internal/secretscan >/dev/null) ||
+	(cd "$ROOT" && env -u GOOS -u GOARCH SECRETSCAN_FILES="$*" go test -count=1 -run TestArtifactsHoldNoSecrets ./internal/secretscan >/dev/null) ||
 		die "something key-shaped in $*: SECRETSCAN_FILES=\"$*\" go test -v -run TestArtifactsHoldNoSecrets ./internal/secretscan"
 }
 
