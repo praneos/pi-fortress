@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	"pi-fortress/internal/admin"
 	"pi-fortress/internal/alert"
 	"pi-fortress/internal/audit"
 	"pi-fortress/internal/base"
@@ -127,14 +128,24 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 		fields["truncated"] = strconv.Itoa(truncated)
 	}
 	logTool("fetch", fields, time.Since(start), err)
-	for _, line := range report {
-		fmt.Fprintln(stdout, line)
-	}
+	printReport(stdout, report)
 	fmt.Fprintf(stdout, "wrote %d ips, %d domains -> %s\n", nIPs, nDoms, o)
 	if err != nil {
 		return 1
 	}
 	return 0
+}
+
+// printReport writes the report of a fetch, one line for each entry. A
+// feed server supplies part of each line: the final URL of a redirect,
+// and the text of a TLS or HTTP error, which can hold the names in its
+// certificate. Each line goes through admin.Printable, so a control
+// character from the server (ESC, a C1 CSI or OSC) cannot get to the
+// terminal of the operator.
+func printReport(w io.Writer, report []string) {
+	for _, line := range report {
+		fmt.Fprintln(w, admin.Printable(line))
+	}
 }
 
 func runCompile(args []string, stdout, stderr io.Writer) int {
