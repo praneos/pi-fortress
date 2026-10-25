@@ -501,6 +501,19 @@ func TestSourcesSchemaIsRefused(t *testing.T) {
 	}
 }
 
+// A hosts file that a sources.json gives no format reads as plain. The
+// first field of each line is then the address, and the feed blocked
+// 0.0.0.0 in place of its names.
+func TestParsePlainKeepsTheNameAfterAnAddress(t *testing.T) {
+	got := ParsePlain("0.0.0.0 ads.example\n127.0.0.1 track.example extra.example\n:: six.example\n0.0.0.0\n0.0.0.0 0.0.0.0\n1.2.3.4 mapped.example\n1.2.3.4\nplain.example\n", "domains")
+	if want := "ads.example,track.example,six.example,plain.example"; strings.Join(got, ",") != want {
+		t.Fatalf("got %q, want %q", strings.Join(got, ","), want)
+	}
+	if ips := ParsePlain("0.0.0.0 ads.example\n", "ips"); len(ips) != 0 {
+		t.Fatalf("ips feed took %q", ips)
+	}
+}
+
 // The code looked only at f[1]. So each alias after the first name
 // stayed unblocked, and a numeric first alias dropped the full record.
 func TestParseHostsKeepsEveryAlias(t *testing.T) {

@@ -12,7 +12,7 @@ import (
 // canonical name of two or more labels. An empty entry, a bare label, a
 // wildcard, a root, an address or a local name would block much more
 // than one site.
-func checkDomain(t *testing.T, feed, d string, numericOK bool) {
+func checkDomain(t *testing.T, feed, d string) {
 	t.Helper()
 	if got, ok := policycompile.ParseDomain(d); !ok || got != d {
 		t.Fatalf("%s: entry %q is not a canonical domain (%q, %v)", feed, d, got, ok)
@@ -23,7 +23,7 @@ func checkDomain(t *testing.T, feed, d string, numericOK bool) {
 	if strings.HasSuffix(d, ".local") || strings.HasSuffix(d, ".localhost") {
 		t.Fatalf("%s: local name %q", feed, d)
 	}
-	if _, err := netip.ParseAddr(d); err == nil && !numericOK {
+	if _, err := netip.ParseAddr(d); err == nil {
 		t.Fatalf("%s: address %q read as a name", feed, d)
 	}
 }
@@ -68,7 +68,7 @@ func FuzzParseFeeds(f *testing.F) {
 	f.Fuzz(func(t *testing.T, body string) {
 		lines := strings.Count(body, "\n") + 1
 		for _, d := range ParseHosts(body) {
-			checkDomain(t, "hosts", d, false)
+			checkDomain(t, "hosts", d)
 		}
 		if n := len(ParseHosts(body)); n > len(strings.Fields(body)) {
 			t.Fatalf("hosts: %d entries from %d tokens", n, len(strings.Fields(body)))
@@ -78,7 +78,7 @@ func FuzzParseFeeds(f *testing.F) {
 			t.Fatalf("plain: %d entries from %d lines", len(plain), lines)
 		}
 		for _, d := range plain {
-			checkDomain(t, "plain", d, true)
+			checkDomain(t, "plain", d)
 		}
 		ips := ParsePlain(body, "ips")
 		if len(ips) > lines {

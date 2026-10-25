@@ -151,30 +151,42 @@ func ParseHosts(body string) []string {
 			continue
 		}
 		f := strings.Fields(tok)
-		if len(f) < 2 {
-			continue
-		}
-		switch f[0] {
-		case "0.0.0.0", "127.0.0.1", "::", "::1":
-		default:
+		if len(f) < 2 || !sinkAddr(f[0]) {
 			continue
 		}
 		for _, name := range f[1:] {
-			parsed, ok := parseToken(name, "domains")
-			if !ok {
-				continue
+			if parsed, ok := hostName(name); ok {
+				out = append(out, parsed)
 			}
-			// "0.0.0.0 0.0.0.0" and similar: an address is not a name,
-			// although four numeric labels satisfy the domain grammar.
-			// The check is on the parsed name, so "*.0.0.0.0" and
-			// "0.0.0.0." are also not names.
-			if _, err := netip.ParseAddr(parsed); err == nil {
-				continue
-			}
-			out = append(out, parsed)
 		}
 	}
 	return out
+}
+
+// sinkAddr says if a token is an address that a hosts file sends a blocked
+// name to. A line with a different address maps a name; it does not block
+// it.
+func sinkAddr(tok string) bool {
+	switch tok {
+	case "0.0.0.0", "127.0.0.1", "::", "::1":
+		return true
+	}
+	return false
+}
+
+// hostName parses one name of a hosts line.
+func hostName(token string) (string, bool) {
+	parsed, ok := parseDomain(token)
+	if !ok {
+		return "", false
+	}
+	// "0.0.0.0 0.0.0.0" and similar: an address is not a name, although
+	// four numeric labels satisfy the domain grammar. The check is on the
+	// parsed name, so "*.0.0.0.0" and "0.0.0.0." are also not names.
+	if _, err := netip.ParseAddr(parsed); err == nil {
+		return "", false
+	}
+	return parsed, true
 }
 
 type Fetcher struct {
@@ -349,6 +361,13 @@ func parseToken(token, kind string) (string, bool) {
 	return parseDomain(token)
 }
 
+// ParsePlain reads one entry from each line: the first field.
+//
+// A domains feed with no format key reads as plain. When that feed is a
+// hosts file, the first field is the address, and the feed blocked 0.0.0.0
+// in place of its names. So a line that starts with a sink address gives
+// the name after it, and an address is not a name, as in ParseHosts. A
+// line keeps one entry: a hosts feed with aliases needs format hosts.
 func ParsePlain(body, kind string) []string {
 	var out []string
 	for line := range strings.SplitSeq(body, "\n") {
@@ -356,8 +375,21 @@ func ParsePlain(body, kind string) []string {
 		if tok == "" {
 			continue
 		}
-		token := strings.Fields(tok)[0]
-		if parsed, ok := parseToken(token, kind); ok {
+		f := strings.Fields(tok)
+		if kind != "domains" {
+			if parsed, ok := parseToken(f[0], kind); ok {
+				out = append(out, parsed)
+			}
+			continue
+		}
+		token := f[0]
+		if sinkAddr(token) {
+			if len(f) < 2 {
+				continue
+			}
+			token = f[1]
+		}
+		if parsed, ok := hostName(token); ok {
 			out = append(out, parsed)
 		}
 	}
