@@ -144,6 +144,24 @@ func TestAllowStarLineIsTheName(t *testing.T) {
 	}
 }
 
+// A line of one label would allow all names below it: "com" is all of
+// .com. Thus such a line allows nothing, also when it is what is left of a
+// "*." line ("*.org"). core.hosts refuses a one-label host the same way.
+func TestAllowOneLabelLineAllowsNothing(t *testing.T) {
+	f := testForward(t, "com\n*.org\nLocalHost.\ngithub.com\n", "")
+	if got, want := f.Names(), []string{"github.com"}; !slices.Equal(got, want) {
+		t.Fatalf("Names() = %v, want %v", got, want)
+	}
+	for _, n := range []string{"com", "foo.com", "a.b.com", "x.org", "localhost"} {
+		if f.Allowed(n, false) {
+			t.Errorf("Allowed(%q) = true", n)
+		}
+	}
+	if !f.Allowed("api.github.com", false) {
+		t.Fatal("github.com line lost")
+	}
+}
+
 // The shipped seeds must resolve to a non-empty forward set.
 func TestShippedForwardNamesNonEmpty(t *testing.T) {
 	_, file, _, _ := runtime.Caller(0)

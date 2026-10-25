@@ -455,13 +455,15 @@ func asciiWarnings(policyDir string) ([]string, error) {
 	return warn, nil
 }
 
-// starWarnings gives one warning for each "*.name" line of allow.domains.
+// allowWarnings gives one warning for each "*.name" line of allow.domains.
 // The line allows name and all names below it (corepolicy.AllowEntry),
 // the same as the line "name". The warning tells the operator to write
-// that. It reads the line as LoadDomains does: the first token before a
-// "#". The block lists need no warning: ParseDomain reads "*.name" there
-// as "name", and a sinkhole line also covers the names below it.
-func starWarnings(path string) ([]string, error) {
+// that. It also gives one warning for each one-label line ("com",
+// "*.com"), which allows nothing. It reads the line as LoadDomains does:
+// the first token before a "#". The block lists need no "*." warning:
+// ParseDomain reads "*.name" there as "name", and a sinkhole line also
+// covers the names below it.
+func allowWarnings(path string) ([]string, error) {
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -476,7 +478,11 @@ func starWarnings(path string) ([]string, error) {
 		if len(bits) == 0 {
 			continue
 		}
-		if name, star := corepolicy.AllowEntry(bits[0]); star && name != "" {
+		name, star, oneLabel := corepolicy.AllowEntry(bits[0])
+		switch {
+		case oneLabel:
+			warn = append(warn, fmt.Sprintf("%s line %d: %q is one label; it would allow every name below it; write the full name", filepath.Base(path), i+1, bits[0]))
+		case star && name != "":
 			warn = append(warn, fmt.Sprintf("%s line %d: %q means %s and every name below it; write %s", filepath.Base(path), i+1, bits[0], name, name))
 		}
 	}
@@ -1158,11 +1164,11 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
-	star, err := starWarnings(filepath.Join(policyDir, agent.File("allow.domains")))
+	allowWarn, err := allowWarnings(filepath.Join(policyDir, agent.File("allow.domains")))
 	if err != nil {
 		return Summary{}, err
 	}
-	warnings = append(append(append(warnings, ascii...), star...), core.Warnings...)
+	warnings = append(append(append(warnings, ascii...), allowWarn...), core.Warnings...)
 	if out.HouseWhatsAppNFT != "" {
 		wa, err := LoadTokens(filepath.Join(policyDir, HouseWhatsAppFile), "ips")
 		if err != nil {

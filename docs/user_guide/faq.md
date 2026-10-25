@@ -105,7 +105,7 @@ If the placeholder is in a different location, the broker refuses the full reque
 
 To declare the header, run `sudo pf enroll mint --kind KIND --header PRIVATE-TOKEN ...`. Or write `gitlab.com GITLAB_TOKEN:PRIVATE-TOKEN` in `core.hosts.local` yourself. Then run `sudo pf apply`. You can never declare a header that is logged, that is echoed, or that controls routing.
 
-Do not put documentation hosts or blob hosts in `core.hosts`. Put them in `allow.domains`. When paranoid mode is off, the only effect of `allow.domains` is that the gateway does not log these hosts as unknown. In paranoid mode, `allow.domains` is the allowlist. Each name in it also allows all names below it, at all depths. A `*.example.com` line is the same as `example.com`: it allows `example.com` and all names below it. `pf compile` gives a warning for it, and `sudo pf tui` writes it as `example.com`. Write the narrowest name that works.
+Do not put documentation hosts or blob hosts in `core.hosts`. Put them in `allow.domains`. When paranoid mode is off, the only effect of `allow.domains` is that the gateway does not log these hosts as unknown. In paranoid mode, `allow.domains` is the allowlist. Each name in it also allows all names below it, at all depths. A `*.example.com` line is the same as `example.com`: it allows `example.com` and all names below it. `pf compile` gives a warning for it, and `sudo pf tui` writes it as `example.com`. A line of one label, such as `com` or `*.com`, allows nothing, and `pf compile` gives a warning for it. Write the narrowest name that works.
 
 **Does it work on a Mac?**
 Not natively.

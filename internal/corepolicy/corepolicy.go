@@ -299,7 +299,7 @@ func LoadDomains(path string) (map[string]struct{}, error) {
 			continue
 		}
 
-		host, _ := AllowEntry(bits[0])
+		host, _, _ := AllowEntry(bits[0])
 		if host == "" {
 			continue
 		}
@@ -309,21 +309,33 @@ func LoadDomains(path string) (map[string]struct{}, error) {
 }
 
 // AllowEntry reads the first token of an allow list line (allow.domains,
-// allow.<segment>.domains). It gives the name that the line allows, and if
-// the line starts with "*.". Each line allows the name and all names below
-// it. Thus "*.name" is the same as "name", as pf tui writes it. Before, the
-// "*.name" line matched no name. One "*." goes, and only before a name
-// with a dot. If a "*" is left ("*.*.name") or the name has one label
-// ("*.com"), it gives "": the line allows nothing.
-func AllowEntry(tok string) (string, bool) {
+// allow.<segment>.domains). It gives the name that the line allows, if
+// the line starts with "*.", and if the line is one label. Each line
+// allows the name and all names below it. Thus "*.name" is the same as
+// "name", as pf tui writes it. Before, the "*.name" line matched no name.
+// One "*." goes, and only before a name with a dot. If a "*" is left
+// ("*.*.name"), it gives "": the line allows nothing. A line with no dot
+// ("com", or "*.com" after the "*." goes) also gives "". It would allow
+// all names below it, all of .com. core.hosts refuses such a host too.
+func AllowEntry(tok string) (name string, star, oneLabel bool) {
 	host := normHost(tok)
-	if !strings.HasPrefix(host, "*.") {
-		return host, false
+	if star = strings.HasPrefix(host, "*."); star {
+		if host = host[2:]; !validName(host) {
+			return "", true, isLabel(host)
+		}
+		return host, true, false
 	}
-	if host = host[2:]; !validName(host) {
-		return "", true
+	if !strings.Contains(host, ".") {
+		return "", false, isLabel(host)
 	}
-	return host, true
+	return host, false, false
+}
+
+// isLabel says if s is one label that a name can hold: s and a dot and a
+// second label are a valid name. A token that is not a label ("*", "a/b")
+// allows nothing too, but it is not a one-label name.
+func isLabel(s string) bool {
+	return s != "" && !strings.Contains(s, ".") && validName(s+".x")
 }
 
 func (p *Policy) HostAllowed(name string) bool {

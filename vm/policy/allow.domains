@@ -10,6 +10,7 @@
 # already here. A "*.name" line is the same as "name": it allows name and
 # all names below it, and pf compile warns. Write "name". `pf tui` writes a
 # "*.name" that you type as "name". Write the narrowest name that works.
+# A line of one label ("com", "*.com") allows nothing, and pf compile warns.
 # A non-ASCII name is refused: pf compile warns, skips the line and gives
 # the xn-- form.
 github.com

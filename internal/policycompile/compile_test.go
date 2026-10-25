@@ -627,7 +627,8 @@ func TestShieldedBlacklistLineWarns(t *testing.T) {
 
 // A "*.name" line in allow.domains allows name and all names below it, as
 // "name" does (corepolicy.AllowEntry). The compile tells the operator to
-// write "name". A "*." line that allows nothing gets no such warning. The
+// write "name". A "*." line that allows nothing gets no such warning (a
+// one-label one gets its own). The
 // block lists already read "*.name" as "name" (ParseDomain) and do not warn.
 func TestAllowStarLineWarns(t *testing.T) {
 	dir := t.TempDir()
@@ -644,12 +645,36 @@ func TestAllowStarLineWarns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{`allow.domains line 2: "*.Example.com" means example.com and every name below it; write example.com`}
+	want := []string{
+		`allow.domains line 2: "*.Example.com" means example.com and every name below it; write example.com`,
+		`allow.domains line 4: "*.com" is one label; it would allow every name below it; write the full name`,
+	}
 	if !slices.Equal(sum.Warnings, want) {
 		t.Fatalf("warnings %q, want %q", sum.Warnings, want)
 	}
 	if dns, _ := os.ReadFile(filepath.Join(out, "d.conf")); string(dns) != dnsLines([]string{"ads.example"}) {
 		t.Fatalf("d.conf=%q", dns)
+	}
+}
+
+// A one-label line of allow.domains allows nothing (corepolicy.AllowEntry).
+// The compile tells the operator why, for "com" and for "*.com".
+func TestAllowOneLabelLineWarns(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "allow.domains"), []byte("github.com\nCom\n*.org\n*\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	sum, err := Compile(dir, Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		`allow.domains line 2: "Com" is one label; it would allow every name below it; write the full name`,
+		`allow.domains line 3: "*.org" is one label; it would allow every name below it; write the full name`,
+	}
+	if !slices.Equal(sum.Warnings, want) {
+		t.Fatalf("warnings %q, want %q", sum.Warnings, want)
 	}
 }
 
