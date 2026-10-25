@@ -1288,6 +1288,10 @@ func (a *App) drawClaim(b *buffer, x int) {
 		"    " + c.Code,
 		"",
 		fmt.Sprintf("expires in %ds, single use", left),
+		// The code redeems the slot for each person who reads it. The
+		// passphrase is masked for that reason, and this code is not. Thus
+		// the screen says why it is a secret too.
+		"secret until redeemed; do not share this screen",
 		"",
 		"on the agent, all of it (the hash checks the script):",
 	}

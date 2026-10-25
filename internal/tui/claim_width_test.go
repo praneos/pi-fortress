@@ -43,3 +43,22 @@ func TestClaimOverlayUnclippedAt80Columns(t *testing.T) {
 		t.Fatalf("check line clipped: %q", got)
 	}
 }
+
+// The claim code redeems the slot for anyone who reads it. The passphrase
+// prompt hides what it takes for that reason, but the claim code shows in
+// bold. Thus the overlay says that the code is a secret, at 80 columns and
+// with the line that closes it still on the screen.
+func TestClaimOverlaySaysTheCodeIsSecret(t *testing.T) {
+	c, _ := testConfig(t)
+	c.WWWDir = t.TempDir()
+	_ = os.MkdirAll(filepath.Join(c.WWWDir, "claims"), 0770)
+	if _, err := secrets.Open(c.SecretsPath).MintKinds([]string{"OPENAI_API_KEY"}, map[string]string{"OPENAI_API_KEY": "sk-live"}); err != nil {
+		t.Fatal(err)
+	}
+	last := run(t, c, NewFake(80, 24).Type(keys(netAgent, secKeys)+"c")).Last()
+	for _, want := range []string{"secret until redeemed; do not share this screen", "any key closes"} {
+		if !strings.Contains(last, want) {
+			t.Fatalf("the claim overlay has no %q:\n%s", want, last)
+		}
+	}
+}
