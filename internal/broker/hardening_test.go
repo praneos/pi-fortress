@@ -457,7 +457,9 @@ func TestHostMustBeHostAndPort(t *testing.T) {
 		{"CDN.Example", 204},
 		{"cdn.example.", 204},
 		{"[2001:db8::1]", 204},
-		{"[2001:db8::1]:8443", 204},
+		{"[2001:db8::1]:443", 204},
+		// A valid form, but not the port that the broker dialled.
+		{"[2001:db8::1]:8443", 400},
 		{"192.0.2.1:443", 204},
 	}
 	for _, c := range cases {

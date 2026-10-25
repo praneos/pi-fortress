@@ -320,7 +320,7 @@ func (b *Broker) serve(ctx context.Context, client net.Conn, br *bufio.Reader, p
 // error returns done with errRefused, so the caller tests done, not err.
 func (b *Broker) admit(c *call) (done bool, err error) {
 	c.host = prettyHost(c.req, c.p.SNI)
-	if rule := targetRefusal(c.req); rule != "" {
+	if rule := targetRefusal(c.req, c.p.OrigDst.Port()); rule != "" {
 		_ = b.logStrip(&c.strips, clientIP(c.p), c.host, "target", rule)
 		return true, b.refuse(c.client, c.req, c.expect, 400, "400 Bad Request", "request\n")
 	}
@@ -370,8 +370,10 @@ func (b *Broker) admit(c *call) (done bool, err error) {
 // empty one, makes the routing of the origin a guess. Each origin can send
 // it to a different vhost than the one the SNI names. HTTP/1.0 has no
 // Host requirement, so there the decisions use the SNI. A Host that is
-// there must be a host and port (validHost).
-func targetRefusal(req *httpwire.Request) string {
+// there must be a host and port (validHost). Its port must be the port
+// that the broker dialled (hostPortMismatch). dialled is 0 when no
+// original destination is known.
+func targetRefusal(req *httpwire.Request, dialled uint16) string {
 	switch {
 	case req.Method == "CONNECT":
 		return "connect"
@@ -389,7 +391,29 @@ func targetRefusal(req *httpwire.Request) string {
 	if host != "" && !validHost(host) {
 		return "bad_host"
 	}
+	if host != "" && hostPortMismatch(host, dialled) {
+		return "host_port_mismatch"
+	}
 	return ""
+}
+
+// hostPortMismatch reports a Host port that is not the dialled port. The
+// fence, the blocklist and paranoid mode decide on the name and ignore
+// the port. An origin can route by the port in the Host, so a different
+// port can name a vhost that nobody judged. A Host with no port names no
+// other port, so it goes out. host is valid
+// (validHost). A bracketed IPv6 literal has colons of its own, so only a
+// colon after the ']' starts a port.
+func hostPortMismatch(host string, dialled uint16) bool {
+	if dialled == 0 || strings.HasSuffix(host, "]") {
+		return false
+	}
+	i := strings.LastIndexByte(host, ':')
+	if i < 0 {
+		return false
+	}
+	n, err := strconv.Atoi(host[i+1:])
+	return err != nil || n != int(dialled)
 }
 
 // validHost reports whether h is host[:port] (RFC 9110 §7.2): a DNS name,
