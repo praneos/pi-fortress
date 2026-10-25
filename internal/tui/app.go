@@ -27,6 +27,10 @@ type row struct {
 	sel  bool
 }
 
+// promptCap is the length in bytes after which a prompt refuses all
+// input. The prompt line shows [full] at that length.
+const promptCap = 253
+
 type prompt struct {
 	label string
 	buf   string
@@ -644,7 +648,7 @@ func (a *App) promptKey(k Key) {
 			p.done(strings.ToLower(string(k.Rune)))
 			return
 		}
-		if k.Rune >= 0x20 && len(p.buf) < 253 {
+		if k.Rune >= 0x20 && len(p.buf) < promptCap {
 			p.buf += string(k.Rune)
 		}
 	}
@@ -1135,7 +1139,14 @@ func (a *App) drawFooter(b *buffer) {
 		if a.pr.mask {
 			shown = strings.Repeat("*", len(shown))
 		}
-		b.line(0, y, b.w, clip(a.pr.label+": "+shown, b.w-1)+"_", reverse)
+		// A full prompt refuses each next key. Before, it did this silently.
+		// Thus a pasted value that was too long was saved in cut form, and the
+		// operator did not know. The mark stays after the clip.
+		end := "_"
+		if len(a.pr.buf) >= promptCap {
+			end = "_ [full]"
+		}
+		b.line(0, y, b.w, clip(a.pr.label+": "+shown, b.w-len(end))+end, reverse)
 		return
 	}
 	hint := "j/k move  Enter open  1-9 jump  ? help  q quit"
@@ -1255,6 +1266,8 @@ var helpText = []string{
 	"Keys never shows a slot's value. A sealed store refuses every",
 	"substitution until u takes the passphrase (masked, never",
 	"logged); the rest of the box does not wait for it.",
+	"",
+	"A prompt takes 253 bytes at most; then it shows [full].",
 	"",
 	"Any key closes this help.",
 }
