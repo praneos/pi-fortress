@@ -115,7 +115,7 @@ func houseTests(t *testing.T) {
 		// the cache, but from SIGHUP, after systemctl returns. Thus the test
 		// retries the dial until one dial comes after the reset.
 		pi(t, "sudo systemctl reload pi-fortress-dns-agent-go.service")
-		eventually(t, 20*time.Second, func() string {
+		eventuallyEvery(t, 20*time.Second, 2*time.Second, func() string {
 			mustSSH(t, "house", "curl -sS --noproxy '*' -o /dev/null --max-time 10 --resolve "+allow+":443:"+ip+" https://"+allow+"/")
 			if contains(pi(t, "sudo nft list set inet fortress resolved_house_v4"), ip) {
 				return ""

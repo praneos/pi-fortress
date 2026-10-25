@@ -150,7 +150,7 @@ func houseDeviceTests(t *testing.T) {
 			t.Fatal(err)
 		}
 		houseIF := strings.TrimSpace(pi(t, ". /etc/pi-fortress/house.env && echo $HOUSE_IF"))
-		eventually(t, 60*time.Second, func() string {
+		eventuallyEvery(t, 60*time.Second, 2*time.Second, func() string {
 			if out := pi(t, "ip -4 -o addr show dev "+houseIF); !contains(out, " "+gw+"/24") {
 				return "house address gone after carrier loss:\n" + out
 			}

@@ -239,9 +239,17 @@ func failedAsExpected(t *testing.T, host, cmd, out string, err error) {
 	}
 }
 
-// eventually retries fn every 2 s until it returns "" or d has passed,
-// then fails with fn's last message.
+// eventually retries fn every 0.5 s until it returns "" or d has passed,
+// then fails with fn's last message. Use it when fn only reads state.
 func eventually(t *testing.T, d time.Duration, fn func() string) {
+	t.Helper()
+	eventuallyEvery(t, d, 500*time.Millisecond, fn)
+}
+
+// eventuallyEvery is eventually with its own interval. Use 2 s when fn
+// sends traffic to a public host or runs a heavy command. Then a slow
+// recovery does not send a request every 0.5 s.
+func eventuallyEvery(t *testing.T, d, every time.Duration, fn func() string) {
 	t.Helper()
 	deadline := time.Now().Add(d)
 	for {
@@ -252,7 +260,7 @@ func eventually(t *testing.T, d time.Duration, fn func() string) {
 		if time.Now().After(deadline) {
 			t.Fatal(msg)
 		}
-		time.Sleep(2 * time.Second)
+		time.Sleep(every)
 	}
 }
 
