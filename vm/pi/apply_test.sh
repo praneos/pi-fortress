@@ -35,6 +35,37 @@ if ! diff -u "${golden}" "${tmp}/no-house.nft"; then
   fail "no-house ruleset drifted from testdata/nft.no-house.golden"
 fi
 
+# With a checkout, the lists come from the checkout. Apply names that tree
+# when a list in /etc/pi-fortress differs from it. It is quiet when the
+# copies are equal or when /etc/pi-fortress has no copy. The copy of apply
+# in a temp tree stops at the lib lookup; the line comes before that. A box
+# with a /vagrant checkout uses that tree, so the check skips there.
+if [[ ! -f /vagrant/vm/pi/net.env ]]; then
+  pt="${tmp}/pt"
+  mkdir -p "${pt}/vm/pi" "${pt}/vm/policy" "${tmp}/pt-etc"
+  cp "${apply}" "${pt}/vm/pi/apply.sh"
+  cp "${tmp}/net.env" "${pt}/vm/pi/net.env"
+  for _n in a b c d e f g; do
+    echo "${_n}.example" >"${pt}/vm/policy/${_n}.domains"
+  done
+  echo "192.0.2.1" >"${pt}/vm/policy/blacklist.ips"
+  tree_run() {
+    PF_TEST_ETC="${tmp}/pt-etc" PF_NET_ENV_LOCAL=/nonexistent \
+      bash "${pt}/vm/pi/apply.sh" --render-nft 2>&1 || true
+  }
+  tree_run | grep -q 'lists come from' && fail "tree warning with no copy in /etc/pi-fortress"
+  cp "${pt}/vm/policy/"* "${tmp}/pt-etc/"
+  tree_run | grep -q 'lists come from' && fail "tree warning when the copies are equal"
+  echo "203.0.113.5" >>"${tmp}/pt-etc/blacklist.ips"
+  tree_run | grep -qxF "pi-fortress: lists come from ${pt}/vm/policy, not ${tmp}/pt-etc; these differ: blacklist.ips" ||
+    fail "no tree warning for a changed /etc copy: $(tree_run)"
+  for _n in a b c d e f g; do
+    echo "x.example" >>"${tmp}/pt-etc/${_n}.domains"
+  done
+  tree_run | grep -qxF "pi-fortress: lists come from ${pt}/vm/policy, not ${tmp}/pt-etc; these differ: a.domains b.domains c.domains d.domains e.domains (+3 more)" ||
+    fail "the tree warning is not bounded: $(tree_run)"
+fi
+
 cat >"${tmp}/house.env" <<'EOF'
 HOUSE_IF=eth1
 HOUSE_ADMIN_IP=10.78.0.20

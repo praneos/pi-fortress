@@ -155,6 +155,29 @@ fi
 # PF_POLICY points apply at another policy tree (the TUI's -policy).
 POLICY="${PF_POLICY:-${POLICY}}"
 
+# With a checkout, the lists come from the checkout. An edit of the copy
+# in /etc/pi-fortress has no effect. Tell the operator which tree is used
+# and which lists differ. Say nothing when the copies are equal or when
+# /etc/pi-fortress has no copy. PF_TEST_ETC is the apply_test stand-in
+# for /etc/pi-fortress.
+_etc="${PF_TEST_ETC:-/etc/pi-fortress}"
+if [[ -n "${TREE}" && "${POLICY}" -ef "${TREE}/vm/policy" && ! "${POLICY}" -ef "${_etc}" ]]; then
+  _diff=()
+  for _f in "${POLICY}"/*.domains "${POLICY}"/*.ips "${POLICY}"/*.allow; do
+    _n="${_f##*/}"
+    if [[ -f "${_f}" && -f "${_etc}/${_n}" ]] && ! cmp -s "${_f}" "${_etc}/${_n}"; then
+      _diff+=("${_n}")
+    fi
+  done
+  if [[ "${#_diff[@]}" -gt 0 ]]; then
+    _more=""
+    if [[ "${#_diff[@]}" -gt 5 ]]; then
+      _more=" (+$((${#_diff[@]} - 5)) more)"
+    fi
+    echo "pi-fortress: lists come from ${POLICY}, not ${_etc}; these differ: ${_diff[*]:0:5}${_more}" >&2
+  fi
+fi
+
 # net.env comes from git, and a ship copies it over /etc. Thus the next
 # ship reverts a value that the operator sets at the seat. The overlay is
 # not in the tree. Nothing copies over it. So operator settings go here.
