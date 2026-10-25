@@ -1,8 +1,9 @@
 # Signed ship
 
 This is the developer loop. It ships your own build from a desktop to a
-Pi. A release install uses `install.sh` and `pf upgrade` instead
-(`gateway_install.md`). Below, `<user>` is your login user on the Pi
+Pi. An install from source at a stable tag uses `install.sh` and
+`pf upgrade` instead (`gateway_install.md`). From v1, a release install
+does the same. Below, `<user>` is your login user on the Pi
 (`PI_USER` for `make`).
 
 Before: `make pi-ship` was rsync as your login user, plus `sudo pf apply`

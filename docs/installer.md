@@ -1,6 +1,6 @@
 # Installer: from rsync loop to a thing a stranger can install
 
-Status: replaced by `docs/gateway_install.md`. `pf install` and `pf upgrade` exist now. But they use a bundle-per-arch design: `pf-bundle-<ver>-<arch>.tar` + `.sig`, with `Extract` from `internal/ship`. They do not use the original design of this file below (`go:embed`, `--agent-if`, `.deb`). Nothing implements that design. This file keeps it only as the earlier record.
+Status: replaced by `docs/gateway_install.md`. `pf install` and `pf upgrade` exist now. But they use a bundle-per-arch design: `pf-bundle-<ver>-<arch>.tar` + `.sig`, with `Extract` from `internal/ship`. They do not use the original design of this file below (`go:embed`, `--agent-if`, `.deb`). Nothing implements that design. This file keeps it only as the earlier record. There are no binary releases before v1, so the download URLs below do not exist.
 
 Read `gateway_install.md` first. It tells how a box gets installed today. Come back here for the tier-2 and tier-3 ideas (`.deb`, Pi image) that it does not cover yet.
 

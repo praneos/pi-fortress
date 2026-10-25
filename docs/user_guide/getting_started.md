@@ -5,18 +5,18 @@ You can run Pi Fortress on a Pi, on a Debian or Ubuntu VM, or in a lab. All ways
 
 | Way | Description | How to start | Escape requires |
 |---|---|---|---|
-| Pi 5 | A Raspberry Pi 5 on the cable between the agent machine and your uplink. Full steps: [pi_setup.md](pi_setup.md) | Install a signed release with `install.sh`: [pi_setup.md](pi_setup.md), step 6. | Physical access |
-| Gateway VM | A Debian or Ubuntu VM next to the agent VM. The two VMs share a virtual network. No other machine is on that network: [below](#gateway-on-a-debian-or-ubuntu-vm) | Install a signed release with `install.sh`, as on the Pi. | A hypervisor break |
+| Pi 5 | A Raspberry Pi 5 on the cable between the agent machine and your uplink. Full steps: [pi_setup.md](pi_setup.md) | Build `pf` from the latest stable tag and install it with `install.sh`: [pi_setup.md](pi_setup.md), step 6. | Physical access |
+| Gateway VM | A Debian or Ubuntu VM next to the agent VM. The two VMs share a virtual network. No other machine is on that network: [below](#gateway-on-a-debian-or-ubuntu-vm) | Build `pf` from the latest stable tag and install it with `install.sh`, as on the Pi. | A hypervisor break |
 | Cloud lab, for testers and contributors | The Pi, a home device, a desktop seat and agents, all as VMs on one Linux host with KVM, in the cloud or local. It runs the same end-to-end tests as a real Pi | One command from a clone of the source, with the cloud lab guide (`docs/cloud_lab.md`) | A hypervisor break |
 | Vagrant lab, for testers and contributors | Two VirtualBox VMs on a laptop: a gateway VM and an agent VM. An internal network connects them | From a clone of the source, with the lab manual (`docs/lab.md`) | A hypervisor break. The VirtualBox NAT adapter is the virtual router that gives a VM internet access. The hypervisor disconnects this adapter when `vagrant ssh` works without it. The path for `vagrant ssh` is through the Pi, with `AGENT_BRIDGE` set, or through a host-only management network interface (`vboxnet0`, `192.168.56.0/24` by default) |
 
 !!! note "Open evaluation"
     The fastest way to evaluate Pi Fortress is the cloud lab: one command, no hardware. Use test keys, or keys with a spend limit, while you evaluate.
 
-Each release is signed. `install.sh` does these steps:
+Pi Fortress has no binary releases yet. Release builds start at v1, when the project is stable. Until then, you build `pf` from the latest stable tag. The project signs each stable tag ([Verify the source](verify.md)). You sign the bundle with your own SSH key. `install.sh` does these steps:
 
 1. It examines the machine.
-2. It verifies the signed bundle.
+2. It verifies the bundle against your key.
 3. It starts `pf install`.
 
 ## Prerequisites
@@ -56,13 +56,13 @@ Then do the steps below. Follow the steps for the **Pi**. To escape, the agent t
 
 ## The first ten minutes
 
-Steps with the mark **lab** apply to the two labs. Steps with the mark **Pi** apply to a Pi, or to a gateway VM that you installed from a release. All steps below assume that `pf` is already installed on the gateway.
+Steps with the mark **lab** apply to the two labs. Steps with the mark **Pi** apply to a Pi, or to a gateway VM that you installed with `install.sh`. All steps below assume that `pf` is already installed on the gateway.
 
 ### 1. Bring the gateway up
 
 **Pi:**
 
-1. Flash the card and install `pf` from a signed release ([pi_setup.md](pi_setup.md), steps 2 and 6).
+1. Flash the card and install `pf` from the latest stable tag ([pi_setup.md](pi_setup.md), steps 2 and 6).
 2. The installer proposes the uplink port and the agent port. It asks you to confirm them. Steps 3 to 5 in that page explain these choices and how to change them.
 3. Make sure that the Pi answers `sudo pf status`.
 4. Connect the agent machine to the agent port with a cable. Or bridge an agent VM onto the agent port (step 7 in that page).

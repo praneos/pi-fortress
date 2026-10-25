@@ -44,12 +44,11 @@ sudo bash install-lab.sh
 
 ### On a Raspberry Pi 5
 
-You need a Raspberry Pi 5 with Raspberry Pi OS Lite 64-bit, and a machine for the agent ([full list](pi_setup.md)). In Raspberry Pi Imager, turn on SSH and set the Wi-Fi. Connect to the Pi with SSH over Wi-Fi, and run this command:
-```
-curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install.sh | sudo bash
-```
+You need a Raspberry Pi 5 with Raspberry Pi OS Lite 64-bit, and a machine for the agent ([full list](pi_setup.md)). In Raspberry Pi Imager, turn on SSH and set the Wi-Fi.
 
-The command installs the newest signed release and verifies each download. It asks which port is the uplink and which port is for the agent. It refuses to give the agent the port of your SSH session. Continue with [Getting started](getting_started.md), step 2.
+Pi Fortress has no binary releases yet. Release builds start at v1, when the project is stable. Until then, build `pf` on your desktop from the latest stable tag. The project signs each stable tag ([Verify the source](verify.md)). The steps are in [Pi setup](pi_setup.md), step 6.
+
+The installer asks which port is the uplink and which port is for the agent. It refuses to give the agent the port of your SSH session. Continue with [Getting started](getting_started.md), step 2.
 
 ## Why it exists
 

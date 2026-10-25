@@ -117,7 +117,7 @@ A Mac works correctly as the human seat. Mint credentials from the Mac over ssh 
 **Is it open source?**
 Yes, under Apache-2.0.
 
-The source and the build are public. Each release is signed and reproducible: if you build a tag again, you get the same bytes. The project is open for evaluation. Use test keys, or keys with a spend limit, while you evaluate.
+The source and the build are public. The project signs each stable tag. The builds are reproducible: if you build a tag again, you get the same bytes. There are no binary releases before v1. The project is open for evaluation. Use test keys, or keys with a spend limit, while you evaluate.
 
 **Why a Raspberry Pi?**
 It is a cheap, separate machine that you put between your agents and the internet.

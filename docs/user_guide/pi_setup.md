@@ -319,7 +319,7 @@ On the desktop side, this split needs three changes:
 2. Move the default route of the desktop onto the desk VLAN.
 3. Stop the desktop from forwarding traffic between the VLANs.
 
-The last change is important. A desktop that forwards traffic can carry the traffic of an agent around the Pi. The desk setup script does all three changes. The script is in the desk folder of the source, which is published with the public release. On the desktop, clone the release tag that you installed (`git clone --depth 1 --branch <tag> https://github.com/praneos/pi-fortress`). Run the script from that folder. `<nic>` is the card of the desktop with the cable to the Pi. Test between the steps:
+The last change is important. A desktop that forwards traffic can carry the traffic of an agent around the Pi. The desk setup script does all three changes. The script is in the desk folder of the source. On the desktop, use the clone of the stable tag that you installed (step 6). Or clone that tag: `git clone --depth 1 --branch <tag> https://github.com/praneos/pi-fortress`. Run the script from the desk folder. `<nic>` is the card of the desktop with the cable to the Pi. Test between the steps:
 
 **Desktop:**
 ```
@@ -346,37 +346,55 @@ The desk lock does the same check again two minutes after each boot. At that tim
 
 ## 6. Install and update `pf`
 
-A key that never touches the Pi signs each release. Connect to the Pi with SSH over its uplink (for example Wi-Fi, set in Raspberry Pi Imager). Then, on the Pi:
-```
-curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install.sh | sudo bash
-```
-From your desktop, the same command in one line: `ssh -t <user>@<pi> 'curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install.sh | sudo bash'`.
+Pi Fortress has no binary releases yet. Release builds start at v1, when the project is stable. Until then, build `pf` from the latest stable tag on your desktop. Sign the bundle with your own SSH key. The Pi then accepts only bundles that your key signed.
 
-The command installs the newest release. To install one release, run `sudo PF_VERSION=v1.2.3 bash install.sh` with the script of that tag. A minimal image may not have `curl`: `sudo apt-get install -y curl`.
+On the desktop, you need git, make, Go 1.27.3 (the `toolchain` line of `go.mod`) and an SSH key. Connect to the Pi with SSH over its uplink (for example Wi-Fi, set in Raspberry Pi Imager).
+
+On the desktop, get the source and find the newest stable tag:
+```
+git clone https://github.com/praneos/pi-fortress && cd pi-fortress
+git tag -l 'v*' --sort=-v:refname | head -1
+```
+Verify that tag against the key on [Verify the source](verify.md). Then check it out. This example uses `v0.1.6`:
+```
+git -c gpg.ssh.allowedSignersFile="$HOME/pi-fortress.allowed_signers" verify-tag v0.1.6
+git checkout v0.1.6
+```
+Then build, sign and install. The commands are in the README of the source, section [Install from source](https://github.com/praneos/pi-fortress#install-from-source). They do these steps on the desktop:
+
+1. Build the bundles from the tag that you checked out.
+2. Sign the `arm64` bundle and its `SHA256SUMS` with your SSH key.
+3. Copy `install.sh`, the bundle and the signatures to the Pi.
+4. Run `install.sh` on the Pi, with your public key as the signer.
+
+On a Debian or Ubuntu amd64 gateway, use the `amd64` bundle in place of `arm64`.
 
 !!! warning "Do not connect through the agent port"
     The install gives the agent port a new address. If your SSH session uses that port, the session stops part-way. Thus `pf install` refuses an agent or house port that carries your SSH session.
 `install.sh` does these steps:
 
 1. It checks the Pi model and the OS.
-2. It downloads the bundle.
-3. It verifies the signature of the bundle.
-4. It runs `pf install`. `pf install` proposes the uplink and agent ports and asks you to confirm them.
+2. It verifies `SHA256SUMS` and the bundle against your key.
+3. It runs `pf install`. `pf install` proposes the uplink and agent ports and asks you to confirm them.
 
 If you already know the ports, add `-wan eth0 -agent eth1` to the last line. You can safely run the command again. If `pf install` stops at its apply or health check, correct the cause. Then run the same command again. It applies the installed version again.
 
-To update, give the tag. `pf install` kept the `PF_RELEASE_URL` above in `/etc/pi-fortress/release.url`. After an offline `PF_BUNDLE` install, write the URL into that file yourself first.
+To update, get the new tags, then verify and check out the newest stable tag. In the clone, run:
 ```
-sudo pf upgrade -version v1.3.0
-sudo pf upgrade -confirm
+git fetch --tags
+git tag -l 'v*' --sort=-v:refname | head -1
+git -c gpg.ssh.allowedSignersFile="$HOME/pi-fortress.allowed_signers" verify-tag <tag>
+git checkout <tag>
 ```
-If an upgrade fails its own health check, it rolls back immediately. If an upgrade passes, it reverts automatically after ten minutes, unless you confirm it. Thus an upgrade that disconnects you undoes itself.
+Then build and sign as above, and copy the new bundle to the Pi. On the Pi, `sudo pf upgrade -bundle <bundle> -sig <bundle>.sig` installs it. The commands are in the README, section [Update from source](https://github.com/praneos/pi-fortress#update-from-source).
+
+Check the box. Then run `sudo pf upgrade -confirm` on the Pi within ten minutes. If an upgrade fails its own health check, it rolls back immediately. If an upgrade passes, it reverts automatically after ten minutes, unless you confirm it. Thus an upgrade that disconnects you undoes itself.
 
 `pf upgrade` does not update the OS packages. Run `sudo apt update && sudo apt full-upgrade`, or let the daily `unattended-upgrades` run install the security updates. Reboot when `pf doctor` tells you to (rung `reboot`).
 
-`sudo pf rollback` goes back one version manually, to the release before this one. You cannot go back further. If rollback cannot run because a different apply is running, it tells you. It then exits non-zero and keeps the pending upgrade armed. Run it again.
+`sudo pf rollback` goes back one version manually, to the version before this one. You cannot go back further. If rollback cannot run because a different apply is running, it tells you. It then exits non-zero and keeps the pending upgrade armed. Run it again.
 
-A rollback does not change the block lists and the other lists that you edit. An upgrade also does not change them. Thus a rollback does not undo an edit or a removal that you made after the upgrade. Always give a tag: `latest` does not match the release download paths.
+A rollback does not change the block lists and the other lists that you edit. An upgrade also does not change them. Thus a rollback does not undo an edit or a removal that you made after the upgrade.
 
 `pf version` on the Pi shows the version that runs now.
 
@@ -513,7 +531,7 @@ The [FAQ](faq.md) ("What breaks on the desk?") lists what a strict desk breaks, 
 
 With `INSPECT=on` in the file of the desk, the desk gets the fence of the agent network. All HTTPS of the desk goes through the engine and the broker. The tools on the desk hold placeholders. The gateway puts in the real key only for the service of that key, and it removes live keys in known formats. Thus an agent that escapes to the desk finds no real keys there.
 
-The Pi must run a release that has the `INSPECT` key. An older release refuses the key with `unknown key 'INSPECT'` and changes nothing. If you see that, update `pf` first ([step 6](#6-install-and-update-pf)).
+The Pi must run a version of `pf` that has the `INSPECT` key. An older version refuses the key with `unknown key 'INSPECT'` and changes nothing. If you see that, update `pf` first ([step 6](#6-install-and-update-pf)).
 
 1. Copy the certificate of the gateway CA to a file that your user can read on the Pi. Copy only the certificate. The key of the CA stays on the Pi. `-t` gives `sudo` a terminal, so that it can ask for your password. Write down the sha256 that the command shows.
 
@@ -675,7 +693,7 @@ sudo pf tui
 | `rm: cannot remove '/tmp/pf-ca.pem': Operation not permitted` | The copy belongs to root. Use `ssh -t <user>@10.79.0.1 sudo rm /tmp/pf-ca.pem` |
 | `setup.sh ca` refuses: `holds a private key` | You copied `ca.pem`, which holds the CA key. Delete that copy now. Copy `ca-cert.pem` |
 | `setup.sh ca` refuses: `does not match the sha256` or `must hold one certificate` | The copy is not complete, or it is a different file. Do steps 1 and 2 again |
-| `unknown key 'INSPECT'` from apply | The Pi runs an older release. Update `pf` (step 6). Nothing changed on the Pi |
+| `unknown key 'INSPECT'` from apply | The Pi runs an older version of `pf`. Update `pf` (step 6). Nothing changed on the Pi |
 | All HTTPS on the desk fails after `INSPECT=on` | The desk does not trust the gateway CA. Do step 3 of the desk fence, then log out and log in again. To get HTTPS back immediately, set `INSPECT=off` and apply |
 | One tool fails TLS after `INSPECT=on`, the browser works | The tool has its own certificate store. For Node, open a new login session, so that it gets `NODE_EXTRA_CA_CERTS`. For Java, import `/etc/pi-fortress/desk-ca.pem` into its store. An app that pins its certificate cannot work through the fence |
 | Chrome shows a certificate error, Firefox works | Chrome did not get the CA. Install `libnss3-tools`, and run `setup.sh ca` again with `sudo` from your own user. Then restart Chrome |

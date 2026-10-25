@@ -1,5 +1,7 @@
 # Release build
 
+This page applies from v1. Before v1, the project publishes no binary releases. Users build from the latest stable tag (`gateway_install.md`, "Install from source").
+
 `make release` builds the public binaries. It makes checksums of them and signs the
 checksums. The source is public (Apache-2.0). Thus, anyone can build a commit again
 and get the same bytes. Code: `scripts/release.sh`.

@@ -1,6 +1,8 @@
 # Gateway install: a Pi, or a plain Debian/Ubuntu box
 
-The releases are at <https://github.com/praneos/pi-fortress/releases>. Each release has:
+Pi Fortress has no binary releases yet. Release builds start at v1, when the project is stable. Until then, install from source at the latest stable tag: refer to [Install from source](#install-from-source) below and the README. A source install uses the same `install.sh`, `pf install` and `pf upgrade -bundle` that this page describes. The download paths (`install.sh` with no `PF_BUNDLE`, `pf upgrade -version`) apply from v1.
+
+From v1, the releases are at <https://github.com/praneos/pi-fortress/releases>. Each release has:
 
 - one bundle for each arch, `pf-bundle-<version>-<arch>.tar`, each with a `.sig`
 - the signed `SHA256SUMS` (`release.md`)
@@ -19,15 +21,15 @@ The releases are at <https://github.com/praneos/pi-fortress/releases>. Each rele
 ## Install
 
 ```
-# the newest release from GitHub:
+# from v1, the newest release from GitHub:
 curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install.sh | sudo bash
-# one release tag, from the script of that tag:
+# from v1, one release tag, from the script of that tag:
 V=v1.2.3
 curl -fsSLO https://raw.githubusercontent.com/praneos/pi-fortress/$V/install.sh
 sudo PF_VERSION=$V bash install.sh
-# with the interfaces already known (no questions, no terminal needed):
+# from v1, with the interfaces already known (no questions, no terminal needed):
 curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install.sh | sudo bash -s -- -wan eth0 -agent eth1
-# offline, from a bundle, its .sig, SHA256SUMS and SHA256SUMS.sig already on the box:
+# offline, from a bundle, its .sig, SHA256SUMS and SHA256SUMS.sig already on the box (also the source install):
 sudo PF_BUNDLE=./pf-bundle-v1.2.3-arm64.tar bash install.sh
 ```
 
@@ -61,7 +63,7 @@ All arguments go directly to `pf install`. `install.sh` does these steps:
    An offline `PF_BUNDLE` takes the tag from its file name. This name must be `pf-bundle-<tag>-<arch>.tar` for this arch. It must also match `PF_VERSION`, if set. `SHA256SUMS` and its `.sig` must be next to the bundle or at `PF_SUMS`.
 4. Extracts `vm/pi/pf` of the bundle from the verified tar. A `make release` bundle has no `bin/`. For an older `make pi-bundle` tar, the script falls back to `bin/pf`. Then it runs `pf install -bundle ... -sig ... -signers ...`. All steps after this point are Go (`internal/install`), not shell. The stdin of `pf install` is `/dev/null`.
 
-**Limit:** this gives no rollback protection on a fresh box. A box with nothing installed has no version floor and no trusted clock. Thus, `install.sh` installs exactly the tag that it gets, signed and bound. It does this also if that tag is old and has known holes. Look on the Releases page for the newest tag. After the install, the floor refuses older bundles.
+**Limit:** this gives no rollback protection on a fresh box. A box with nothing installed has no version floor and no trusted clock. Thus, `install.sh` installs exactly the tag that it gets, signed and bound. It does this also if that tag is old and has known holes. Find the newest tag first: on the Releases page from v1, or with `git tag` for a source install. After the install, the floor refuses older bundles.
 
 `pf install` runs as root and is idempotent. It does these steps:
 
@@ -123,8 +125,10 @@ They also remove from `.prev` a list that the operator deleted. Thus, an edit or
 
 ## Upgrade
 
+Until v1, there is no release to download. A source install uses `-bundle` (README, "Update from source").
+
 ```
-sudo pf upgrade -version v1.3.0       # base from PF_RELEASE_URL or /etc/pi-fortress/release.url
+sudo pf upgrade -version v1.3.0       # from v1; base from PF_RELEASE_URL or /etc/pi-fortress/release.url
 sudo pf upgrade -bundle ./pf-bundle-v1.3.0-arm64.tar -sig ./pf-bundle-v1.3.0-arm64.tar.sig   # SHA256SUMS(.sig) beside it, or -sums
 sudo pf upgrade -confirm              # disarm the dead-man timer (pf ship confirm)
 ```
@@ -188,7 +192,7 @@ A broker start locks a sealed credential store again. Thus with a sealed store (
 
 ## Install from source
 
-The README gives the commands. This flow uses the same `install.sh`, `pf install` and `pf upgrade -bundle` as a release. Only the signer is different: your own SSH key, given to `install.sh` as `PF_SIGNER_PUBKEY`. `pf install` keeps that key in `release-signers`. Thus each later `pf upgrade` accepts only bundles that your key signed.
+This is the install path until v1. The README gives the commands. Build from the latest stable tag (`git tag -l 'v*' --sort=-v:refname | head -1`). First verify the tag with `git verify-tag` against the key in `user_guide/verify.md`. This flow uses the same `install.sh`, `pf install` and `pf upgrade -bundle` as a release. Only the signer is different: your own SSH key, given to `install.sh` as `PF_SIGNER_PUBKEY`. `pf install` keeps that key in `release-signers`. Thus each later `pf upgrade` accepts only bundles that your key signed.
 
 `make release RELEASE_UNSIGNED=1` does these steps:
 
@@ -200,7 +204,7 @@ The version floor of a bundle is the commit time of HEAD. Thus `pf upgrade` refu
 
 You can also run the same steps on the Pi itself, with Go 1.27.3 for arm64 installed there. Then there is no `scp`, and `PF_BUNDLE` is `dist/$V/pf-bundle-$V-arm64.tar`. The build is slower, and the signing key is on the box that it protects.
 
-A box that you installed from a release trusts only the release key. To also accept your bundles, add a second line to `/etc/pi-fortress/release-signers`: `release@pi-fortress namespaces="pi-fortress-dist" <your public key>`. `ssh-keygen -Y verify` accepts a signature from each line.
+From v1, a box that you installed from a release trusts only the release key. To also accept your bundles, add a second line to `/etc/pi-fortress/release-signers`: `release@pi-fortress namespaces="pi-fortress-dist" <your public key>`. `ssh-keygen -Y verify` accepts a signature from each line.
 
 ## Two signers, on purpose
 
