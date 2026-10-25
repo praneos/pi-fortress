@@ -68,3 +68,31 @@ func TestLoadMissingIsEmpty(t *testing.T) {
 		t.Fatal("missing file did not yield an empty set")
 	}
 }
+
+// A hand-written "*.name" line blocks what "name" blocks. A bare name
+// already covers each subdomain, and Has never sees a "*" label.
+func TestLoadWildcardLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "blocked-domains.conf")
+	raw := "address=/*.Wild.Example./0.0.0.0\naddress=/*./0.0.0.0\n"
+	if err := os.WriteFile(path, []byte(raw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.Len() != 1 {
+		t.Fatalf("len=%d want 1", s.Len())
+	}
+	for name, want := range map[string]bool{
+		"a.wild.example":   true,
+		"b.a.wild.example": true,
+		"wild.example":     true,
+		"notwild.example":  false,
+		"example":          false,
+	} {
+		if got := s.Has(name); got != want {
+			t.Errorf("Has(%q)=%v want %v", name, got, want)
+		}
+	}
+}
