@@ -11,7 +11,43 @@ Type=oneshot
 # each path in it. If we shared /var/lib/logrotate/status with the system
 # run, the run that fired first could decide that the hourly files were done.
 ExecStart=/usr/sbin/logrotate --state /var/lib/pi-fortress/logrotate.state /etc/pi-fortress/logrotate.conf
-# postrotate signals dnsmasq and pf dns through systemctl, and create
-# gives files back to pf-broker/pf-sidecar/pf-dns. Thus: root, no sandbox.
 Nice=10
 IOSchedulingClass=idle
+# Root, with a sandbox. create gives files back to pf-broker, pf-dns and
+# the DHCP accounts, and postrotate signals dnsmasq and pf dns through
+# systemctl. Each of these needs root, so a User= here would stop them.
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+# AF_UNIX is for systemctl in postrotate. systemctl as root connects to
+# /run/systemd/private. A connect to a socket works on a read-only mount.
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# A call outside the set fails with EPERM. A kill would stop a rotation
+# between the rename and the create.
+SystemCallErrorNumber=EPERM
+# CHOWN: create and the compressed copies keep the owner of each log.
+# DAC_OVERRIDE and DAC_READ_SEARCH: read and compress the 0640 logs of the
+# daemon accounts. FOWNER: set the mode of a file that root does not own.
+# systemctl needs no capability on the private socket of systemd.
+CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH
+AmbientCapabilities=
+# Each path in logrotate.conf is in /var/log/pi-fortress. logrotate writes
+# its state file to a temporary file and renames it, so the directory of
+# the state file is writable, not only the file.
+ReadWritePaths=/var/log/pi-fortress /var/lib/pi-fortress
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www

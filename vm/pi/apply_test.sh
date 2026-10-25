@@ -1478,6 +1478,42 @@ grep -q '^OnCalendar=\*:0/15$' "${here}/logrotate.timer" ||
 grep -q 'logrotate --state /var/lib/pi-fortress/logrotate.state /etc/pi-fortress/logrotate.conf' "${here}/logrotate.service" ||
   fail "logrotate.service does not run our conf with its own state file"
 
+# logrotate and the USB NIC switch stay root, with a sandbox, as
+# wg-alert does. logrotate writes only the log directory and its state
+# file. logrotate writes the state file through a rename, so the
+# directory of the state file must be writable.
+for _l in NoNewPrivileges=yes PrivateTmp=yes PrivateDevices=yes ProtectHome=yes ProtectSystem=strict \
+  ProtectKernelTunables=yes ProtectKernelModules=yes ProtectKernelLogs=yes ProtectControlGroups=yes \
+  RestrictNamespaces=yes RestrictSUIDSGID=yes SystemCallArchitectures=native SystemCallFilter=@system-service \
+  SystemCallErrorNumber=EPERM 'RestrictAddressFamilies=AF_UNIX' \
+  'CapabilityBoundingSet=CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH' \
+  'ReadWritePaths=/var/log/pi-fortress /var/lib/pi-fortress' \
+  'InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www'; do
+  grep -qxF "${_l}" "${here}/logrotate.service" || fail "logrotate.service has no '${_l}'"
+done
+# Each path that the conf rotates is in a writable directory.
+while read -r _p; do
+  [[ "$(dirname "${_p}")" == /var/log/pi-fortress ]] ||
+    fail "logrotate.conf rotates ${_p}, outside the ReadWritePaths of logrotate.service"
+done < <(grep -E '^/' "${here}/logrotate.conf" | tr -d '{' | tr ' ' '\n' | grep -E '^/')
+# postrotate runs systemctl, which needs AF_UNIX to reach systemd.
+grep -q 'systemctl kill' "${here}/logrotate.conf" ||
+  fail "logrotate.conf no longer runs systemctl; check RestrictAddressFamilies of logrotate.service again"
+
+# usb-nic-switch.sh opens the adapter in /dev/bus/usb (usb_modeswitch,
+# usbreset) and writes its authorized file in /sys. Thus no PrivateDevices
+# and no ProtectKernelTunables. AF_NETLINK is for libusb.
+for _l in NoNewPrivileges=yes ProtectHome=yes ProtectSystem=strict ProtectKernelModules=yes ProtectKernelLogs=yes \
+  ProtectControlGroups=yes RestrictNamespaces=yes RestrictSUIDSGID=yes SystemCallArchitectures=native \
+  SystemCallFilter=@system-service SystemCallErrorNumber=EPERM 'RestrictAddressFamilies=AF_UNIX AF_NETLINK' \
+  'CapabilityBoundingSet=CAP_SYS_ADMIN'; do
+  grep -qxF "${_l}" "${here}/usb-nic-switch.service" || fail "usb-nic-switch.service has no '${_l}'"
+done
+grep -qE '^(PrivateDevices|ProtectKernelTunables)=yes' "${here}/usb-nic-switch.service" &&
+  fail "usb-nic-switch.service blocks /dev/bus/usb or the writes to /sys"
+grep -qF '/authorized' "${here}/usb-nic-switch.sh" ||
+  fail "usb-nic-switch.sh no longer writes /sys; check ProtectKernelTunables of usb-nic-switch.service again"
+
 # git_push.allow (docs/git_push.md): the Pi owns it. apply installs or
 # removes it. A change restarts the fence. The broker points at it.
 grep -qE '^PI_OWNED = .*\bgit_push\.allow\b' "${here}/../../Makefile" || fail "git_push.allow is not in PI_OWNED"
