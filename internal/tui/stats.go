@@ -14,9 +14,14 @@ import (
 // read as things that were stopped. An arp_flip row even puts the claimed
 // MAC under "destination". Without the mark, an operator reads a neighbour
 // that took an address with no consequence as a neighbour that was refused.
+// The mark is "^", not "!". "!" is a standing fault: the title bar, the
+// problems on Overview, a stale feed. "?" is a value that nothing answered,
+// "-" is none, and "*" is a masked passphrase.
+const seenMark = "^"
+
 func threatOf(e admin.EventStat) string {
 	if e.Alert {
-		return "! " + e.Threat
+		return seenMark + " " + e.Threat
 	}
 	return e.Threat
 }
@@ -228,7 +233,7 @@ func (a *App) buildEvents(seg string) []row {
 	// same sentence.
 	for _, e := range evs {
 		if e.Alert {
-			if legend := "  ! = not stopped"; len(head)+len(legend) <= a.w-menuWidth {
+			if legend := "  " + seenMark + " = not stopped"; len(head)+len(legend) <= a.w-menuWidth {
 				head += legend
 			}
 			break
