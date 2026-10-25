@@ -40,7 +40,11 @@ type prompt struct {
 	// reach the screen for the same reason that it does not reach the audit
 	// log.
 	mask bool
-	done func(string)
+	// typed is set on a confirm. Its answer must come from the keyboard. A
+	// pasted key does nothing on it, so a string that the operator is told
+	// to paste cannot answer it.
+	typed bool
+	done  func(string)
 }
 
 type event struct {
@@ -441,6 +445,12 @@ func (a *App) handle(k Key) {
 		a.promptKey(k)
 		return
 	}
+	// Outside a prompt, a key is a command. A paste is text, not commands:
+	// a pasted "q" must not quit, and a pasted "dyes" must not delete.
+	if k.Paste {
+		a.msg = "paste ignored outside a prompt"
+		return
+	}
 	a.paneFollow = false
 	if a.claim != nil {
 		a.closeClaim()
@@ -660,7 +670,7 @@ func (a *App) askSecret(label string, done func(string)) {
 }
 
 func (a *App) confirm(label string, done func()) {
-	a.pr = &prompt{label: label + " [y/N]", yn: true, done: func(s string) {
+	a.pr = &prompt{label: label + " [y/N]", yn: true, typed: true, done: func(s string) {
 		if s == "y" {
 			done()
 		} else {
@@ -677,10 +687,14 @@ func (a *App) confirmTyped(label string, done func()) {
 			a.msg = "cancelled"
 		}
 	})
+	a.pr.typed = true
 }
 
 func (a *App) promptKey(k Key) {
 	p := a.pr
+	if k.Paste && p.typed {
+		return
+	}
 	switch k.Kind {
 	case KeyEsc, KeyCtrlC:
 		a.pr = nil
@@ -1353,7 +1367,7 @@ var helpText = []string{
 	"Keys never shows a value. A sealed store refuses substitution",
 	"until u takes the passphrase (masked, never logged).",
 	"A prompt takes 253 bytes, then shows [full]. Enter saves; the",
-	"line end of a paste does not.",
+	"line end of a paste does not; a paste is never a command.",
 	"No key for some time stops the TUI; its shell stays open. Only",
 	"the login manager can lock this seat.",
 	"",
