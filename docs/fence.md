@@ -47,7 +47,12 @@ share a process (`docs/privilege_split.md`).
 The fence applies a credential by **kind + TLS name**, not to "any core
 host". `vm/policy/core.hosts` lists `host KIND…` (`*` = lab echo). A name
 matches exactly, unless it is written as `*.name`. `*.name` matches the name
-and each subdomain of it. A Claude placeholder
+and each subdomain of it. `pf compile` and `pf apply` refuse some host forms:
+a host with one label (`localhost`), a host with `_`, a bare `*`, a `*` after
+the first `*.` (`*.*.example.com`), and a non-ASCII host. They print a warning,
+skip that line, and change nothing else. For a non-ASCII host, the warning
+gives the `xn--` form to write. `*` as a kind (the lab echo) is not
+changed. A Claude placeholder
 becomes live only toward Anthropic/Claude names. A GitHub placeholder becomes
 live only toward GitHub.
 
@@ -392,6 +397,12 @@ verifies the origin certificate against the SNI. Thus, on a dedicated origin
 server, a client cannot name an unlisted host to reach a listed one. On a
 shared CDN edge that permits fronting, the `Host` check is the remaining
 line.
+
+Each domain list (for example `blacklist.domains`, `never_block.domains`,
+`allow.domains` and the house lists) refuses a non-ASCII name. `pf compile`
+and `pf apply` print a warning, skip that line, and give the `xn--` form to
+write. An IPv4 address on a domain list of the agent blocks that address
+(an nft `/32`), not a name.
 
 **A blocked name resolves to `0.0.0.0`.** The resolver answers a listed
 name with `NOERROR` and one A record, `0.0.0.0`, with a TTL of 0. It does
