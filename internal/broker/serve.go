@@ -213,6 +213,9 @@ func (b *Broker) serve(ctx context.Context, client net.Conn, br *bufio.Reader, p
 	}
 	if c.echo {
 		if !c.ws {
+			if done, err := b.echoBody(c); done {
+				return err
+			}
 			return b.echo(client, p, req, c.slots, c.harvestSlot)
 		}
 		// The handshake meets a net.Pipe instead of the uplink. Every
@@ -660,20 +663,9 @@ func (b *Broker) roundTrip(ctx context.Context, c *call) (*httpwire.Response, er
 		// mutate the origin twice.
 		c.up.discard()
 		if errors.Is(err, fence.ErrPlaceholderInStream) {
-			// The copy stopped at a placeholder in a streamed body. The
-			// origin connection is gone with the head, so the request
-			// cannot complete. The agent gets the one refusal. The
-			// operator gets the cause.
-			r := fence.Refusal{Cause: fence.CausePlaceholderInStream, Where: "body"}
-			var sp *fence.StreamPlaceholderError
-			if errors.As(err, &sp) {
-				r.Slot, r.Kind = sp.Slot, sp.Kind
-			}
-			b.logRefusals(c, []fence.Refusal{r})
-			if werr := writeRefused(c.client); werr != nil {
-				return nil, werr
-			}
-			return nil, errRefused
+			// The origin connection is gone with the head, so the request
+			// cannot complete.
+			return nil, b.refuseStreamPlaceholder(c, err)
 		}
 		if reused && replayable && attempt == 0 && (wrote == 0 || idempotent(c.req.Method)) {
 			continue
@@ -681,6 +673,41 @@ func (b *Broker) roundTrip(ctx context.Context, c *call) (*httpwire.Response, er
 		_ = writeErr(c.client, 502, "502 Bad Gateway", "origin\n")
 		return nil, err
 	}
+}
+
+// refuseStreamPlaceholder answers a request whose streamed body stopped
+// at a placeholder (fence.ErrPlaceholderInStream). The agent gets the one
+// refusal. The operator gets the cause.
+func (b *Broker) refuseStreamPlaceholder(c *call, err error) error {
+	r := fence.Refusal{Cause: fence.CausePlaceholderInStream, Where: "body"}
+	var sp *fence.StreamPlaceholderError
+	if errors.As(err, &sp) {
+		r.Slot, r.Kind = sp.Slot, sp.Kind
+	}
+	b.logRefusals(c, []fence.Refusal{r})
+	if werr := writeRefused(c.client); werr != nil {
+		return werr
+	}
+	return errRefused
+}
+
+// echoBody reads a streamed body that goes to an echo fixture. The
+// fixture has no origin, so no copy reads the body. The read goes
+// through the same guard as the copy to an origin. Thus a placeholder in
+// the body gets the same refusal as at a real host. done says that
+// echoBody answered the request.
+func (b *Broker) echoBody(c *call) (done bool, err error) {
+	if c.req.Body == nil {
+		return false, nil
+	}
+	if _, err := io.Copy(io.Discard, c.req.Body); err != nil {
+		if errors.Is(err, fence.ErrPlaceholderInStream) {
+			return true, b.refuseStreamPlaceholder(c, err)
+		}
+		_ = writeErr(c.client, 502, "502 Bad Gateway", "origin\n")
+		return true, err
+	}
+	return false, nil
 }
 
 // decodeBody inflates a gzip body so that the scrub sees plaintext. It

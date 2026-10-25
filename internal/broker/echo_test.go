@@ -13,6 +13,7 @@ import (
 
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/preamble"
+	"pi-fortress/internal/secrets"
 )
 
 // The open echo refuses a placeholder that it must not substitute, and
@@ -196,4 +197,31 @@ func base64Runs(s string) []string {
 		}
 	}
 	return out
+}
+
+// An echo fixture has no origin, but a streamed body still goes through
+// the placeholder guard. A placeholder in it gets the answer that a real
+// host gives: the one refusal, and a row that names the cause.
+func TestEchoStreamedBodyPlaceholderRefused(t *testing.T) {
+	for _, tc := range []struct{ name, sni, dst string }{
+		{"core", "pf-core-echo.test", "192.0.2.2:443"},
+		{"open", "pf-open-echo.test", "192.0.2.3:443"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, _ := testBroker(t)
+			dir := t.TempDir()
+			b.Logs = &jsonl.Writer{StripPath: filepath.Join(dir, "strip.jsonl")}
+			ph := secrets.Placeholder("b0b1b2b3b4b5b6b7", "CLAUDE_OAT")
+			p := preamble.Preamble{SNI: tc.sni, OrigDst: netip.MustParseAddrPort(tc.dst)}
+			raw := "POST / HTTP/1.1\r\nHost: " + tc.sni + "\r\nTransfer-Encoding: chunked\r\n\r\n" + chunkWire("k="+ph)
+			resp, rb := roundtripStream(t, b, p, raw)
+			if resp.Code != 503 || string(rb) != RefusedBody {
+				t.Fatalf("%d %q", resp.Code, rb)
+			}
+			rows, _ := os.ReadFile(b.Logs.StripPath)
+			if !strings.Contains(string(rows), `"cause":"placeholder_in_streamed_body"`) || !strings.Contains(string(rows), `"where":"body"`) {
+				t.Fatalf("log %q", rows)
+			}
+		})
+	}
 }
