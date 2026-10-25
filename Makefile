@@ -152,12 +152,12 @@ split-bin: pf
 # an SSH signature in namespace pi-fortress-dist (never the Pi ship one).
 # Refer to docs/release.md. RELEASE_DIR defaults to dist/<version>/.
 .PHONY: release release-gate release-verify release-check release-lint
-SIGN_KEY ?= ~/.ssh/pi_fortress_release
+DIST_KEY ?= ~/.ssh/pi_fortress_dist
 RELEASE_DIR ?=
 REV ?= HEAD
 release:
 	$(no_race)
-	@SIGN_KEY=$(SIGN_KEY) RELEASE_DIR=$(RELEASE_DIR) RELEASE_UNSIGNED=$(RELEASE_UNSIGNED) APPLIANCE=$(APPLIANCE) PI_SEED="$(PI_SEED)" ./scripts/release.sh release
+	@SIGN_KEY=$(DIST_KEY) RELEASE_DIR=$(RELEASE_DIR) RELEASE_UNSIGNED=$(RELEASE_UNSIGNED) APPLIANCE=$(APPLIANCE) PI_SEED="$(PI_SEED)" ./scripts/release.sh release
 
 # release-lint: the per-arch bundles that make release just built (or an
 # already-built RELEASE_DIR) never ship the lab marker file or an

@@ -189,14 +189,14 @@ sums() {
 		LC_ALL=C sort | xargs -r sha256sum >SHA256SUMS.tmp && mv SHA256SUMS.tmp SHA256SUMS)
 }
 
-KEY=${SIGN_KEY:-$HOME/.ssh/pi_fortress_release}
+KEY=${SIGN_KEY:-$HOME/.ssh/pi_fortress_dist}
 KEY=${KEY/#\~/$HOME}
 
 # signable: 0 to sign, 1 for a sanctioned unsigned build. It dies
 # otherwise, before any build output exists.
 signable() {
 	if [ ! -r "$KEY" ]; then
-		[ "${RELEASE_UNSIGNED:-}" = 1 ] || die "no signing key at $KEY (set SIGN_KEY, or RELEASE_UNSIGNED=1 for a local build)"
+		[ "${RELEASE_UNSIGNED:-}" = 1 ] || die "no signing key at $KEY (set DIST_KEY for make, SIGN_KEY for this script, or RELEASE_UNSIGNED=1 for a local build)"
 		return 1
 	fi
 	[ -r "$KEY.pub" ] || die "no public key at $KEY.pub"
@@ -205,7 +205,7 @@ signable() {
 	local pinned
 	pinned=$(sed -n 's/.*PF_SIGNER_PUBKEY:-\(ssh-[^ ]* [A-Za-z0-9+\/=]*\)}.*/\1/p' "$ROOT/install.sh")
 	[ -n "$pinned" ] && [ "$pinned" = "$(cut -d' ' -f1,2 "$KEY.pub")" ] ||
-		die "$KEY.pub is not the key that install.sh pins as PF_SIGNER_PUBKEY (set SIGN_KEY)"
+		die "$KEY.pub is not the key that install.sh pins as PF_SIGNER_PUBKEY (set DIST_KEY for make, SIGN_KEY for this script)"
 }
 
 sign() {

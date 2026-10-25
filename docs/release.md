@@ -106,7 +106,7 @@ Verified 2026-09-13: two worktree builds plus a third in a separate tree gave id
 
 ## Signing
 
-- Key: `SIGN_KEY` (default `~/.ssh/pi_fortress_release`), shared with the Pi ship flow in `signed_ship.md`.
+- Key: `DIST_KEY` (default `~/.ssh/pi_fortress_dist`). It is not the key of the Pi ship flow in `signed_ship.md` (`SIGN_KEY`, default `~/.ssh/pi_fortress_release`). `make release` refuses a key that is not the key that `install.sh` pins.
 - Namespace `pi-fortress-dist`. Pi ship bundles use `pi-fortress-release`. `ssh-keygen -Y verify` binds the namespace. Thus, one signature never verifies as the other. `allowed_signers` also carries `namespaces="pi-fortress-dist"`.
 - Principal `release@pi-fortress`.
 - No key: `make release` fails before it builds. `RELEASE_UNSIGNED=1` builds unsigned with a loud warning. Never publish that directory.

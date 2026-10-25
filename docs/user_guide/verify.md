@@ -20,12 +20,33 @@ trust `install.sh` itself.
 Save this line as `allowed_signers`:
 
 ```
-release@pi-fortress namespaces="pi-fortress-dist" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP84hURABuMrcMaPPXZpQPXN7hxaZaYI9nHNRhOQIOa9
+release@pi-fortress namespaces="pi-fortress-dist" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKVK/2pcp/J483O0Q/NvHVZr6jAR3uzMQfTabUh5B96R
 ```
 
 The fingerprint of this key is
-`SHA256:EMMiX0Nzd5uLccivQQgurW7goqyzzZlEnrZ+9Q49Bi4`. A good
+`SHA256:N8NU9P+r5dUez4Ki7wRFicKCiQRUwEx9lft7bC3Wx+w`. A good
 `ssh-keygen -Y verify` prints it.
+
+### Releases up to v0.1.5
+
+Releases v0.1.0 to v0.1.5 use the earlier key. To check one of them,
+use this line:
+
+```
+release@pi-fortress namespaces="pi-fortress-dist" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP84hURABuMrcMaPPXZpQPXN7hxaZaYI9nHNRhOQIOa9
+```
+
+Its fingerprint is `SHA256:EMMiX0Nzd5uLccivQQgurW7goqyzzZlEnrZ+9Q49Bi4`.
+The earlier key does not sign a later release.
+
+A box that you installed with v0.1.5 or earlier trusts only the earlier
+key. Thus `pf upgrade` refuses a later release until you add the new
+line. First compare the new line on this page with the line on the
+release page. Then, on the box:
+
+```
+echo 'release@pi-fortress namespaces="pi-fortress-dist" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKVK/2pcp/J483O0Q/NvHVZr6jAR3uzMQfTabUh5B96R' | sudo tee -a /etc/pi-fortress/release-signers
+```
 
 Get the key from this page. Never get it from the download folder. A
 key that comes with the files proves nothing.
