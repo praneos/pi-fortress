@@ -117,6 +117,13 @@ const (
 	// credential of the judged name goes with it. Thus the fence cannot
 	// strip the value in place, and it refuses the request.
 	CauseLiveInHost RefusalCause = "live_in_host"
+	// CauseLiveInConnection is a Connection or an Upgrade field that holds
+	// a live value or a token-prefix match. The broker reads these fields
+	// to decide on a WebSocket before the fence runs, and the origin reads
+	// them to switch the protocol. A strip there changes what the origin
+	// does after that decision. Thus the fence cannot strip the value in
+	// place, and it refuses the request. Where names the field.
+	CauseLiveInConnection RefusalCause = "live_in_connection"
 )
 
 type Refusal struct {
@@ -233,19 +240,35 @@ func (s *scanner) noteMethod(method string) {
 // token-prefix match. It checks every live value, also one of a kind that
 // this host injects, and every token rule, as noteNames does.
 func (s *scanner) noteHost(host string) {
-	for _, sl := range hostLives(s.idx.Lives, host) {
-		s.refuse(CauseLiveInHost, sl.ID, sl.Kind, "header:Host")
+	s.noteLive(host, CauseLiveInHost, "header:Host")
+}
+
+// noteConn refuses the request when a Connection or an Upgrade field holds
+// a live value or a token-prefix match, as noteHost does for the Host.
+func (s *scanner) noteConn(name, v string) {
+	where := "header:Connection"
+	if strings.EqualFold(name, "upgrade") {
+		where = "header:Upgrade"
 	}
-	if s.all.match([]byte(host)) {
-		s.refuse(CauseLiveInHost, "", "", "header:Host")
+	s.noteLive(v, CauseLiveInConnection, where)
+}
+
+// noteLive refuses the request with cause when v holds a live value or a
+// token-prefix match.
+func (s *scanner) noteLive(v string, cause RefusalCause, where string) {
+	for _, sl := range livesIn(s.idx.Lives, v) {
+		s.refuse(cause, sl.ID, sl.Kind, where)
+	}
+	if s.all.match([]byte(v)) {
+		s.refuse(cause, "", "", where)
 	}
 }
 
-// hostLives gives the live values that host holds.
-func hostLives(lives []secrets.Slot, host string) []secrets.Slot {
+// livesIn gives the live values that v holds.
+func livesIn(lives []secrets.Slot, v string) []secrets.Slot {
 	var in []secrets.Slot
 	for _, sl := range lives {
-		if httpwire.Contains([]byte(host), []byte(sl.Live)) {
+		if httpwire.Contains([]byte(v), []byte(sl.Live)) {
 			in = append(in, sl)
 		}
 	}
@@ -257,7 +280,7 @@ func hostLives(lives []secrets.Slot, host string) []secrets.Slot {
 // broker uses it for the rows that it writes before the fence runs. Only
 // TokenRE and Rules of ctx apply.
 func SecretInHost(ctx Ctx, host string, slots map[string]secrets.Slot) bool {
-	return len(hostLives(secrets.NewIndex(slots).Lives, host)) > 0 || allTokens(ctx).match([]byte(host))
+	return len(livesIn(secrets.NewIndex(slots).Lives, host)) > 0 || allTokens(ctx).match([]byte(host))
 }
 
 // noteTarget scans the percent-decoded target, because the origin decodes

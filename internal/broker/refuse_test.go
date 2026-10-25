@@ -263,6 +263,70 @@ func TestLiveValueInHostAlertsEachTime(t *testing.T) {
 	}
 }
 
+// The broker decides on a WebSocket from Connection and Upgrade before the
+// fence runs. A live value there refuses the request, also a kind that the
+// host injects, and each one alerts. Nothing goes to the origin, and no
+// row or alert text carries the live value.
+func TestLiveValueInConnectionAlertsEachTime(t *testing.T) {
+	b, _ := testBroker(t)
+	dir := t.TempDir()
+	b.Logs = &jsonl.Writer{StripPath: filepath.Join(dir, "strip.jsonl"), UnknownPath: filepath.Join(dir, "unknown.jsonl")}
+	// The broker may dial ahead (predial). The origin must get no request.
+	var got atomic.Bool
+	wsUpstream(t, b, func(*httpwire.Request, net.Conn, *bufio.Reader) { got.Store(true) })
+	oat := "sk-ant-oat01-" + strings.Repeat("A", 64)
+	ghp := "ghp_" + strings.Repeat("A", 36)
+	ws := "Upgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n"
+	for _, tc := range []struct{ fields, want string }{
+		{"Connection: lab_fence_github\r\n", RefusedBody},
+		{ws + "Connection: Upgrade, " + oat + "\r\n", RefusedBody},
+		{"Connection: keep-alive, " + ghp + "\r\n", RefusedBody},
+		// The broker answers each Upgrade other than websocket with 501
+		// before the fence runs.
+		{"Upgrade: lab_fence_github\r\nConnection: Upgrade\r\n", "upgrade\n"},
+	} {
+		got := rawRoundtrip(t, b, anthropic, "GET /socket HTTP/1.1\r\nHost: api.anthropic.com\r\n"+tc.fields+"\r\n")
+		if !strings.HasSuffix(got, tc.want) {
+			t.Fatalf("%q: not the refusal: %q", tc.fields, got)
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	if got.Load() {
+		t.Fatal("a refused request reached the origin")
+	}
+	strip, _ := os.ReadFile(b.Logs.StripPath)
+	unknown, _ := os.ReadFile(b.Logs.UnknownPath)
+	all := string(strip) + string(unknown)
+	for _, live := range []string{"lab_fence_github", oat, ghp} {
+		if strings.Contains(all, live) {
+			t.Fatalf("the live value is in a row:\n%s", all)
+		}
+	}
+	slots := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(all), "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("row %q: %v", line, err)
+		}
+		if msg := alert.Summarize(m); strings.Contains(msg, "lab_fence_github") || strings.Contains(msg, "sk-ant-") || strings.Contains(msg, "ghp_") {
+			t.Fatalf("the live value is in the alert %q", msg)
+		}
+		if m["cause"] != "live_in_connection" {
+			continue
+		}
+		if m["alert"] != true || m["where"] != "header:Connection" {
+			t.Fatalf("row %s", line)
+		}
+		slot, _ := m["slot"].(string)
+		slots[slot] = true
+	}
+	for _, slot := range []string{"a1b2c3d4e5f67890", "b0b1b2b3b4b5b6b7", ""} {
+		if !slots[slot] {
+			t.Fatalf("no live_in_connection alert for slot %q:\n%s", slot, all)
+		}
+	}
+}
+
 // A key in a field name is attempted egress, like a placeholder aimed at a
 // wrong host. Each one alerts, and the agent gets the one refusal.
 func TestKeyInHeaderNameAlertsEachTime(t *testing.T) {

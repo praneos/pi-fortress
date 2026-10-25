@@ -90,13 +90,17 @@ replaces `core.hosts` and keeps the local file. Apply installs the two files
 as one `/etc/pi-fortress/core.hosts`, with the local part below a marker
 line.
 
-A placeholder in `Host` or `Connection` refuses the request, as in any other
-non-credential header. The fence never substitutes into these two headers.
-It strips every live value in `Connection`. It never changes `Host`: the
-authority decision, the blocklist and paranoid mode read the `Host`, and the
-origin server routes the request by it. Thus a live value or a token-prefix
-match in `Host` refuses the request (`live_in_host`, an alert), also a live
-value of a kind that the host injects.
+A placeholder in `Host`, `Connection` or `Upgrade` refuses the request, as in
+any other non-credential header. The fence never substitutes into these three
+headers, and it never changes them. The authority decision, the blocklist and
+paranoid mode read the `Host`, and the origin server routes the request by
+it. Thus a live value or a token-prefix match in `Host` refuses the request
+(`live_in_host`, an alert), also a live value of a kind that the host
+injects. The broker reads `Connection` and `Upgrade` to decide on a WebSocket
+(§5.3c) before the fence runs, and the origin server switches the protocol by
+them. Thus a live value or a token-prefix match in `Connection` or `Upgrade`
+refuses the request (`live_in_connection`, an alert), also a live value of a
+kind that the host injects.
 
 The fence writes a credential into one body only: the body of the refresh
 token, `CLAUDE_ORT` on `/v1/oauth/token` or `/oauth/token`. This body is
@@ -115,7 +119,8 @@ the URL and any other buffered body. A placeholder in a streamed body stops
 the copy (`placeholder_in_streamed_body`, §5.2b). Data in a body or a URL can
 come back past the literal scrub. Examples are a model that is asked to print
 its prompt in reverse, a public gist, and an access log. Stripping does not
-change. It runs over the URL, every header except `Host`, and the body.
+change. It runs over the URL, every header except `Host`, `Connection` and
+`Upgrade`, and the body.
 
 What the fence scans:
 
@@ -593,6 +598,9 @@ Substitution can fail for these reasons:
 - The `Host` holds a live value or a token-prefix match (`live_in_host`).
   The origin server routes the request by its `Host`, so a strip there
   sends the request to a name that the fence did not judge.
+- A `Connection` or an `Upgrade` holds a live value or a token-prefix match
+  (`live_in_connection`). The broker decided on a WebSocket from these
+  headers, so a strip there makes the origin server do a different thing.
 
 For all of them, the agent gets one response, byte for byte: a 503 with
 `Retry-After: 60` and a body that names no cause. The broker refuses the
@@ -617,10 +625,10 @@ writes each cause to the strip log as `substitution_refused`, with the cause,
 slot, kind, and SNI. `kind_not_allowed_for_sni`,
 `placeholder_outside_header`, `placeholder_in_ws` (5.3c),
 `encoded_body_token`, `key_in_header_name`, `key_in_method`,
-`encoded_url_token`, and `live_in_host` are always marked `alert`. Each other
-cause is marked `alert` one time for each broker start. These eight are not
-an operational fault to fix. They show the fence catching a credential aimed
-where it may not go. This is the signature of a compromised or badly broken
+`encoded_url_token`, `live_in_host`, and `live_in_connection` are always
+marked `alert`. Each other cause is marked `alert` one time for each broker
+start. These nine are not an operational fault to fix. They show the fence
+catching a credential aimed where it may not go. This is the signature of a compromised or badly broken
 agent. A `live_in_host` row has the SNI as its `host`, so the live value goes
 to no log and no webhook. The broker writes some rows before the fence runs:
 the target rules, the blocklist, the paranoid deny and a refused git push.
@@ -1134,8 +1142,8 @@ These all refuse in the same way, `encoded_body_unscannable`:
 A live value or token-prefix match found after the decode is
 `encoded_body_token`. `encoded_body_token` alerts every time, the same as
 `kind_not_allowed_for_sni`, `placeholder_outside_header`,
-`key_in_header_name`, `key_in_method`, `encoded_url_token`, and
-`live_in_host` (5.2b).
+`key_in_header_name`, `key_in_method`, `encoded_url_token`, `live_in_host`,
+and `live_in_connection` (5.2b).
 `encoded_body_unscannable` alerts one time for each broker run, like a sealed
 store. Reason: the broker refuses every request of a harmless client that
 compresses its uploads with zstd. An alert on each one would fill the hourly
@@ -1165,7 +1173,8 @@ The broker forwards the handshake to the origin server with its
 negotiated, and every frame stays readable. If an origin server accepts an
 extension anyway, the broker ends the connection. The broker sends nothing of
 that response to the agent, and it logs the extension. Any other
-`Upgrade` is still a 501.
+`Upgrade` is still a 501. A live value or a token-prefix match in the
+`Connection` of a handshake refuses the request (`live_in_connection`, 5.2b).
 
 The broker relays the `101` of the origin server to the agent as it arrived.
 One exception applies: the broker changes a live credential that the origin

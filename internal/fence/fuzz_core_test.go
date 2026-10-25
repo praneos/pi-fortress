@@ -90,7 +90,9 @@ func FuzzCoreInjects(f *testing.F) {
 // FuzzDecideAnyRequest: the fence rewrites all input that parses as a
 // request without a panic, and the result parses again. The fence never
 // changes the Host of a request that it forwards: the origin routes by
-// that Host, and the broker decided on it (FuzzParanoidHostDecision).
+// that Host, and the broker decided on it (FuzzParanoidHostDecision). The
+// same applies to Connection and Upgrade: the broker decided on a
+// WebSocket from them.
 func FuzzDecideAnyRequest(f *testing.F) {
 	f.Add([]byte("GET /x HTTP/1.1\r\nHost: api.anthropic.com\r\nAuthorization: Bearer pf_b0b1b2b3b4b5b6b7_CLAUDE_OAT\r\n\r\n"), "api.anthropic.com")
 	f.Add([]byte("POST /x HTTP/1.1\r\nHost: example.com\r\nContent-Length: 4\r\n\r\nabcd"), "example.com")
@@ -99,18 +101,25 @@ func FuzzDecideAnyRequest(f *testing.F) {
 	f.Add([]byte("POST /x HTTP/1.1\r\nHost: pf-core-echo.test\r\nX-A: pf_d0d1d2d3d4d5d6d7_CANARY\r\nContent-Length: 22\r\n\r\ncanary-live-7f3a9c2e51"), "pf-core-echo.test")
 	f.Add([]byte("GET / HTTP/1.1\r\nHost: lab_fence_github.pf-core-echo.test\r\nAuthorization: Bearer pf_a1b2c3d4e5f67890_GITHUB_TOKEN\r\n\r\n"), "pf-core-echo.test")
 	f.Add([]byte("GET / HTTP/1.1\r\nHost: canary-live-7f3a9c2e51.evil.example:443\r\n\r\n"), "evil.example")
+	f.Add([]byte("GET / HTTP/1.1\r\nHost: pf-core-echo.test\r\nUpgrade: websocket\r\nConnection: Upgrade, lab_fence_github\r\n\r\n"), "pf-core-echo.test")
+	f.Add([]byte("GET / HTTP/1.1\r\nHost: evil.example\r\nUpgrade: canary-live-7f3a9c2e51\r\nConnection: Upgrade\r\n\r\n"), "evil.example")
 	re, pol := testPolicy(f)
 	f.Fuzz(func(t *testing.T, raw []byte, sni string) {
 		req, err := httpwire.ReadRequest(bufio.NewReader(bytes.NewReader(raw)))
 		if err != nil {
 			return
 		}
-		hosts := slices.Clone(req.Values("Host"))
+		kept := map[string][]string{}
+		for _, name := range []string{"Host", "Connection", "Upgrade"} {
+			kept[name] = slices.Clone(req.Values(name))
+		}
 		if _, _, err := DecideStream(Ctx{SNI: sni, TokenRE: re}, req, pol, canarySlots()); err != nil {
 			return
 		}
-		if got := req.Values("Host"); !slices.Equal(got, hosts) {
-			t.Fatalf("the fence changed Host %q to %q\nin=%q", hosts, got, raw)
+		for name, was := range kept {
+			if got := req.Values(name); !slices.Equal(got, was) {
+				t.Fatalf("the fence changed %s %q to %q\nin=%q", name, was, got, raw)
+			}
 		}
 		var out bytes.Buffer
 		if _, err := req.WriteTo(&out); err != nil {
