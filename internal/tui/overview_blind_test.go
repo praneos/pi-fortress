@@ -51,7 +51,7 @@ func TestOverviewNeverSaysAllGoodOverAFailedCheck(t *testing.T) {
 // shows, as a problem and in the notes of the network.
 func TestOverviewCountsWhatWasSeenAndNotStopped(t *testing.T) {
 	c, _ := testConfig(t)
-	writeReport(t, c.PolicyDir, "OK f1: 9 domains\n", time.Hour)
+	writeReport(t, c, "OK f1: 9 domains\n", time.Hour)
 	statsFixture(t, c)
 	if last := run(t, c, NewFake(120, 30)).Last(); !strings.Contains(last, "All good") || strings.Contains(last, "not stopped") {
 		t.Fatalf("blocked rows alone are not a problem:\n%s", last)

@@ -47,7 +47,14 @@ func testConfig(t *testing.T) (*admin.Config, *[][]string) {
 		}
 	}
 	calls := &[][]string{}
+	// The clock stops at the start of the minute. The Overview shows it as
+	// "checked HH:MM:SS", so a screen must not change with the second that
+	// the test runs in. The clock stays near the wall clock, because the
+	// admin side ages the observe events against the wall clock.
+	// writeReport sets the mtime of a fetch report from this clock.
+	now := time.Now().Truncate(time.Minute)
 	c := &admin.Config{
+		Now:         func() time.Time { return now },
 		PolicyDir:   policy,
 		HouseEnv:    filepath.Join(dir, "house.env"),
 		NetEnvPath:  filepath.Join(dir, "net.env"),
