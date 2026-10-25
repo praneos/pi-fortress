@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"pi-fortress/internal/admin"
 	"pi-fortress/internal/secrets"
@@ -435,6 +436,21 @@ func TestIdleExit(t *testing.T) {
 	}
 	if !strings.Contains(f.Last(), idleNote) {
 		t.Fatalf("idle exit left no note on the tty: %q", f.Last())
+	}
+}
+
+// The whole help shows on a stock 80x24 terminal, its last line too: a
+// line past the bottom row is not drawn.
+func TestHelpFitsAStockTerminal(t *testing.T) {
+	c, _ := testConfig(t)
+	f := run(t, c, NewFake(80, 24).Type("?"))
+	if !strings.Contains(f.Last(), helpText[len(helpText)-1]) {
+		t.Fatalf("help is cut at 80x24:\n%s", f.Last())
+	}
+	for _, l := range helpText {
+		if n := utf8.RuneCountInString(l); n > 64 {
+			t.Errorf("help line is %d columns, over 64: %q", n, l)
+		}
 	}
 }
 
