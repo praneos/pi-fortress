@@ -110,6 +110,11 @@ type stamp struct{ ino, mtime, size uint64 }
 // It is nil in all code except tests.
 var testHookAfterLoad func(stage string)
 
+// testHookRead gives the error for a read through readNoFollow when it
+// is set. Thus a test can make one read fail while the file stays
+// readable. It is nil in all code except tests.
+var testHookRead func(path string) error
+
 type Store struct {
 	path  string
 	mu    sync.Mutex
@@ -574,17 +579,23 @@ func (s *Store) HarvestHeld(slotID string, fn func(cur []Slot) ([]Slot, error)) 
 // writeUpdates rewrites the named keys in place. With a sealed store,
 // it seals what it writes, and it refuses to write at all without the
 // key. That rule stops a plaintext value from ever appearing under a
-// sealed header.
+// sealed header. A store with no file is empty. Any other read error
+// stops the write: the rows that it did not read would go out of the
+// store.
 func (s *Store) writeUpdates(updates map[string]string) error {
 	if len(updates) == 0 {
 		return nil
 	}
 	var existing []string
-	if raw, err := readNoFollow(s.path); err == nil {
+	raw, err := readNoFollow(s.path)
+	switch {
+	case err == nil:
 		existing = strings.Split(strings.TrimSuffix(string(raw), "\n"), "\n")
 		if len(existing) == 1 && existing[0] == "" {
 			existing = nil
 		}
+	case !os.IsNotExist(err):
+		return err
 	}
 	return s.writeMerged(existing, updates)
 }
@@ -757,6 +768,11 @@ func keepOwner(path, tmp string) {
 }
 
 func readNoFollow(path string) ([]byte, error) {
+	if testHookRead != nil {
+		if err := testHookRead(path); err != nil {
+			return nil, err
+		}
+	}
 	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if err != nil {
 		return nil, err
