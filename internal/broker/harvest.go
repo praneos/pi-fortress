@@ -42,48 +42,33 @@ func (b *Broker) harvest(slotID string, resp *httpwire.Response) ([]secrets.Slot
 	if slotID == "" {
 		return nil, nil
 	}
+	// Only a 200 is the new pair. The broker does not store a token from
+	// any other status: an error answer must not replace the live pair. The
+	// residue scan stops a token shape in such an answer.
+	if resp.Code != 200 {
+		return nil, nil
+	}
 	if !jsonContentType(resp.Get("Content-Type")) {
-		if resp.Code == 200 {
-			return nil, ErrHarvest
-		}
-		return nil, nil
+		return nil, ErrHarvest
 	}
-	// A 200 is the new pair. The broker must store each token in it, or
-	// refuse it. A value that it did not store is a value that it does not
-	// scrub. Thus a 200 with no access_token that it can read, or with a
-	// refresh_token that it cannot read, never reaches the agent. A 200
-	// without a refresh_token is valid: some servers do not rotate it. Some
-	// servers say the same with an empty string or null. These carry no
-	// value, so the broker stores the access token only.
+	// The broker must store each token in a 200, or refuse it. A value that
+	// it did not store is a value that it does not scrub. Thus a 200 with no
+	// access_token that it can read, or with a refresh_token that it cannot
+	// read, never reaches the agent. A 200 without a refresh_token is valid:
+	// some servers do not rotate it. Some servers say the same with an empty
+	// string or null. These carry no value, so the broker stores the access
+	// token only.
 	f, ok := fence.StrictFields(resp.Body, "access_token", "refresh_token")
-	if resp.Code == 200 {
-		ort := f["refresh_token"]
-		if !ok || !secrets.ValidLive(f["access_token"]) || ort != "" && !secrets.ValidLive(ort) {
-			return nil, ErrHarvest
-		}
-	}
 	oat, ort := f["access_token"], f["refresh_token"]
-	if !secrets.ValidLive(oat) {
-		oat = ""
+	if !ok || !secrets.ValidLive(oat) || ort != "" && !secrets.ValidLive(ort) {
+		return nil, ErrHarvest
 	}
-	if !secrets.ValidLive(ort) {
-		ort = ""
-	}
-	if oat == "" && ort == "" {
-		return nil, nil
-	}
-	var minted []secrets.Slot
-	if oat != "" {
-		minted = append(minted, secrets.Slot{ID: slotID, Kind: "CLAUDE_OAT", Live: oat})
-	}
+	minted := []secrets.Slot{{ID: slotID, Kind: "CLAUDE_OAT", Live: oat}}
 	if ort != "" {
 		minted = append(minted, secrets.Slot{ID: slotID, Kind: "CLAUDE_ORT", Live: ort})
 	}
 	err := b.Store.HarvestHeld(slotID, func(cur []secrets.Slot) ([]secrets.Slot, error) {
-		out := cur
-		if oat != "" {
-			out = upsert(out, slotID, "CLAUDE_OAT", oat)
-		}
+		out := upsert(cur, slotID, "CLAUDE_OAT", oat)
 		if ort != "" {
 			out = upsert(out, slotID, "CLAUDE_ORT", ort)
 		}
