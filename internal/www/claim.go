@@ -61,9 +61,18 @@ func setupPath(dir string) string {
 	return firstFile("/vagrant/vm/agent/setup.sh", filepath.Join(dir, "setup.sh"))
 }
 
+// caFallbacks are the CA files that www serves when dir has no ca.pem.
+// A test points them at its own files.
+var caFallbacks = []string{"/etc/pi-fortress/egress-ca.pem", "/etc/pi-fortress/mitm-ca.pem"}
+
+// caPaths are the files that caPath picks from, in order.
+func caPaths(dir string) []string {
+	return append([]string{filepath.Join(dir, "ca.pem")}, caFallbacks...)
+}
+
 // caPath is the ca.pem www serves from dir.
 func caPath(dir string) string {
-	return firstFile(filepath.Join(dir, "ca.pem"), "/etc/pi-fortress/egress-ca.pem", "/etc/pi-fortress/mitm-ca.pem")
+	return firstFile(caPaths(dir)...)
 }
 
 // fileSHA256 is path's hex sha256, or "" when it cannot be read.

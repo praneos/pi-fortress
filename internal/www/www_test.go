@@ -113,3 +113,32 @@ func TestBindRejectsUnspecified(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+// With no ca.pem in its directory, www serves the CA file that caPath
+// falls back to. A claim carries the hash of that file, so the agent
+// must be able to get it.
+func TestServesFallbackCA(t *testing.T) {
+	fb := t.TempDir()
+	egress, mitm := filepath.Join(fb, "egress-ca.pem"), filepath.Join(fb, "mitm-ca.pem")
+	old := caFallbacks
+	caFallbacks = []string{egress, mitm}
+	t.Cleanup(func() { caFallbacks = old })
+	s, ts := testServer(t)
+	if err := os.Remove(filepath.Join(s.Dir, "ca.pem")); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []struct{ path, body string }{{mitm, "mitm-ca"}, {egress, "egress-ca"}} {
+		if err := os.WriteFile(f.path, []byte(f.body+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		res, err := ts.Client().Get(ts.URL + "/ca.pem")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
+		if res.StatusCode != 200 || string(body) != f.body+"\n" {
+			t.Fatalf("%s: %d %q", f.path, res.StatusCode, body)
+		}
+	}
+}

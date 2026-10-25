@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,11 +98,15 @@ func contentType(name string) string {
 	}
 }
 
-func (s *Server) pathFor(name string) string {
-	dir := s.Dir
-	if dir == "" {
-		dir = "/var/lib/pi-fortress/www"
+func (s *Server) dir() string {
+	if s.Dir == "" {
+		return "/var/lib/pi-fortress/www"
 	}
+	return s.Dir
+}
+
+func (s *Server) pathFor(name string) string {
+	dir := s.dir()
 	switch name {
 	case "setup.sh":
 		return setupPath(dir)
@@ -136,7 +141,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		_ = AppendEvent(claims, Event{Ev: "setup", IP: ip, Path: r.URL.Path})
 	}
 	path := s.pathFor(name)
-	if path == "" || filepath.Base(path) != name {
+	if path == "" || !s.servable(name, path) {
 		http.NotFound(w, r)
 		return
 	}
@@ -161,6 +166,16 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	defer f.Close()
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, f)
+}
+
+// servable says that www may serve path for name. For ca.pem, path must
+// be one of the files that caPath picks from. Their names are not all
+// ca.pem. For each other name, path must have that name.
+func (s *Server) servable(name, path string) bool {
+	if name == "ca.pem" {
+		return slices.Contains(caPaths(s.dir()), path)
+	}
+	return filepath.Base(path) == name
 }
 
 func clientIP(r *http.Request) string {
