@@ -6,6 +6,11 @@
 # their correct positions.
 set -euo pipefail
 
+# The scripts and libs under test refuse to run when the user is not root
+# on a gateway (lib/guard.sh). This harness runs them with stub tools and
+# temporary paths, so it lets them run. The guard cases below remove it.
+export PF_TEST_HARNESS=1
+
 here="$(cd "$(dirname "$0")" && pwd)"
 apply="${here}/apply.sh"
 golden="${here}/testdata/nft.no-house.golden"
@@ -1185,14 +1190,15 @@ grep -q 'SRC="\${SRC:-/vagrant}"' "${prov}" || fail "provision.sh lost the /vagr
   _bad "# no key" pi-fortress-release 'holds no key line'
 )
 # A bad PF_ALLOWED_SIGNERS stops provision before apt and before install.
-# The host guard passes with PF_LAB=1. The stubs leave a mark if reached.
+# The guard passes in this harness (PF_TEST_HARNESS=1). The stubs leave a
+# mark if reached.
 mkdir -p "${tmp}/sigbin"
 for _c in apt-get install; do
   printf '#!/bin/bash\ntouch "%s"\nexit 1\n' "${tmp}/sig.acted" >"${tmp}/sigbin/${_c}"
   chmod +x "${tmp}/sigbin/${_c}"
 done
 printf 'release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest\n' >"${tmp}/signers.bad"
-if PATH="${tmp}/sigbin:${PATH}" PF_LAB=1 PF_ALLOWED_SIGNERS="${tmp}/signers.bad" SRC="${here}/../.." bash "${prov}" >/dev/null 2>"${tmp}/sig.err"; then
+if PATH="${tmp}/sigbin:${PATH}" PF_ALLOWED_SIGNERS="${tmp}/signers.bad" SRC="${here}/../.." bash "${prov}" >/dev/null 2>"${tmp}/sig.err"; then
   fail "provision.sh accepted a PF_ALLOWED_SIGNERS line with no namespaces"
 fi
 grep -q 'has no namespaces= option' "${tmp}/sig.err" || fail "provision.sh signer refusal is unclear: $(cat "${tmp}/sig.err")"
@@ -1254,42 +1260,140 @@ for _l in ${_owned}; do
   fi
 done
 
-# The two scripts refuse a host that is not a Pi, a lab VM or the appliance.
-# They name the host and the override, before they change anything. A fake
-# device-tree model acts as a desktop. apt-get and systemctl are stubs that
-# leave a mark. Thus a guard that lets this through fails here, and does
-# not act. The test skips this in a lab VM, where /vagrant allows it.
-if [[ ! -d /vagrant/vm/pi && ! -f /etc/pi-fortress/appliance.role ]]; then
-  printf 'Some Desktop\0' >"${tmp}/model"
-  mkdir -p "${tmp}/guardbin"
-  for _c in apt-get systemctl nft nmcli install; do
-    printf '#!/bin/bash\ntouch "%s"\nexit 1\n' "${tmp}/guard.acted" >"${tmp}/guardbin/${_c}"
-    chmod +x "${tmp}/guardbin/${_c}"
+# The guard (lib/guard.sh): apply.sh, provision.sh and each lib run only
+# as root on a gateway. They refuse before they change anything. Each stub
+# below leaves a mark and fails. Thus a guard that lets a run through
+# fails this test, and does not act. Each run here removes the harness
+# flag and PF_ALLOW_ANY_HOST.
+gbin="${tmp}/guardbin"
+mkdir -p "${gbin}" "${tmp}/gwork"
+for _c in apt-get systemctl nft nmcli install useradd groupadd usermod sysctl ip dnsmasq chown unattended-upgrade sshd ssh-keygen; do
+  printf '#!/bin/bash\ntouch "%s"\nexit 1\n' "${tmp}/guard.acted" >"${gbin}/${_c}"
+  chmod +x "${gbin}/${_c}"
+done
+# unguarded CMD...: CMD with no harness flag and the stubs first on PATH.
+# The guard then reads the real EUID and the real box.
+unguarded() {
+  env -u PF_TEST_HARNESS -u PF_ALLOW_ANY_HOST PATH="${gbin}:${PATH}" SRC="${here}/../.." "$@"
+}
+# as_root_on ROOT CMD...: the same, in the test mode of the guard. The
+# guard takes EUID 0 (PF_TEST_GUARD_EUID if the caller set it), and reads
+# the model, /vagrant and /etc/pi-fortress under ROOT. Only lib/guard.sh
+# reads these values, and only with PF_TEST_HARNESS=guard. Thus these
+# cases give the same result on each host, also as root.
+as_root_on() {
+  local _r="$1"
+  shift
+  unguarded PF_TEST_HARNESS=guard PF_TEST_GUARD_EUID="${PF_TEST_GUARD_EUID:-0}" PF_TEST_GUARD_ROOT="${_r}" "$@"
+}
+# srclib.sh LIB sources LIB as the shell of an operator does. Exit 0: the
+# source passed and LIB defined its functions. Exit 3: the source refused
+# before LIB defined a function.
+cat >"${tmp}/srclib.sh" <<'EOF'
+_own() { [[ "$(declare -F | grep -vx 'declare -f pf_guard_target')" != "${_before}" ]]; }
+_before="$(declare -F)"
+if source "$1"; then
+  _own && exit 0
+  exit 5
+fi
+_own && exit 4
+exit 3
+EOF
+libs=("${here}/lib/harden.sh" "${here}/lib/dhcp.sh" "${here}/lib/netman.sh")
+mkdir -p "${tmp}/gr-none" "${tmp}/gr-desk/proc/device-tree" "${tmp}/gr-pi/proc/device-tree" \
+  "${tmp}/gr-lab/vagrant/vm/pi" "${tmp}/gr-app/etc/pi-fortress" "${tmp}/gr-gw/etc/pi-fortress"
+printf 'Some Desktop\0' >"${tmp}/gr-desk/proc/device-tree/model"
+printf 'Raspberry Pi 5 Model B Rev 1.0\0' >"${tmp}/gr-pi/proc/device-tree/model"
+: >"${tmp}/gr-app/etc/pi-fortress/appliance.role"
+: >"${tmp}/gr-gw/etc/pi-fortress/gateway.role"
+
+# Root on a box with no sign of a gateway, and root on a desktop model:
+# each lib and script refuses, names the reason, and does not act.
+for _r in gr-none gr-desk; do
+  for _l in "${libs[@]}"; do
+    _rc=0
+    as_root_on "${tmp}/${_r}" bash "${tmp}/srclib.sh" "${_l}" >"${tmp}/guard.out" 2>&1 || _rc=$?
+    [[ "${_rc}" == 3 ]] || fail "lib/${_l##*/} as root on ${_r}: exit ${_rc}, not a refusal before its functions: $(cat "${tmp}/guard.out")"
+    grep -q "lib/${_l##*/} refuses to run on .*the box is not a gateway.*make apply-test" "${tmp}/guard.out" ||
+      fail "lib/${_l##*/} refusal on ${_r} is unclear: $(cat "${tmp}/guard.out")"
+    grep -q 'not root' "${tmp}/guard.out" && fail "lib/${_l##*/} as root on ${_r}: the refusal says not root"
   done
   for _s in "${prov}" "${apply}"; do
-    if PATH="${tmp}/guardbin:${PATH}" PF_TEST_MODEL="${tmp}/model" SRC="${here}/../.." bash "${_s}" >"${tmp}/guard.out" 2>&1; then
-      fail "${_s##*/} ran on a host whose model is 'Some Desktop'"
+    if as_root_on "${tmp}/${_r}" bash "${_s}" >"${tmp}/guard.out" 2>&1; then
+      fail "${_s##*/} ran as root on ${_r}"
     fi
-    grep -q "refuses to run on .*Some Desktop.*PF_ALLOW_ANY_HOST=1" "${tmp}/guard.out" ||
-      fail "${_s##*/} host refusal is unclear: $(cat "${tmp}/guard.out")"
-    [[ ! -e "${tmp}/guard.acted" ]] || fail "${_s##*/} acted before refusing the host"
+    grep -q "${_s##*/} refuses to run on .*the box is not a gateway.*PF_ALLOW_ANY_HOST=1.*make apply-test" "${tmp}/guard.out" ||
+      fail "${_s##*/} refusal on ${_r} is unclear: $(cat "${tmp}/guard.out")"
   done
-  # The Pi model passes the guard and stops at the root check. Thus run it
-  # only as a non-root user. As root, it would continue and act on this host.
-  if [[ "${EUID}" -ne 0 ]]; then
-    printf 'Raspberry Pi 5 Model B Rev 1.0\0' >"${tmp}/model"
-    PATH="${tmp}/guardbin:${PATH}" PF_TEST_MODEL="${tmp}/model" bash "${apply}" --local >"${tmp}/guard.out" 2>&1 || true
-    grep -q 'refuses to run on' "${tmp}/guard.out" && fail "apply.sh refused a Raspberry Pi model"
+done
+grep -q 'not a gateway (Some Desktop;' "${tmp}/guard.out" || fail "the refusal does not name the model: $(cat "${tmp}/guard.out")"
+[[ ! -e "${tmp}/guard.acted" ]] || fail "a guarded script acted as root off a gateway"
+
+# Each sign of a gateway alone lets root through: a Raspberry Pi model, a
+# lab checkout, the appliance role, the gateway role, PF_ALLOW_ANY_HOST=1.
+for _r in gr-pi gr-lab gr-app gr-gw; do
+  for _l in "${libs[@]}"; do
+    as_root_on "${tmp}/${_r}" bash "${tmp}/srclib.sh" "${_l}" >"${tmp}/guard.out" 2>&1 ||
+      fail "lib/${_l##*/} refused root on ${_r}: $(cat "${tmp}/guard.out")"
+  done
+done
+as_root_on "${tmp}/gr-none" PF_ALLOW_ANY_HOST=1 bash "${tmp}/srclib.sh" "${here}/lib/harden.sh" >"${tmp}/guard.out" 2>&1 ||
+  fail "PF_ALLOW_ANY_HOST=1 did not let root through: $(cat "${tmp}/guard.out")"
+# A gateway sign does not replace root.
+if PF_TEST_GUARD_EUID=1000 as_root_on "${tmp}/gr-pi" bash "${tmp}/srclib.sh" "${here}/lib/harden.sh" >"${tmp}/guard.out" 2>&1; then
+  fail "lib/harden.sh passed for EUID 1000 on a Pi"
+fi
+grep -q 'refuses to run on .*the user is not root (EUID 1000)\. ' "${tmp}/guard.out" ||
+  fail "the refusal for a user that is not root is unclear: $(cat "${tmp}/guard.out")"
+
+# --render-nft changes nothing, so it needs no flag and no root.
+( unset PF_TEST_HARNESS; render /nonexistent/house.env ) >"${tmp}/noflag.nft" 2>"${tmp}/noflag.err" ||
+  fail "--render-nft with no harness flag failed: $(cat "${tmp}/noflag.err")"
+cmp -s "${golden}" "${tmp}/noflag.nft" || fail "--render-nft with no harness flag differs from the golden file"
+
+# With no harness flag on this real box, as a user that is not root. This
+# is the mistake that the guard is for: a lib sourced in the shell of a
+# developer, then a call of a function that changes the box. As root, the
+# result depends on this box, so these cases skip.
+if [[ "${EUID}" -ne 0 ]]; then
+  _rc=0
+  unguarded HARDEN_SYSCTL_D="${tmp}/gwork" HARDEN_APT_D="${tmp}/gwork" HARDEN_WORK="${tmp}/gwork" \
+    bash -c 'source "$1"; harden_apt' _ "${here}/lib/harden.sh" >"${tmp}/guard.out" 2>&1 || _rc=$?
+  [[ "${_rc}" != 0 ]] || fail "source lib/harden.sh; harden_apt passed as a user that is not root"
+  grep -q 'lib/harden.sh refuses to run on .*the user is not root' "${tmp}/guard.out" ||
+    fail "lib/harden.sh refusal is unclear: $(cat "${tmp}/guard.out")"
+  grep -q 'harden_apt: command not found' "${tmp}/guard.out" ||
+    fail "harden_apt was defined after a refused source: $(cat "${tmp}/guard.out")"
+  for _l in "${libs[@]}"; do
+    _rc=0
+    unguarded bash "${tmp}/srclib.sh" "${_l}" >"${tmp}/guard.out" 2>&1 || _rc=$?
+    [[ "${_rc}" == 3 ]] || fail "lib/${_l##*/} with no flag: exit ${_rc}, not a refusal before its functions: $(cat "${tmp}/guard.out")"
+  done
+  for _s in "${prov}" "${apply}"; do
+    if unguarded bash "${_s}" --local >"${tmp}/guard.out" 2>&1; then
+      fail "${_s##*/} ran with no flag as a user that is not root"
+    fi
+    grep -q "${_s##*/} refuses to run on .*the user is not root" "${tmp}/guard.out" ||
+      fail "${_s##*/} refusal with no flag is unclear: $(cat "${tmp}/guard.out")"
+  done
+  # The lab-VM scripts outside vm/pi have their own short check.
+  unguarded bash "${here}/../agent/provision.sh" >"${tmp}/guard.out" 2>&1 && fail "vm/agent/provision.sh ran as a user that is not root"
+  grep -q 'provision.sh refuses to run on .*lab agent VM' "${tmp}/guard.out" ||
+    fail "vm/agent/provision.sh refusal is unclear: $(cat "${tmp}/guard.out")"
+  unguarded bash "${here}/../appliance/install.sh" fence >"${tmp}/guard.out" 2>&1 && fail "vm/appliance/install.sh ran as a user that is not root"
+  grep -q 'run as root' "${tmp}/guard.out" || fail "vm/appliance/install.sh refusal is unclear: $(cat "${tmp}/guard.out")"
+  # A sign of a gateway lets the guard pass. apply.sh then stops at its own
+  # root check, before the lock. Thus this runs only as a user that is
+  # not root: as root, apply would continue and act on this host.
+  for _r in gr-pi gr-gw; do
+    as_root_on "${tmp}/${_r}" bash "${apply}" --local >"${tmp}/guard.out" 2>&1 || true
+    grep -q 'refuses to run on' "${tmp}/guard.out" && fail "apply.sh refused root on ${_r}"
     grep -q 'apply must run as root' "${tmp}/guard.out" ||
-      fail "apply.sh on a Pi model did not reach its root check: $(cat "${tmp}/guard.out")"
-    # A non-Pi box that pf install made a gateway passes because of its role file.
-    printf 'Some Desktop\0' >"${tmp}/model"
-    : >"${tmp}/gateway.role"
-    PATH="${tmp}/guardbin:${PATH}" PF_TEST_MODEL="${tmp}/model" PF_TEST_GATEWAY_ROLE="${tmp}/gateway.role" bash "${apply}" --local >"${tmp}/guard.out" 2>&1 || true
-    grep -q 'refuses to run on' "${tmp}/guard.out" && fail "apply.sh refused a box with a gateway role"
-    grep -q 'apply must run as root' "${tmp}/guard.out" ||
-      fail "apply.sh with a gateway role did not reach its root check: $(cat "${tmp}/guard.out")"
-  fi
+      fail "apply.sh on ${_r} did not reach its root check: $(cat "${tmp}/guard.out")"
+  done
+  [[ ! -e "${tmp}/guard.acted" ]] || fail "a guarded script acted with no harness flag"
+else
+  echo "apply_test: guard cases with no harness flag skipped as root" >&2
 fi
 
 # apply sources the operator overlay after net.env, and nothing ships it.

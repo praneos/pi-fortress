@@ -15,17 +15,15 @@ if [[ ! -d "${SRC}/vm/pi" || ! -d "${SRC}/vm/policy" ]]; then
   exit 1
 fi
 
-# Only on a Raspberry Pi, a lab VM (both Vagrantfiles provision with
-# PF_LAB=1) or with PF_ALLOW_ANY_HOST=1: this installs packages and
-# rewrites system configuration. On a desktop, that is damage. The model
-# test is pf_host_guard in apply.sh. PF_TEST_MODEL is the stand-in of
-# apply_test for the device-tree file.
-_model_file="${PF_TEST_MODEL:-/proc/device-tree/model}"
-_model="$(tr -d '\0' 2>/dev/null <"${_model_file}" || true)"
-if [[ "${PF_ALLOW_ANY_HOST:-}" != 1 && "${_model}" != *"Raspberry Pi"* && "${PF_LAB:-}" != 1 ]]; then
-  echo "pi-fortress: provision.sh refuses to run on ${HOSTNAME:-this host} (${_model:-no Raspberry Pi model in ${_model_file}}; not a lab VM, PF_LAB unset). It installs packages and rewrites system configuration. PF_ALLOW_ANY_HOST=1 runs it anyway." >&2
-  exit 1
-fi
+# Only as root on a Raspberry Pi, a lab VM (the checkout is at /vagrant)
+# or with PF_ALLOW_ANY_HOST=1 (pf install on a fresh Debian or Ubuntu
+# box): this installs packages and rewrites system configuration. On a
+# desktop, that is damage. lib/guard.sh has the rule, the same as for
+# apply.sh. The Vagrant provisioner runs a copy of this file from /tmp,
+# so the guard comes from SRC.
+# shellcheck source=lib/guard.sh
+source "${SRC}/vm/pi/lib/guard.sh"
+pf_guard_target provision.sh || exit 1
 
 # check_signers FILE NAMESPACE refuses an ssh allowed_signers file unless
 # each key line has namespaces="NAMESPACE" as its one namespaces option.

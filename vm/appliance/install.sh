@@ -8,6 +8,9 @@ set -euo pipefail
 ROLE="${1:-}"
 case "${ROLE}" in fence | agent) ;; *) echo "usage: install.sh fence|agent" >&2; exit 2 ;; esac
 [[ "${EUID}" -eq 0 ]] || { echo "install.sh: run as root" >&2; exit 1; }
+# Only in a lab VM (the checkout is at /vagrant/vm): this writes /etc and
+# enables a first-boot unit. On a desktop, it stops here.
+[[ -d /vagrant/vm ]] || { echo "install.sh: refuses to run on ${HOSTNAME:-this host}: it runs only in a lab VM (/vagrant/vm), from scripts/appliance.sh" >&2; exit 1; }
 here="$(cd "$(dirname "$0")" && pwd)"
 LIB=/usr/local/lib/pi-fortress/appliance
 

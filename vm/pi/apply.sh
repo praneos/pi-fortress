@@ -63,32 +63,30 @@ case "${_mode}" in
   --render-nft) RENDER=1 ;;
 esac
 
-# Run only on a box that is a gateway: a Raspberry Pi, a lab VM (the
-# Vagrant and cloud-lab boxes have the checkout at /vagrant), the
-# appliance (install.sh writes appliance.role), or a box that pf install made a
-# gateway (gateway.role, written after the operator chose it). All other boxes
-# are a desktop where someone ran this by mistake. The code below rewrites
-# its firewall, network profiles and services. --render-nft changes
-# nothing and needs neither this check nor root. PF_TEST_MODEL is the
-# apply_test stand-in for the device-tree file.
-pf_host_guard() {
-  local model_file="${PF_TEST_MODEL:-/proc/device-tree/model}" model=""
-  local role="${PF_TEST_GATEWAY_ROLE:-/etc/pi-fortress/gateway.role}"
-  if [[ "${PF_ALLOW_ANY_HOST:-}" == 1 ]]; then
-    return 0
-  fi
-  model="$(tr -d '\0' 2>/dev/null <"${model_file}" || true)"
-  if [[ "${model}" == *"Raspberry Pi"* || -d /vagrant/vm/pi || -f /etc/pi-fortress/appliance.role || -f "${role}" ]]; then
-    return 0
-  fi
-  echo "pi-fortress: $(basename "$0") refuses to run on ${HOSTNAME:-this host} (${model:-no Raspberry Pi model in ${model_file}}; no /vagrant lab checkout; no appliance or gateway role). It rewrites the firewall, the network and system services. PF_ALLOW_ANY_HOST=1 runs it anyway." >&2
-  exit 1
-}
-
+# Run only as root on a box that is a gateway: a Raspberry Pi, a lab VM,
+# the appliance, or a box that pf install made a gateway. lib/guard.sh has
+# the rule. All other boxes are a desktop where someone ran this by
+# mistake. The code below rewrites its firewall, network profiles and
+# services. --render-nft changes nothing and needs neither this check nor
+# root. The Vagrant provisioner runs a copy of this file from /tmp. Thus
+# the guard is looked for in the same lib directories as the libs below.
 LOCK_DIR=/run/pi-fortress
 LOCK_FILE="${LOCK_DIR}/apply.lock"
 if [[ "${RENDER}" -eq 0 ]]; then
-  pf_host_guard
+  _guard=""
+  for _d in "$(dirname "$(readlink -f "$0")")/lib" "${PF_PI_LIB:-/nonexistent}/lib" /vagrant/vm/pi/lib /usr/local/lib/pi-fortress/lib; do
+    if [[ -f "${_d}/guard.sh" ]]; then
+      _guard="${_d}/guard.sh"
+      break
+    fi
+  done
+  if [[ -z "${_guard}" ]]; then
+    echo "pi-fortress: lib/guard.sh not found next to apply.sh, under PF_PI_LIB, /vagrant/vm/pi or /usr/local/lib/pi-fortress; nothing was changed" >&2
+    exit 1
+  fi
+  # shellcheck source=lib/guard.sh
+  source "${_guard}"
+  pf_guard_target apply.sh || exit 1
   if [[ "${EUID}" -ne 0 ]]; then
     echo "pi-fortress: apply must run as root" >&2
     exit 1
@@ -311,12 +309,17 @@ if [[ -z "${LIB_DIR}" ]]; then
   echo "pi-fortress: lib/ not found next to apply.sh, under PF_PI_LIB, /vagrant/vm/pi or ${PI_LIB}" >&2
   exit 1
 fi
-# shellcheck source=lib/netman.sh
-source "${LIB_DIR}/netman.sh"
-# shellcheck source=lib/dhcp.sh
-source "${LIB_DIR}/dhcp.sh"
-# shellcheck source=lib/harden.sh
-source "${LIB_DIR}/harden.sh"
+# Each lib stops a caller that is not root on a gateway (lib/guard.sh).
+# --render-nft uses none of their functions and runs with no root, so it
+# does not source them.
+if [[ "${RENDER}" -eq 0 ]]; then
+  # shellcheck source=lib/netman.sh
+  source "${LIB_DIR}/netman.sh"
+  # shellcheck source=lib/dhcp.sh
+  source "${LIB_DIR}/dhcp.sh"
+  # shellcheck source=lib/harden.sh
+  source "${LIB_DIR}/harden.sh"
+fi
 # The location where seg_dhcp_sync (lib/dhcp.sh) keeps the dnsmasq conf,
 # leases, log and unit of each segment. They are here, not in the lib, so
 # that this file names all that apply writes.

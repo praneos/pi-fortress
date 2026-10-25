@@ -277,7 +277,7 @@ Remaining:
 - `internal/ship`: a bundle is signed under one namespace/principal. The Installer refuses it when its `Namespace`/`Principal` fields name a different one. The Installer accepts it when they match (`TestInstallNamespacePrincipal`, `install_test.go`). This mechanism keeps `pi-fortress-dist` and `pi-fortress-release` apart.
 - `install.sh`:
   - `bash -n` and `shellcheck`, through `scripts/shell_test.sh`. That script globs all `.sh` files.
-  - Behavioural cases in that same script: an unsupported architecture, an unsupported OS, and a missing `PF_RELEASE_URL` with no `PF_BUNDLE`. `PF_TEST_UNAME_M`, `PF_TEST_OS_RELEASE` and `PF_TEST_SKIP_ROOT` stand in for `uname -m`, `/etc/os-release` and root. `PF_TEST_MODEL` of `apply.sh` does the same for `apply_test.sh`.
+  - Behavioural cases in that same script: an unsupported architecture, an unsupported OS, and a missing `PF_RELEASE_URL` with no `PF_BUNDLE`. `PF_TEST_UNAME_M`, `PF_TEST_OS_RELEASE` and `PF_TEST_SKIP_ROOT` stand in for `uname -m`, `/etc/os-release` and root. `PF_TEST_GUARD_EUID` and `PF_TEST_GUARD_ROOT` of `vm/pi/lib/guard.sh` do the same for `apply_test.sh`, and the guard reads them only with `PF_TEST_HARNESS=guard`.
   - `scripts/install_test.sh` (`shell_test.sh` runs it). It builds two releases with throwaway keys. It serves them through a fake `curl`, under `setsid`, so there is no terminal. Results:
     - The right tag and arch install.
     - The script refuses these cases:

@@ -20,6 +20,13 @@
 # and DHCP_UNITS. Thus the path rewrite of apply.sh in the appliance test
 # also reaches them.
 
+# Off a gateway, the source stops here, before this file defines a
+# function (lib/guard.sh). The return also stops a set -e caller.
+_pf_lib="${BASH_SOURCE[0]%/*}"
+[[ "${_pf_lib}" != "${BASH_SOURCE[0]}" ]] || _pf_lib=.
+# shellcheck source=guard.sh
+source "${_pf_lib}/guard.sh" && pf_guard_target lib/dhcp.sh || return 1 2>/dev/null || exit 1
+
 # seg_dhcp_conf NAME IF IP START END [HOSTS]: the dnsmasq conf of the
 # instance. It is the house conf (apply.sh, dns-house.conf) with the segment
 # names: bound to its one interface, port=0 so it never answers DNS (pf dns

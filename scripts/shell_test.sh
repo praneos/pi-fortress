@@ -77,8 +77,8 @@ grep -o 'SC[0-9]*' "${tmp}/all" 2>/dev/null | sort | uniq -c | sort -rn |
 # The refusals of install.sh itself (docs/gateway_install.md): no root, no
 # network, no real Pi or second architecture needed. PF_TEST_UNAME_M,
 # PF_TEST_OS_RELEASE and PF_TEST_MODEL are stand-ins for uname -m,
-# /etc/os-release and /proc/device-tree/model, as the PF_TEST_MODEL of
-# apply.sh is for apply_test.sh.
+# /etc/os-release and /proc/device-tree/model, as PF_TEST_GUARD_ROOT of
+# vm/pi/lib/guard.sh is for apply_test.sh.
 install_case() {
   local desc="$1" want="$2"
   shift 2

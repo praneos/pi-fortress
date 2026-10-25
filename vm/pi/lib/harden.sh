@@ -16,6 +16,14 @@
 # The package installs stay in provision.sh. apply.sh only tells the
 # operator when a package that a step needs is missing.
 
+# Off a gateway, the source stops here, before this file defines a
+# function (lib/guard.sh). Thus `source lib/harden.sh; harden_apt` in a
+# desktop shell changes nothing. The return also stops a set -e caller.
+_pf_lib="${BASH_SOURCE[0]%/*}"
+[[ "${_pf_lib}" != "${BASH_SOURCE[0]}" ]] || _pf_lib=.
+# shellcheck source=guard.sh
+source "${_pf_lib}/guard.sh" && pf_guard_target lib/harden.sh || return 1 2>/dev/null || exit 1
+
 # harden_put SRC DST: install SRC at DST (0644) if DST is different.
 # Returns 0 when it wrote DST, 1 when DST was already the same.
 harden_put() {
