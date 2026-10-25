@@ -523,11 +523,28 @@ const (
 // "KEY=value", "added name", "f1 toggled".
 func (a *App) saved(scope string) {
 	what, _, _ := strings.Cut(a.msg, " -- ")
-	a.edits = append(a.edits, strings.TrimSuffix(what, " saved"))
+	what = strings.TrimSuffix(what, " saved")
+	a.edits = append(a.edits, what)
 	if scope == applyFull || a.pending == "" {
 		a.pending = scope
 	}
 	a.msg += "; A applies"
+	if cost, ok := widens[what[strings.LastIndexByte(what, ' ')+1:]]; ok {
+		a.msg = cost + "; " + a.msg
+	}
+}
+
+// widens is the cost of a save that opens the fence, by KEY=value, in the
+// words of the help of its row. These saves do not ask: the confirm set is
+// for the changes that cost the way in, and more prompts get fewer reads.
+// But the message says the cost at the press. The cost comes first, so a
+// clip of the title bar at 80 columns does not remove it.
+var widens = map[string]string{
+	"HOUSE_BLOCK_VPN=off":       "devices may route around the filter",
+	"HOUSE_BLOCK_DIRECT_IP=off": "direct-IP web connections will pass",
+	"BLOCK_DIRECT_IP=off":       "only the blocklist will filter",
+	"PARANOID=off":              "names outside the allowlist will resolve",
+	"AGENT_DNS=forward":         "names may carry data out",
 }
 
 // confirmWidth is the label width that keeps a y/N prompt, with its
