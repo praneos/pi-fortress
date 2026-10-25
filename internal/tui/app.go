@@ -1188,8 +1188,12 @@ func (a *App) drawMessage(b *buffer, y int, prefix, hint string) {
 		}
 	}
 	msg := clip(a.msg, b.w-len(tail))
+	at := reverse
+	if strings.HasPrefix(a.msg, "error: ") {
+		at = alarm
+	}
 	b.line(0, y, b.w, "", reverse)
-	b.put(0, y, msg, reverse)
+	b.put(0, y, msg, at)
 	b.put(utf8.RuneCountInString(msg), y, tail, reverse)
 }
 

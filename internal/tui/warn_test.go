@@ -122,3 +122,22 @@ func firstLine(s string) string {
 func lastLine(s string) string {
 	return s[strings.LastIndex(s, "\n")+1:]
 }
+
+// An error has its own attr, and nothing else in the frame uses it. In
+// reverse video, an error was the same as a success except for its prefix.
+func TestAnErrorHasItsOwnAttr(t *testing.T) {
+	c, path := segSettings(t)
+	if err := os.WriteFile(path, []byte("IF=eth0.79\nNET=10.79.0.0/30\nIP=10.79.0.1\nthis line is not a key and a value\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	f := run(t, c, NewFake(120, 48).Type(segmentDown("ADMIN")).Press(KeyEnter))
+	frame := f.Frames[len(f.Frames)-1]
+	if strings.Count(frame, attrCodes[alarm]) != 1 || !strings.Contains(frame, attrCodes[alarm]+"error: ") {
+		t.Fatalf("the error is not in its own attr:\n%q", lastLine(frame))
+	}
+
+	f = run(t, c, NewFake(120, 48).Type(keys(netHouse, secFiltering)+"a").Press(KeyEsc))
+	if frame := f.Frames[len(f.Frames)-1]; !strings.Contains(f.Last(), "cancelled") || strings.Contains(frame, attrCodes[alarm]) {
+		t.Fatalf("a message that is not an error uses the error attr:\n%q", lastLine(frame))
+	}
+}

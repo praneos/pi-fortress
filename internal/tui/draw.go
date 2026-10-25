@@ -15,6 +15,11 @@ const (
 	// picked is the current section or tab on its strip: bold reverse. Thus it
 	// is visible, and nobody can mistake it for the cursor row.
 	picked
+	// alarm is an error message, and nothing else uses it: bold, underline
+	// and red. The footer and the cursor are reverse video. An error in
+	// reverse video was the same as a success, except for its prefix. A
+	// terminal with no colour still shows bold and underline.
+	alarm
 )
 
 type cell struct {
@@ -78,7 +83,7 @@ func (b *buffer) line(x, y, width int, s string, a attr) {
 	b.put(x, y, s+strings.Repeat(" ", width-n), a)
 }
 
-var attrCodes = map[attr]string{plain: "\x1b[0m", bold: "\x1b[0;1m", reverse: "\x1b[0;7m", picked: "\x1b[0;1;7m"}
+var attrCodes = map[attr]string{plain: "\x1b[0m", bold: "\x1b[0;1m", reverse: "\x1b[0;7m", picked: "\x1b[0;1;7m", alarm: "\x1b[0;1;4;31m"}
 
 // frame renders the full buffer as one write: home, each row, and no
 // trailing newline, so the last line never scrolls.
