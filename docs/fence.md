@@ -1022,7 +1022,7 @@ of the broker. This stalls TLS.
 
 | Path | What |
 |---|---|
-| `/var/log/pi-fortress/strip.jsonl` | One line for each match: `host`, `where`, `rule`, `t`, and `client_ip` when the preamble carried a source. Refusals add `ev`, `sni`, `cause`, `slot`, `kind`, and `alert` when the broker marks them. A §5.2d budget crossing adds `threat`, `slot`, `count`, `limit`. A §5.2e expiry row adds `threat` and `slot`, and `host` is `-`. An expiring row also adds `count`. |
+| `/var/log/pi-fortress/strip.jsonl` | One line for each match: `host`, `where`, `rule`, `t`, and `client_ip` when the preamble carried a source. Refusals add `ev`, `sni`, `cause`, `slot`, `kind`, and `alert` when the broker marks them. A §5.2d budget crossing adds `threat`, `slot`, `count`, `limit`. A §5.2e expiry row adds `threat` and `slot`, and `host` is `-`. An expiring row also adds `count`. A name that the engine refused because the blocklist has it is a refusal with `cause` and `threat` `sni_blocked` and `where` `sni`. It never has `alert`, and one client and name give at most one such row each minute. |
 | `pf alert` (`internal/alert`) | Tails the jsonl file and `notice.jsonl`. Writes the last event. Optional webhook. |
 | `./vm/bin/alerts.sh follow` | Host terminal bell + `notify-send`. |
 | `vm/policy/alert.url` | One URL: ntfy / Slack / Discord. |

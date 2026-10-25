@@ -1535,8 +1535,10 @@ func (o *Observer) ingestStrip(st *State) {
 		// a producer that this reader does not know, and it stays the strip
 		// or refusal above. The detail does not change: a budget row carries
 		// no ev, so it already holds the rule, which is the threshold and the slot.
+		// sni_blocked is a name that the engine refused because the
+		// blocklist has it (internal/broker engrefused.go). It is a block.
 		switch r.Threat {
-		case "canary", "slot_budget":
+		case "canary", "slot_budget", "sni_blocked":
 			ev.Threat = r.Threat
 		}
 		if ev.Dst == "" {

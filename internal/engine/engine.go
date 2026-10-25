@@ -69,6 +69,10 @@ type Engine struct {
 	perSrc              *srclimit.PerSource
 	perSrcInspect       *srclimit.PerSource
 	wg                  sync.WaitGroup
+	// rowLast is the time of the last refusal row for each client and name
+	// (rowDue).
+	rowMu   sync.Mutex
+	rowLast map[string]time.Time
 }
 
 // DefaultMaxPerSource is a quarter of the global 256. With the global cap
@@ -322,6 +326,7 @@ func (e *Engine) handle(ctx context.Context, c net.Conn, accepted time.Time, ins
 	}
 	if e.Blocked.Has(h.SNI) {
 		e.logf("sni blocked refused sni=%s src=%s dst=%s", h.SNI, c.RemoteAddr(), dst)
+		e.reportRefused(c, dst, h.SNI, preamble.RefusedSNIBlocked)
 		return
 	}
 	if e.Forward != nil && !inspect && !e.Forward.Allowed(h.SNI, e.LabEcho) {
@@ -405,6 +410,60 @@ func (e *Engine) handle(ctx context.Context, c net.Conn, accepted time.Time, ins
 		e.logf("relay end=%s conn=%s sni=%s src=%s dst=%s age=%s",
 			endShutdown, p.ConnID, h.SNI, c.RemoteAddr(), dst, age)
 	}
+}
+
+// sniRowEvery is the shortest time between two refusal rows for one name
+// from one client. sniRowKeys is the limit on the table that rowDue keeps.
+const (
+	sniRowEvery = time.Minute
+	sniRowKeys  = 4096
+)
+
+// reportRefused sends the cause of a refusal to the broker, which writes
+// the row to strip.jsonl (internal/broker engrefused.go). The engine has
+// no write access to the log. A blocked name is expected traffic: an agent
+// that retries it must not fill the log, or dial the broker for each
+// connection. Thus one client and one name give at most one row in
+// sniRowEvery. The journal line above is still written for each
+// connection. A failure here changes nothing: the connection is refused.
+func (e *Engine) reportRefused(c net.Conn, dst netip.AddrPort, sni, cause string) {
+	src := addrPort(c.RemoteAddr())
+	if e.Sock == "" || !e.rowDue(src.Addr(), sni, time.Now()) {
+		return
+	}
+	b, err := net.DialTimeout("unix", e.Sock, time.Second)
+	if err != nil {
+		return
+	}
+	defer b.Close()
+	_ = b.SetDeadline(time.Now().Add(time.Second))
+	_ = preamble.Encode(b, &preamble.Preamble{ConnID: connID(), Src: src, OrigDst: dst, SNI: sni, Refused: cause})
+}
+
+// rowDue reports whether a refusal row for name from src may go now, and
+// if so, records the time. When the table is full, it first drops the
+// keys older than sniRowEvery. If it is still full, it starts again empty.
+// Then an agent that rotates names gets more rows, not fewer. The jsonl
+// writer of the broker limits those rows for each client.
+func (e *Engine) rowDue(src netip.Addr, name string, now time.Time) bool {
+	key := src.String() + " " + name
+	e.rowMu.Lock()
+	defer e.rowMu.Unlock()
+	if t, ok := e.rowLast[key]; ok && now.Sub(t) < sniRowEvery {
+		return false
+	}
+	if len(e.rowLast) >= sniRowKeys {
+		for k, t := range e.rowLast {
+			if now.Sub(t) >= sniRowEvery {
+				delete(e.rowLast, k)
+			}
+		}
+	}
+	if e.rowLast == nil || len(e.rowLast) >= sniRowKeys {
+		e.rowLast = map[string]time.Time{}
+	}
+	e.rowLast[key] = now
+	return true
 }
 
 func (e *Engine) origDst(c net.Conn) (netip.AddrPort, error) {

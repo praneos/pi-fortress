@@ -1,5 +1,6 @@
 // Package preamble is the framed header that the engine writes before a
-// relayed connection: connection id, addresses, SNI and ALPN.
+// relayed connection: connection id, addresses, SNI and ALPN. For a
+// connection that the engine refused, it also carries the cause.
 // internal/engine encodes it. internal/broker decodes it.
 package preamble
 
@@ -23,7 +24,14 @@ type Preamble struct {
 	OrigDst netip.AddrPort `json:"orig_dst"`
 	SNI     string         `json:"sni"`
 	ALPN    string         `json:"alpn"`
+	// Refused, when set, is the cause for which the engine refused this
+	// connection before the TLS handshake. No request follows. The broker
+	// only writes the row for it (internal/broker engrefused.go).
+	Refused string `json:"refused,omitempty"`
 }
+
+// RefusedSNIBlocked is the cause for a name that the blocklist has.
+const RefusedSNIBlocked = "sni_blocked"
 
 // ValidSNI rejects all names that hello.ValidHostName rejects, and the empty
 // name. Thus a broker never judges a name that the client did not send. It

@@ -67,3 +67,18 @@ func TestUnknownThreatStaysAStrip(t *testing.T) {
 		t.Fatalf("events: %+v", st.Events)
 	}
 }
+
+// A name that the engine refused because the blocklist has it is a block,
+// not an alert: the fence stopped the connection. It keeps its own threat
+// name, so the screen does not show it as a credential refusal.
+func TestSNIBlockedRowIsABlock(t *testing.T) {
+	row := `{"t":"2026-09-21T15:12:41Z","ev":"substitution_refused","host":"phish.example","sni":"phish.example","where":"sni","rule":"refused:sni_blocked","cause":"sni_blocked","slot":"","kind":"","client_ip":"10.77.0.10","threat":"sni_blocked"}` + "\n"
+	st := stripObserver(t, row, time.Date(2026, 9, 21, 16, 0, 0, 0, time.UTC))
+	want := Event{T: time.Date(2026, 9, 21, 15, 12, 41, 0, time.UTC), Segment: "agent", Src: "10.77.0.10", Dst: "phish.example", Threat: "sni_blocked", Detail: "sni_blocked"}
+	if len(st.Events) != 1 || st.Events[0] != want {
+		t.Fatalf("events: %+v, want %+v", st.Events, want)
+	}
+	if st.Events[0].Alert() {
+		t.Fatal("a blocked name is an alert")
+	}
+}
