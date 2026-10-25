@@ -411,6 +411,23 @@ func TestSinkholeAnswersZeroAndNeverForwards(t *testing.T) {
 	}
 }
 
+// An operator can write "*.name" by hand in a sinkhole file. The compiled
+// lists write the same entry as "name". Both forms must block the same
+// names: the name and each name under it.
+func TestSinkholeStarEntryCoversTheNameAndItsSubdomains(t *testing.T) {
+	table := map[string][4]byte{"a.wild.test": {1, 2, 3, 4}, "wild.test": {1, 2, 3, 4}}
+	h := newHarness(t, []string{"*.wild.test"}, table, 300)
+	for _, name := range []string{"a.wild.test", "wild.test"} {
+		_, answers := h.ask(t, name, dnsmessage.TypeA)
+		if got := firstA(t, answers); got != "0.0.0.0" {
+			t.Fatalf("%s: answer %q, want the sinkhole", name, got)
+		}
+	}
+	if h.up.asked.Load() != 0 {
+		t.Fatal("a name under a *. entry reached the upstream")
+	}
+}
+
 // An alias is the obvious way around a list of names. The name on the
 // list is never in the query. It is only in the answer.
 func TestACNAMEToASinkholedNameIsSinkholed(t *testing.T) {

@@ -53,7 +53,9 @@ func (h *hosts) load(path string) error {
 			continue
 		}
 		name, val, _ := strings.Cut(rest, "/")
-		if name = norm(name); name == "" {
+		// A hand-written "*.name" is the same entry as "name", as the compiled
+		// lists write it. lookup then matches the name and each name under it.
+		if name = strings.TrimPrefix(norm(name), "*."); name == "" {
 			continue
 		}
 		// The code takes all values that are not IPv4 literals as the
