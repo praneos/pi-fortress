@@ -140,14 +140,15 @@ type Segment struct {
 // not in the policy tree, because the segment itself is box-local state
 // that a ship never changes.
 func SegmentAllowPath(segmentsDir, name string) string {
-	return filepath.Join(segmentsParent(segmentsDir), "allow."+name+".domains")
+	return filepath.Join(SegmentsParent(segmentsDir), "allow."+name+".domains")
 }
 
-// segmentsParent is the directory that holds segments.d. The path is
+// SegmentsParent is the directory that holds segments.d. The path is
 // cleaned first. filepath.Dir of "segments.d/" is segments.d itself, but
 // dirname in apply.sh ignores a trailing slash and gives the parent. The
-// seed of apply.sh and the check of render must use the same file.
-func segmentsParent(segmentsDir string) string {
+// seed of apply.sh and the check of render must use the same file. The
+// check directory of internal/admin goes here too.
+func SegmentsParent(segmentsDir string) string {
 	return filepath.Dir(filepath.Clean(segmentsDir))
 }
 

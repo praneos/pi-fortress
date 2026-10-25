@@ -326,7 +326,7 @@ func (c *Config) candidateSegments(name string, kv map[string]string, keys []str
 	if err != nil {
 		return "", err
 	}
-	dir, err := os.MkdirTemp(filepath.Dir(c.SegmentsDir), "segments.d.check")
+	dir, err := os.MkdirTemp(render.SegmentsParent(c.SegmentsDir), "segments.d.check")
 	if err != nil {
 		return "", err
 	}
