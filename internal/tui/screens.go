@@ -870,10 +870,16 @@ func (a *App) devicesKey(k Key, i int) {
 		// The name and the address, and also the MAC. The MAC is the one
 		// of the three that nobody recognises. On the day of the wrong
 		// deletion of a reservation, the prompt showed only the MAC.
-		a.confirm(fmt.Sprintf("delete reservation %s %s (%s)", h.Name, h.IP, h.MAC), func() {
+		// One question covers the delete and the reload. A second question
+		// after the delete got Enter (= N), and the live resolver kept the
+		// old name while the screen said deleted. The name gets the cells
+		// that are left, so that [y/N] stays on the line at 80 columns.
+		tail := fmt.Sprintf(" %s (%s); reload dns [y/N]: _", h.IP, h.MAC)
+		room := max(a.w-len("delete reservation ")-len(tail), 6)
+		a.confirm(fmt.Sprintf("delete reservation %s %s (%s); reload dns", clip(h.Name, room), h.IP, h.MAC), func() {
 			if a.do("unreserve", admin.Args{MAC: h.MAC}, "") {
 				a.seekHost(h.MAC)
-				a.offerReload("deleted " + h.MAC)
+				a.reloadHouseDNS("deleted " + h.MAC)
 			}
 		})
 	}
@@ -895,11 +901,18 @@ func (a *App) seekHost(mac string) {
 
 func (a *App) offerReload(msg string) {
 	a.msg = msg
-	a.confirm(msg+"; reload house dns now", func() {
-		if _, err := a.call("dns.reload", admin.Args{}); !a.fail(err) {
-			a.msg = msg + "; house dns reloaded"
-		}
-	})
+	a.confirm(msg+"; reload house dns now", func() { a.reloadHouseDNS(msg) })
+}
+
+// reloadHouseDNS makes the live resolver read the reservations again. done
+// is the change that is already in the file. When the reload fails, the
+// message keeps done, so the operator knows that the change is not live.
+func (a *App) reloadHouseDNS(done string) {
+	if _, err := a.call("dns.reload", admin.Args{}); err != nil {
+		a.msg = "error: " + done + ", but house dns did not reload: " + err.Error()
+		return
+	}
+	a.msg = done + "; house dns reloaded"
 }
 
 func (a *App) listKey(k Key, i int) {

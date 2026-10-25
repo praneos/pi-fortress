@@ -172,7 +172,7 @@ func TestDevicesReserveAndDelete(t *testing.T) {
 	if last := (*calls)[len(*calls)-1]; strings.Join(last, " ") != "systemctl reload "+admin.HouseDNSUnit {
 		t.Fatal(*calls)
 	}
-	f = NewFake(100, 24).Type(keys(netHouse, secDevices) + "d").Type("y").Type("n")
+	f = NewFake(100, 24).Type(keys(netHouse, secDevices) + "d").Type("y")
 	run(t, c, f)
 	if got, _ := os.ReadFile(c.HouseHosts); strings.Contains(string(got), "ee:02") || !strings.Contains(string(got), "ee:01") {
 		t.Fatalf("%q", got)
@@ -195,7 +195,7 @@ func TestDevicesCursorFollowsTheDeviceItActedOn(t *testing.T) {
 		t.Fatalf("d after a reserve asks about another device:\n%s", f.Last())
 	}
 	os.WriteFile(c.HouseHosts, before, 0o644)
-	run(t, c, reserve().Type("d").Type("y").Type("n"))
+	run(t, c, reserve().Type("d").Type("y"))
 	got, _ := os.ReadFile(c.HouseHosts)
 	if strings.Contains(string(got), "ee:02") || !strings.Contains(string(got), "ee:01") {
 		t.Fatalf("the delete took the wrong reservation:\n%s", got)

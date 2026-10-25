@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"pi-fortress/internal/admin"
 	"pi-fortress/internal/secrets"
 )
 
@@ -91,5 +92,40 @@ func TestListDeleteNamesTheList(t *testing.T) {
 	run(t, c, NewFake(80, 24).Type(keys(netHouse, secFiltering)+"d").Type("y"))
 	if got, _ := os.ReadFile(path); len(got) != 0 {
 		t.Fatalf("y did not delete the full item: %q", got)
+	}
+}
+
+// A reservation delete that does not reload house dns leaves the live
+// resolver on the old name, and nothing shows that gap. Thus one question
+// covers the delete and the reload, and y does both. No second question
+// follows. n does neither. At 80 columns the full question fits.
+func TestReservationDeleteReloadsInOneQuestion(t *testing.T) {
+	c, calls := testConfig(t)
+	reloads := func() int {
+		n := 0
+		for _, argv := range *calls {
+			if strings.Join(argv, " ") == "systemctl reload "+admin.HouseDNSUnit {
+				n++
+			}
+		}
+		return n
+	}
+	f := run(t, c, NewFake(80, 24).Type(keys(netHouse, secDevices)+"d"))
+	if !strings.Contains(f.Last(), "delete reservation mac 10.78.0.20 (aa:bb:cc:dd:ee:01); reload dns [y/N]") {
+		t.Fatalf("the question does not cover the delete and the reload:\n%s", f.Last())
+	}
+	run(t, c, NewFake(80, 24).Type(keys(netHouse, secDevices)+"d").Type("n"))
+	if got, _ := os.ReadFile(c.HouseHosts); !strings.Contains(string(got), "ee:01") || reloads() != 0 {
+		t.Fatalf("n deleted or reloaded: %q, %d reloads", got, reloads())
+	}
+	f = run(t, c, NewFake(80, 24).Type(keys(netHouse, secDevices)+"d").Type("y"))
+	if got, _ := os.ReadFile(c.HouseHosts); strings.Contains(string(got), "ee:01") {
+		t.Fatalf("y did not delete: %q", got)
+	}
+	if reloads() != 1 {
+		t.Fatalf("y did not reload house dns: %v", *calls)
+	}
+	if strings.Contains(f.Last(), "[y/N]") || !strings.Contains(f.Last(), "deleted aa:bb:cc:dd:ee:01") {
+		t.Fatalf("a second question follows the delete, or no message:\n%s", f.Last())
 	}
 }
