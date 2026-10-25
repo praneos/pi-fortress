@@ -41,7 +41,7 @@ func TestEgressFPDefaultsAreNoChange(t *testing.T) {
 	h0, s0 := egressFPs(t, "WG_IF=wg0\n", "", labElements)
 	h1, s1 := egressFPs(t, "WG_IF=wg0\nHOUSE_EGRESS=strict\nHOUSE_ALLOW_WIFI_CALLING=off\nHOUSE_ALLOW_CALL_UDP=off\nHOUSE_ALLOW_WHATSAPP=on\n"+
 		"HOUSE_BLOCK_DIRECT_IP=on\nHOUSE_BLOCK_HTTP=off\nHOUSE_BLOCK_VPN=on\nHOUSE_PRIVATE_DNS=off\n",
-		"EGRESS=strict\nBLOCK_DIRECT_IP=on\n", labElements)
+		"EGRESS=strict\nBLOCK_DIRECT_IP=on\nINSPECT=off\n", labElements)
 	if h0 == "" || h0 != h1 || strings.Join(s0, " ") != strings.Join(s1, " ") {
 		t.Fatalf("explicit defaults changed a fingerprint: %s %v / %s %v", h0, s0, h1, s1)
 	}
@@ -67,12 +67,12 @@ func TestEgressFPHouse(t *testing.T) {
 	}
 }
 
-// EGRESS, ALLOW_PORTS and BLOCK_DIRECT_IP change only the fingerprint of
-// their segment.
+// EGRESS, ALLOW_PORTS, BLOCK_DIRECT_IP and INSPECT change only the
+// fingerprint of their segment.
 // ssh_allow.ips opens SSH from each plain segment, so it changes all of them.
 func TestEgressFPSegment(t *testing.T) {
 	h0, s0 := egressFPs(t, "WG_IF=wg0\n", "", labElements)
-	for _, line := range []string{"EGRESS=audit\n", "EGRESS=open\n", "ALLOW_PORTS='tcp:27015'\n", "ALLOW_PORTS='udp:3000-3010'\n", "BLOCK_DIRECT_IP=off\n"} {
+	for _, line := range []string{"EGRESS=audit\n", "EGRESS=open\n", "ALLOW_PORTS='tcp:27015'\n", "ALLOW_PORTS='udp:3000-3010'\n", "BLOCK_DIRECT_IP=off\n", "INSPECT=on\n"} {
 		h, s := egressFPs(t, "WG_IF=wg0\n", line, labElements)
 		if h != h0 || s[0] == s0[0] || s[1] != s0[1] {
 			t.Errorf("%s: house %v, desk %v, guest %v changed; want only the desk", strings.TrimSpace(line), h != h0, s[0] != s0[0], s[1] != s0[1])
