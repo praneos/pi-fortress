@@ -2,6 +2,7 @@ package dnsd
 
 import (
 	"bufio"
+	"fmt"
 	"net/netip"
 	"os"
 	"strings"
@@ -23,20 +24,30 @@ type hosts struct {
 
 func newHosts() *hosts { return &hosts{m: map[string]netip.Addr{}} }
 
+// echoNet is TEST-NET-1, the range of the echo fixtures and the block
+// canary. The agent gate always lets it through.
+var echoNet = netip.MustParsePrefix("192.0.2.0/24")
+
 // loadHosts merges the files in order. For a name, a later file wins. A
 // missing file is empty, not an error: the daemons start before the
 // first apply has compiled anything.
-func loadHosts(paths []string) (*hosts, error) {
+//
+// pool is the fake-IP pool of the segment, or the zero prefix. A fixture
+// address inside the pool is refused. pf dns answers a fixture from the
+// file and never journals its name. The broker takes each pool address
+// as fake and finds no name for this one, so it refuses each connection
+// to it. The sinkhole (0.0.0.0) and the echo range are never refused.
+func loadHosts(paths []string, pool netip.Prefix) (*hosts, error) {
 	h := newHosts()
 	for _, p := range paths {
-		if err := h.load(p); err != nil {
+		if err := h.load(p, pool); err != nil {
 			return nil, err
 		}
 	}
 	return h, nil
 }
 
-func (h *hosts) load(path string) error {
+func (h *hosts) load(path string, pool netip.Prefix) error {
 	f, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -47,7 +58,9 @@ func (h *hosts) load(path string) error {
 	defer f.Close()
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	line := 0
 	for sc.Scan() {
+		line++
 		rest, ok := strings.CutPrefix(strings.TrimSpace(sc.Text()), "address=/")
 		if !ok {
 			continue
@@ -65,6 +78,9 @@ func (h *hosts) load(path string) error {
 		a, err := netip.ParseAddr(strings.TrimSpace(val))
 		if err != nil || !a.Is4() {
 			a = netip.AddrFrom4([4]byte{})
+		}
+		if pool.IsValid() && pool.Contains(a) && !a.IsUnspecified() && !echoNet.Contains(a) {
+			return fmt.Errorf("%s:%d: fixture %s answers %s, inside the fake-IP pool %s (FAKEIP_NET); the broker refuses a pool address that pf dns did not give out. Use an address outside FAKEIP_NET, or move FAKEIP_NET", path, line, name, a, pool)
 		}
 		h.m[name] = a
 	}

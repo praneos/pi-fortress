@@ -471,9 +471,10 @@ func (seg *Segment) setUnbound(network string, why *string) bool {
 
 // readSink reads the list of a segment but does not publish it. Thus a
 // reload that will fail can fail first. No segment then answers by a list
-// that the operator was told did not load.
+// that the operator was told did not load. Under fake-IP it refuses a
+// fixture inside the pool (loadHosts).
 func (seg *Segment) readSink() (*hosts, error) {
-	h, err := loadHosts(seg.SinkholeFiles)
+	h, err := loadHosts(seg.SinkholeFiles, seg.FakeIPNet)
 	if err != nil {
 		return nil, fmt.Errorf("segment %q: %w", seg.Name, err)
 	}

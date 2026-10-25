@@ -391,3 +391,61 @@ func TestFakeIPRefusesAnAddressAsAName(t *testing.T) {
 		t.Fatal("a real name with an address in it lost its pool address")
 	}
 }
+
+// A fixture whose address is inside the pool is a pool address with no
+// name in the journal. The broker takes every pool address as fake, so
+// it refuses that one at each connection. New refuses it, so apply
+// (pf dns -check) stops before anything runs with it, and Reload keeps
+// the old list. The message names the file, the line, the name, the
+// address and the pool. Forward mode has no pool and takes the same
+// file. The sinkhole (0.0.0.0) and the echo range are never refused.
+func TestFakeIPRefusesAFixtureInThePool(t *testing.T) {
+	dir := t.TempDir()
+	journal := filepath.Join(dir, "fakeip.journal")
+	write := func(name string, lines ...string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(strings.Join(lines, "\n")+"\n"), 0644); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	bad := write("bad.hosts", "address=/ads.test/0.0.0.0", "address=/nas.test/198.18.0.9")
+	good := write("good.hosts", "address=/ads.test/0.0.0.0", "address=/pf-open-echo.test/192.0.2.3", "address=/pf-core-echo.test/192.0.2.2")
+	seg := func(fake bool, files ...string) []Segment {
+		segs := []Segment{{
+			Iface: "lo", IP: netip.MustParseAddr("127.0.0.1"), Upstream: "127.0.0.1:53",
+			NFTSet: "resolved_v4", AddressOnly: true, SinkholeFiles: files,
+		}}
+		if fake {
+			segs[0].FakeIPNet, segs[0].FakeIPJournal = testPool, journal
+		}
+		return segs
+	}
+	newSrv := func(segs []Segment) (*Server, error) {
+		return New(Config{NFTTable: "inet fortress", NFT: &fakeNFT{}, Segments: segs})
+	}
+	_, err := newSrv(seg(true, good, bad))
+	if err == nil {
+		t.Fatal("fakeip: a fixture inside the pool was taken")
+	}
+	for _, want := range []string{bad + ":2", "nas.test", "198.18.0.9", "198.18.0.0/16", "FAKEIP_NET"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err %q lacks %q", err, want)
+		}
+	}
+	if _, err := newSrv(seg(false, good, bad)); err != nil {
+		t.Fatalf("forward: the same file refused: %v", err)
+	}
+	srv, err := newSrv(seg(true, good))
+	if err != nil {
+		t.Fatalf("fakeip: the sinkhole and the echo range refused: %v", err)
+	}
+	// Reload reads the same check. The old list stays.
+	write("good.hosts", "address=/nas.test/198.18.0.9")
+	if err := srv.Reload(); err == nil || !strings.Contains(err.Error(), "FAKEIP_NET") {
+		t.Fatalf("reload: err %v", err)
+	}
+	if a, ok := srv.segs[0].local.Load().lookup("pf-open-echo.test"); !ok || a.String() != "192.0.2.3" {
+		t.Fatalf("reload published the refused list: %v %v", a, ok)
+	}
+}
