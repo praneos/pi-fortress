@@ -640,6 +640,12 @@ func (a *App) promptKey(k Key) {
 			p.buf = p.buf[:len(p.buf)-n]
 		}
 	case KeyEnter:
+		// The line end of a paste is not an Enter of the operator. Before, it
+		// saved the pasted value before the operator saw it. The operator
+		// reads the value on the prompt line and then presses Enter.
+		if k.Paste {
+			return
+		}
 		a.pr = nil
 		p.done(strings.TrimSpace(p.buf))
 	case KeyRune:
@@ -1268,6 +1274,7 @@ var helpText = []string{
 	"logged); the rest of the box does not wait for it.",
 	"",
 	"A prompt takes 253 bytes at most; then it shows [full].",
+	"Enter saves the value; the line end of a paste does not.",
 	"",
 	"Any key closes this help.",
 }

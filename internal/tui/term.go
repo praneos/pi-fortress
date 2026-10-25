@@ -33,6 +33,10 @@ const (
 type Key struct {
 	Kind KeyKind
 	Rune rune
+	// Paste is set on an Enter that came at the end of one read, after text
+	// in that same read. That is the line end of a paste, not a key that the
+	// operator pressed.
+	Paste bool
 }
 
 // Terminal is what the app needs from a tty. ReadKey blocks. It returns
@@ -155,12 +159,35 @@ func utf8Rune(lead byte, next func(time.Duration) (byte, bool)) rune {
 // next touches the keyboard or the session closes. One goroutine, one time
 // per process, waits on a read that nobody waits for.
 type byteSource struct {
-	ch  chan byte
+	ch  chan inByte
 	err chan error
 	// back holds the bytes that parseKey gave back (unread). They come out of
 	// next and pending before newer bytes. Only the goroutine that reads keys
 	// touches it.
 	back []byte
+}
+
+// inByte is one byte from the tty. paste says that the byte is a line end
+// at the end of a read, and that text came before it in that read.
+type inByte struct {
+	b     byte
+	paste bool
+}
+
+// pasteFrom returns the index of the line ends at the end of p, when text
+// comes before them. Else it returns len(p). A key that the operator types
+// comes in a read of its own. A paste comes in one read with its line end.
+// Thus a value with a trailing newline does not save before the operator
+// sees it on the prompt line.
+func pasteFrom(p []byte) int {
+	i := len(p)
+	for i > 0 && (p[i-1] == '\r' || p[i-1] == '\n') {
+		i--
+	}
+	if i == 0 {
+		return len(p)
+	}
+	return i
 }
 
 func (s *byteSource) unread(b byte) { s.back = append(s.back, b) }
@@ -182,14 +209,16 @@ func (s *byteSource) pending() (byte, bool) {
 // of the process. stop cannot interrupt the read itself (refer to the
 // caveat on the type), but it does end the goroutine at the next byte.
 func newByteSource(r io.Reader, stop <-chan struct{}) *byteSource {
-	s := &byteSource{ch: make(chan byte, 64), err: make(chan error, 1)}
+	s := &byteSource{ch: make(chan inByte, 64), err: make(chan error, 1)}
 	go func() {
-		buf := make([]byte, 64)
+		// Large enough for a full prompt value and its line end in one read.
+		buf := make([]byte, 512)
 		for {
 			n, err := r.Read(buf)
-			for _, b := range buf[:n] {
+			from := pasteFrom(buf[:n])
+			for i, b := range buf[:n] {
 				select {
-				case s.ch <- b:
+				case s.ch <- inByte{b, i >= from}:
 				case <-stop:
 					return
 				}
@@ -216,8 +245,8 @@ func (s *byteSource) next(d time.Duration) (byte, bool) {
 		return b, true
 	}
 	select {
-	case b := <-s.ch:
-		return b, true
+	case in := <-s.ch:
+		return in.b, true
 	case <-time.After(d):
 		return 0, false
 	}

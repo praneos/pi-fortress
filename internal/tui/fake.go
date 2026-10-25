@@ -46,6 +46,20 @@ func (f *Fake) Type(s string) *Fake {
 	return f
 }
 
+// Paste queues s as the real terminal reads it in one read: each rune is a
+// key, and each line end at the end of s is an Enter with Paste set. s
+// has no line end before its text ends.
+func (f *Fake) Paste(s string) *Fake {
+	from := pasteFrom([]byte(s))
+	f.Type(s[:from])
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for range s[from:] {
+		f.keys = append(f.keys, Key{Kind: KeyEnter, Paste: true})
+	}
+	return f
+}
+
 func (f *Fake) Press(kinds ...KeyKind) *Fake {
 	f.mu.Lock()
 	defer f.mu.Unlock()

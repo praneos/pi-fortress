@@ -153,8 +153,10 @@ func (t *linuxTerm) ReadKey() (Key, error) {
 		return parseKey(b, t.src.next, t.src.unread), nil
 	}
 	select {
-	case b := <-t.src.ch:
-		return parseKey(b, t.src.next, t.src.unread), nil
+	case in := <-t.src.ch:
+		k := parseKey(in.b, t.src.next, t.src.unread)
+		k.Paste = in.paste && k.Kind == KeyEnter
+		return k, nil
 	case <-t.winch:
 		return Key{Kind: KeyResize}, nil
 	case err := <-t.src.err:
