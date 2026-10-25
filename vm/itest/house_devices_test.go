@@ -165,6 +165,96 @@ func houseDeviceTests(t *testing.T) {
 			return ""
 		})
 	})
+	// A USB adapter that is plugged in again comes back as a new device: the
+	// same name and address, but a new ifindex. pf dns pins its listeners
+	// to the index, so it must open the house listeners again. The cable
+	// pull above keeps the index. Thus this test unplugs the house NIC of the
+	// gw (a PCI unplug) and plugs the same device back: the same MAC, bridge
+	// and PCI slot, so the guest gives it the same name.
+	t.Run("house NIC replugged with a new index", func(t *testing.T) {
+		gwID := strings.TrimSpace(mustRead(t, "vm/cloudlab/.vagrant/machines/gw/libvirt/id"))
+		mac := strings.ToLower(e["GW_HOUSE_MAC"])
+		houseIF := strings.TrimSpace(pi(t, ". /etc/pi-fortress/house.env && echo $HOUSE_IF"))
+		// Not run(): the context of t is already cancelled when Cleanup runs.
+		virsh := func(args ...string) (string, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			out, err := exec.CommandContext(ctx, "virsh", append([]string{"-c", "qemu:///system"}, args...)...).CombinedOutput()
+			if err != nil {
+				return "", fmt.Errorf("virsh %s: %w\n%s", strings.Join(args, " "), err, out)
+			}
+			return string(out), nil
+		}
+		attached := func() bool {
+			out, err := virsh("domiflist", gwID)
+			return err == nil && strings.Contains(strings.ToLower(out), mac)
+		}
+		dom, err := virsh("dumpxml", gwID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		nic := houseNICXML(dom, mac)
+		if nic == "" {
+			t.Fatalf("no <interface> with MAC %s in the gw domain", mac)
+		}
+		file := filepath.Join(t.TempDir(), "house-nic.xml")
+		if err := os.WriteFile(file, []byte(nic), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		before := strings.TrimSpace(pi(t, "cat /sys/class/net/"+houseIF+"/ifindex"))
+
+		if _, err := virsh("detach-device", gwID, file, "--live"); err != nil {
+			t.Fatal(err)
+		}
+		// A NIC that stays out would break all later groups.
+		t.Cleanup(func() {
+			if attached() {
+				return
+			}
+			if _, err := virsh("attach-device", gwID, file, "--live"); err != nil {
+				t.Error(err)
+			}
+		})
+		eventuallyEvery(t, 30*time.Second, time.Second, func() string {
+			if attached() {
+				return "the gw did not release the house NIC (no PCI hot-unplug in the guest?)"
+			}
+			return ""
+		})
+		time.Sleep(3 * time.Second)
+		if _, err := virsh("attach-device", gwID, file, "--live"); err != nil {
+			t.Fatal(err)
+		}
+
+		var after string
+		eventuallyEvery(t, 90*time.Second, 2*time.Second, func() string {
+			name, _ := ssh(t, 10*time.Second, "pi", `for d in /sys/class/net/*; do [ "$(cat $d/address)" = "`+mac+`" ] && echo "${d##*/} $(cat $d/ifindex)"; done`)
+			f := strings.Fields(name)
+			if len(f) != 2 {
+				return "house NIC " + mac + " not back on the gw: " + name
+			}
+			if f[0] != houseIF {
+				return fmt.Sprintf("the gw named the replugged house NIC %s, not %s (PCI slot changed?)", f[0], houseIF)
+			}
+			if after = f[1]; after == before {
+				return "the house NIC kept ifindex " + before + "; the replug did not make a new device"
+			}
+			if out, _ := ssh(t, 10*time.Second, "pi", "ip -4 -o addr show dev "+houseIF); !contains(out, " "+gw+"/24") {
+				return "house address not back after the replug:\n" + out
+			}
+			for _, proto := range []string{"+notcp", "+tcp"} {
+				out, _ := ssh(t, 10*time.Second, "house", in("phone", "dig +short +time=2 +tries=1 "+proto+" "+allow))
+				if !regexp.MustCompile(`(?m)^\d+\.\d+\.\d+\.\d+$`).MatchString(out) {
+					return "phone DNS " + proto + " after the replug (pf dns still on the old index?): " + out
+				}
+			}
+			return ""
+		})
+		want := fmt.Sprintf("pf dns: house listener rebound to %s (index %s -> %s)", houseIF, before, after)
+		if out := pi(t, "sudo journalctl -u pi-fortress-dns-agent-go.service --since=-10min -o cat --no-pager"); !contains(out, want) {
+			t.Fatalf("no %q in the pf dns journal", want)
+		}
+	})
 	t.Run("observe names house devices", func(t *testing.T) {
 		if out := pi(t, "sudo pf observe once"); !contains(out, "house/") {
 			t.Fatalf("no house/<name> in pf observe once:\n%s", out)
@@ -179,6 +269,22 @@ func mustRead(t *testing.T, rel string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+// houseNICXML gives the <interface> element of the domain XML dom that has
+// MAC mac, for attach-device and detach-device. It keeps the PCI address, so
+// the guest names the NIC again as before. It removes the target and the
+// alias: libvirt makes them for each live device, and a vnet target or a
+// non-user alias in the XML of a new device can be refused.
+func houseNICXML(dom, mac string) string {
+	for _, nic := range regexp.MustCompile(`(?s)<interface .*?</interface>`).FindAllString(dom, -1) {
+		if !strings.Contains(strings.ToLower(nic), "'"+mac+"'") {
+			continue
+		}
+		nic = regexp.MustCompile(`\s*<target dev='[^']*'[^>]*/>`).ReplaceAllString(nic, "")
+		return regexp.MustCompile(`\s*<alias name='[^']*'/>`).ReplaceAllString(nic, "")
+	}
+	return ""
 }
 
 // houseQUICDrops reads the packet counter on the house udp/443 drop rule.
