@@ -213,7 +213,7 @@ func (b *Broker) serve(ctx context.Context, client net.Conn, br *bufio.Reader, p
 	}
 	if c.echo {
 		if !c.ws {
-			if done, err := b.echoBody(c); done {
+			if done, err := b.echoBody(c, stream); done {
 				return err
 			}
 			return b.echo(client, p, req, c.slots, c.harvestSlot)
@@ -718,12 +718,20 @@ func (b *Broker) refuseStreamPlaceholder(c *call, err error) error {
 // echoBody reads a streamed body that goes to an echo fixture. The
 // fixture has no origin, so no copy reads the body. The read goes
 // through the same guard as the copy to an origin. Thus a placeholder in
-// the body gets the same refusal as at a real host. done says that
-// echoBody answered the request.
-func (b *Broker) echoBody(c *call) (done bool, err error) {
+// the body gets the same refusal as at a real host. The scrub writes its
+// strip events while the read occurs. echoBody logs them on each exit, as
+// serve does after roundTrip. Thus the rows are the rows of a real host,
+// also for the strips before a placeholder. done says that echoBody
+// answered the request.
+func (b *Broker) echoBody(c *call, stream *fence.StreamStrips) (done bool, err error) {
 	if c.req.Body == nil {
 		return false, nil
 	}
+	defer func() {
+		for _, ev := range stream.Events() {
+			_ = b.logStrip(&c.strips, clientIP(c.p), c.host, ev.Where, ev.Rule)
+		}
+	}()
 	if _, err := io.Copy(io.Discard, c.req.Body); err != nil {
 		if errors.Is(err, fence.ErrPlaceholderInStream) {
 			return true, b.refuseStreamPlaceholder(c, err)
