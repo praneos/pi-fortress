@@ -134,11 +134,11 @@ func TestSSHFromIsAnInterfaceAllowList(t *testing.T) {
 			t.Errorf("SSH_FROM reachable from the tunnel, the uplink or the agents: %s", ln)
 		}
 	}
-	// There is no place for it to come from: no rule at all, not a deny-list.
+	// There is no place for it to come from: Load refuses it
+	// (TestSSHFromMustBeInsideTheHouseOrASegment).
 	segs = segDir(t, map[string]string{"desk.env": deskBase + "SSH_FROM=10.78.0.20\n"})
-	fwd = chain(t, load(t, Options{Net: lab, SegmentsDir: segs, HouseEnv: "/nonexistent/house.env"}).Ruleset(labElements), "forward")
-	if strings.Contains(fwd, "10.78.0.20") {
-		t.Fatalf("SSH_FROM rendered with no house and no other segment:\n%s", fwd)
+	if _, err := Load(Options{Net: lab, SegmentsDir: segs, HouseEnv: "/nonexistent/house.env"}); err == nil {
+		t.Fatal("SSH_FROM accepted with no house and no other segment")
 	}
 }
 

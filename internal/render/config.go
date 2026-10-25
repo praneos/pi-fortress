@@ -1261,6 +1261,39 @@ func (c *Config) checkSSHFrom(s Segment, file string) error {
 	return nil
 }
 
+// checkSSHFromReach refuses an SSH_FROM of segment i that no interface
+// can carry. The rule accepts it only on the house and on the other plain
+// segments (sshFromIFs). The source check of each of these drops a source
+// outside its own network (antiSpoof). Thus an address outside HOUSE_NET
+// and outside the NET of each other segment gives a rule that never
+// matches. checkSegments calls it, because all segments must be loaded.
+func (c *Config) checkSSHFromReach(i int) error {
+	s := c.Segments[i]
+	if s.SSHFrom == "" {
+		return nil
+	}
+	var nets []string
+	if c.HouseIF != "" && c.HouseNet != "" {
+		if netHas(c.HouseNet, s.SSHFrom) {
+			return nil
+		}
+		nets = append(nets, "HOUSE_NET "+c.HouseNet)
+	}
+	for j, t := range c.Segments {
+		if j == i || t.IF == "" || t.Net == "" {
+			continue
+		}
+		if netHas(t.Net, s.SSHFrom) {
+			return nil
+		}
+		nets = append(nets, "NET "+t.Net+" of segment "+t.Name)
+	}
+	if len(nets) == 0 {
+		return fmt.Errorf("segment %s: SSH_FROM=%s can never arrive: there is no house and no other segment, and only these can carry SSH_FROM. Remove SSH_FROM", s.Name, s.SSHFrom)
+	}
+	return fmt.Errorf("segment %s: SSH_FROM=%s is in no network that can carry it; it must be inside %s. The source check of each interface drops each other source, so the rule could never match", s.Name, s.SSHFrom, strings.Join(nets, " or "))
+}
+
 // reservedSegNames are the names, as nftName writes them, that a plain
 // segment cannot take. Each is already the prefix of a set, meter, log
 // prefix or dns-<name>.jsonl that the agent network, the house, the
@@ -1674,6 +1707,9 @@ func (c *Config) checkSegments() error {
 			return fmt.Errorf("segment %s: NET=%s overlaps HOUSE_NET=%s", s.Name, s.Net, c.HouseNet)
 		}
 		if err := c.checkSSHTo("segment "+s.Name, "SSH_TO", s.SSHTo); err != nil {
+			return err
+		}
+		if err := c.checkSSHFromReach(i); err != nil {
 			return err
 		}
 		for _, t := range c.Segments[:i] {
