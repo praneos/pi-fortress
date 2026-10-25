@@ -393,6 +393,23 @@ server, a client cannot name an unlisted host to reach a listed one. On a
 shared CDN edge that permits fronting, the `Host` check is the remaining
 line.
 
+**A blocked name resolves to `0.0.0.0`.** The resolver answers a listed
+name with `NOERROR` and one A record, `0.0.0.0`, with a TTL of 0. It does
+not answer `NXDOMAIN`. Each other record type of that name gets an empty
+`NOERROR` answer. A name outside the allowlist in paranoid mode gets the
+same answers. The DNS log marks each of these rows `blocked`. Reasons:
+
+- This is the dnsmasq sinkhole form. The compiled lists use it, and a
+  fixture that points a name to a real address uses the same path.
+- The answer is final. A stub resolver does not try its search domains or
+  a second resolver after it, as it can do after `NXDOMAIN`.
+
+Thus a client gets a failed connection, not a failed lookup. For example,
+`curl` reports "Connection refused" and not "Could not resolve host". An
+agent that retries on a connection failure also retries a blocked name. On
+Linux, a client that dials `0.0.0.0` connects to its own host. Thus a
+service that listens on the agent itself can get that connection.
+
 **The key-shape check of `pf dns` also applies to the SNI.** The broker dials
 the origin with the SNI of the agent, and the origin can log it. A name that
 the agent resolves has passed `pf dns`. But the agent can open TLS to that
