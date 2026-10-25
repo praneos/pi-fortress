@@ -225,3 +225,66 @@ func TestListenerCapsOneSourceNotOthers(t *testing.T) {
 		c.Close()
 	}
 }
+
+// The pool holds the share of each address of a /24 at once. Thus when
+// every other address of a /24 agent segment holds 8 idle connections,
+// one more address still gets a connection accepted. The test binds
+// 127.0.x.y source addresses; it skips where that is not possible.
+func TestListenerLeavesRoomWhenASegmentHoldsEveryAddress(t *testing.T) {
+	base, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := limitConns(base, maxConns, maxConnsPerSource)
+	t.Cleanup(func() { ln.Close() })
+	addr := ln.Addr().String()
+
+	accepted := make(chan string, 4096)
+	go func() {
+		var held []net.Conn
+		defer func() {
+			for _, c := range held {
+				c.Close()
+			}
+		}()
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			held = append(held, c)
+			host, _, _ := net.SplitHostPort(c.RemoteAddr().String())
+			accepted <- host
+		}
+	}()
+
+	dial := func(src string) net.Conn {
+		d := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP(src)}, Timeout: time.Second}
+		c, err := d.Dial("tcp", addr)
+		if err != nil {
+			t.Skipf("cannot dial from %s: %v", src, err)
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	for a := 1; a <= 253; a++ {
+		src := net.IPv4(127, 0, 2, byte(a)).String()
+		for i := 0; i < 8; i++ {
+			dial(src)
+		}
+	}
+
+	const other = "127.0.3.1"
+	dial(other)
+	deadline := time.After(3 * time.Second)
+	for {
+		select {
+		case host := <-accepted:
+			if host == other {
+				return
+			}
+		case <-deadline:
+			t.Fatalf("253 addresses hold the pool (%d total, %d per address); %s was not accepted in 3s", maxConns, maxConnsPerSource, other)
+		}
+	}
+}
