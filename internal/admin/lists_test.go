@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -131,5 +132,32 @@ func TestListEditPreservesComments(t *testing.T) {
 				t.Fatalf("got %q, want %q", raw, tc.want)
 			}
 		})
+	}
+}
+
+// allow.domains is the forward set of the agent under PARANOID=1. A name
+// there also allows all names below it. Thus a leading dot is not a narrower
+// entry, and the seat refuses it and does not write the bare name. The
+// other domain lists read ".name" as "name".
+func TestAllowDomainsRefusesLeadingDot(t *testing.T) {
+	if got, err := ValidateToken("allow.domains", ".example.com"); !errors.Is(err, errToken) || !strings.Contains(err.Error(), "leading dot") {
+		t.Fatalf("ValidateToken(allow.domains, .example.com) = %q, %v; want a refusal that names the dot", got, err)
+	}
+	if got, err := ValidateToken("allow.domains", "*.example.com"); err != nil || got != "example.com" {
+		t.Fatalf("ValidateToken(allow.domains, *.example.com) = %q, %v", got, err)
+	}
+	for _, list := range []string{"blacklist.domains", "never_block.domains", "house.domains"} {
+		if got, err := ValidateToken(list, ".ads.example"); err != nil || got != "ads.example" {
+			t.Errorf("ValidateToken(%s, .ads.example) = %q, %v", list, got, err)
+		}
+	}
+	c := &Config{PolicyDir: t.TempDir()}
+	path := filepath.Join(c.PolicyDir, "allow.domains")
+	write(t, path, allowMenu)
+	if err := c.ListAdd("allow.domains", ".example.org"); !errors.Is(err, errToken) {
+		t.Fatalf("ListAdd = %v, want errToken", err)
+	}
+	if raw, _ := os.ReadFile(path); string(raw) != allowMenu {
+		t.Fatalf("file changed: %q", raw)
 	}
 }

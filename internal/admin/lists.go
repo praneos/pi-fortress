@@ -21,6 +21,10 @@ var (
 	HouseLists = listNames(policycompile.SegmentFor(policycompile.AllowByDefault))
 	errList    = errors.New("unknown list")
 	errToken   = errors.New("invalid token")
+	// forwardAllowList is the forward set of the agent under PARANOID=1.
+	// corepolicy.LoadDomains reads each name in it as the name and all names
+	// below it.
+	forwardAllowList = policycompile.SegmentFor(policycompile.DenyByDefault).File("allow.domains")
 )
 
 // kindDNSTypes is the token kind of dns_types.allow: a full "name TYPE..."
@@ -89,6 +93,12 @@ func ValidateToken(list, value string) (string, error) {
 	case "ips":
 		got, ok = policycompile.ParseIPv4(value)
 	default:
+		// ParseDomain reads ".name" as "name". In the forward set, "name" also
+		// allows all names below it. Thus the seat does not change a dotted
+		// entry into a wider one. The operator writes the bare name.
+		if list == forwardAllowList && strings.HasPrefix(strings.TrimSpace(value), ".") {
+			return "", fmt.Errorf("%w: %s takes no leading dot; a name here also allows all names below it", errToken, list)
+		}
 		got, ok = policycompile.ParseDomain(value)
 	}
 	if !ok {
