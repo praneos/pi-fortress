@@ -232,7 +232,7 @@ func TestFilteringShowsTheNetworksFeeds(t *testing.T) {
 	for range admin.HouseLists {
 		f.Press(KeyTab)
 	}
-	last := run(t, c, f.Type("e")).Last()
+	last := run(t, c, f.Type("e").Type("y")).Last()
 	if !isPicked(f, "Feeds") || !strings.Contains(last, "f1") {
 		t.Fatalf("no feeds tab:\n%s", last)
 	}

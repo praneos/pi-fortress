@@ -204,7 +204,7 @@ func TestDevicesCursorFollowsTheDeviceItActedOn(t *testing.T) {
 
 func TestFeedsSecretsSettings(t *testing.T) {
 	c, _ := testConfig(t)
-	run(t, c, NewFake(80, 24).Type(keys(netSystem, secFeeds)+"e"))
+	run(t, c, NewFake(80, 24).Type(keys(netSystem, secFeeds)+"e").Type("y"))
 	if got, _ := os.ReadFile(filepath.Join(c.PolicyDir, "sources.json")); !strings.Contains(string(got), `"enabled": false`) {
 		t.Fatalf("%s", got)
 	}

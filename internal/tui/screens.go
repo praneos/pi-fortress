@@ -745,13 +745,24 @@ func (a *App) screenKey(k Key) {
 }
 
 // feedKey is e on a feed, from System or from the Filtering of a network.
+// A feed that is off stops its blocklist for all networks, and no row on
+// this screen shows that cost. Thus disable asks first and names the feed.
+// Enable adds protection and does not ask.
 func (a *App) feedKey(k Key, i int) {
-	if k.Rune == 'e' && i >= 0 && i < len(a.feeds) {
-		f := a.feeds[i]
+	if k.Rune != 'e' || i < 0 || i >= len(a.feeds) {
+		return
+	}
+	f := a.feeds[i]
+	toggle := func() {
 		if a.do("feed.enable", admin.Args{Name: f.id, Value: fmt.Sprint(!f.on)}, f.id+" toggled") {
 			a.saved(applyFull)
 		}
 	}
+	if !f.on {
+		toggle()
+		return
+	}
+	a.confirm("disable feed "+f.id+" for the whole box", toggle)
 }
 
 func (a *App) secretsKey(k Key, i int) {

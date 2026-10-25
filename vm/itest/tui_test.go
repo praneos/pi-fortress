@@ -1078,7 +1078,8 @@ func tuiFeedTests(t *testing.T) {
 	path := tuiPolicyDir(t) + "/sources.json"
 	defer tuiKeepFile(t, path, true)()
 	open := box.open(t, "system", "Feeds")
-	keys := tuiKeys(open, "e", kCtrlR, "e", kCtrlR, "q", "q")
+	// The first feed ships on. Disable asks first; enable does not.
+	keys := tuiKeys(open, "e", "y", kCtrlR, "e", kCtrlR, "q", "q")
 	s := tuiDrive(t, tuiRun{keys: keys})
 	s.steady(t, keys)
 	// The cursor is on the first feed row, and the enabled column is its
@@ -1094,7 +1095,11 @@ func tuiFeedTests(t *testing.T) {
 		return fields[len(fields)-1]
 	}
 	n := len(open)
-	first, off, offAfterR, back, backAfterR := on(n), on(n+1), on(n+2), on(n+3), on(n+4)
+	first, asked, off, offAfterR, back, backAfterR := on(n), on(n+1), on(n+2), on(n+3), on(n+4), on(n+5)
+	s.frame(t, n+1).must(t, "e asks first", "disable feed ")
+	if asked != first {
+		t.Fatalf("e changed the feed before y: %q became %q", first, asked)
+	}
 	if off == first {
 		t.Fatalf("e left the first feed at %q", first)
 	}
