@@ -93,3 +93,47 @@ func TestOverviewSaysWhenItChecked(t *testing.T) {
 		t.Fatalf("no check time beside the cpu: %q", pi)
 	}
 }
+
+// Only a threat from the last 24 hours is a problem on the verdict. An
+// older one still counts in the notes of its network, as long as Activity
+// shows it. If not, one alert holds the verdict at "Needs attention" for
+// seven days, and the operator learns to read past it.
+func TestOverviewNeedsAttentionOnlyForTheLastDay(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		agent time.Duration // age of the agent alert, 0 for none
+		house time.Duration
+		good  bool
+	}{
+		{"recent and old", 2 * time.Hour, 3 * 24 * time.Hour, false},
+		{"old only", 0, 3 * 24 * time.Hour, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := testConfig(t)
+			writeReport(t, c, "OK f1: 9 domains\n", time.Hour)
+			statsFixture(t, c)
+			var evs []string
+			if tc.agent > 0 {
+				evs = append(evs, fmt.Sprintf(`{"t":%q,"segment":"agent","src":"10.77.0.10","dst":"x.example","threat":"dns_tunnel"}`, c.Now().Add(-tc.agent).UTC().Format(time.RFC3339)))
+			}
+			evs = append(evs, fmt.Sprintf(`{"t":%q,"segment":"house","src":"10.78.0.2","dst":"02:00:00:de:ad:99","threat":"arp_flip"}`, c.Now().Add(-tc.house).UTC().Format(time.RFC3339)))
+			body := `{"clients":{},"events":[` + strings.Join(evs, ",\n") + `]}`
+			if err := os.WriteFile(c.ObservePath, []byte(body), 0644); err != nil {
+				t.Fatal(err)
+			}
+			last := run(t, c, NewFake(120, 30)).Last()
+			if got := strings.Contains(last, "All good"); got != tc.good {
+				t.Fatalf("All good = %v, want %v:\n%s", got, tc.good, last)
+			}
+			if strings.Contains(last, "seen and not stopped on Home network") {
+				t.Fatalf("a threat three days old is a problem:\n%s", last)
+			}
+			if house := lineWith(last, "Home network     "); !strings.Contains(house, "^ 1 not stopped") {
+				t.Fatalf("the home network's notes do not count the old threat: %q", house)
+			}
+			if tc.agent > 0 && !strings.Contains(last, "^ 1 threat seen and not stopped on Agent network") {
+				t.Fatalf("a threat two hours old is not a problem:\n%s", last)
+			}
+		})
+	}
+}

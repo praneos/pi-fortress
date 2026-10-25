@@ -12,6 +12,10 @@ import (
 
 const overviewFmt = "%-16s %7s %14s  %s"
 
+// alertRecent is the age up to which a threat that was seen and not stopped
+// is a problem on the Overview verdict.
+const alertRecent = 24 * time.Hour
+
 // buildOverview answers the first question of an operator who opens the
 // seat (is all correct?) before any detail: a verdict, then a line for each
 // network, then the Pi. The operator must act on each problem that this
@@ -56,19 +60,26 @@ func (a *App) buildOverview() []row {
 	}
 
 	// A threat that the Pi saw and did not stop is the most important fact
-	// on the box. Before, only Activity showed it. The count is the events
-	// that Activity shows: the newest rows of the observe ring, at most
-	// seven days. They are marked with seenMark, not with "!", because they
-	// are events, not a standing fault.
-	alerts := map[string]int{}
+	// on the box. Before, only Activity showed it. The notes of each network
+	// count the events that Activity shows: the newest rows of the observe
+	// ring, at most seven days. Only the events of the last 24 hours are a
+	// problem on the verdict. If not, one event holds "Needs attention" for
+	// seven days, and the operator learns to read past it. They are marked
+	// with seenMark, not with "!", because they are events, not a standing
+	// fault.
+	alerts, recent := map[string]int{}, map[string]int{}
+	since := a.now().Add(-alertRecent)
 	for _, e := range a.stats.Events {
 		if e.Alert {
 			alerts[e.Segment]++
+			if e.T.After(since) {
+				recent[e.Segment]++
+			}
 		}
 	}
 	var seen []string
 	for _, e := range a.netList() {
-		if n := alerts[e.id]; n > 0 {
+		if n := recent[e.id]; n > 0 {
 			seen = append(seen, fmt.Sprintf("%d %s seen and not stopped on %s (Activity)", n, plural(n, "threat"), e.label))
 		}
 	}
