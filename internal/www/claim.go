@@ -22,9 +22,23 @@ import (
 const (
 	ClaimTTL      = 5 * time.Minute
 	claimAlphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-	claimLen      = 6
-	sweepAfter    = time.Hour
-	limitPerMin   = 10
+	// claimLen is 8 symbols of 32, thus 40 bits. The operator reads the code
+	// from a screen and types it on a different box, so the code stays short.
+	claimLen    = 8
+	sweepAfter  = time.Hour
+	limitPerMin = 10
+	// segmentPerMin is the cap on the claim tries of all sources together.
+	// limitPerMin is per source. The anti-spoof rule admits each address of
+	// AGENT_NET, so a root agent can add an alias for each free address of a
+	// /24. With only the per-source cap, that is approximately 250 x 10
+	// tries a minute. One enrolment is one try: the operator pastes one
+	// command on one agent. 30 a minute is one enrolment each 2 seconds. No
+	// operator does that by hand, and it leaves space for typing errors and
+	// retries. 30 a minute for the 5 minutes of ClaimTTL is 150 tries
+	// against 2^40 codes for each live claim. The cost: an agent that keeps
+	// the cap full stops all claims on the segment while it continues. The
+	// operator sees a 429, not a spent code.
+	segmentPerMin = 30
 	setupWindow   = time.Minute
 	seenMax       = 4096
 	// hitsMax bounds the table of the claim limiter, as seenMax bounds the
@@ -577,6 +591,32 @@ func (l *limiter) allow(ip string) bool {
 		l.sweep(now)
 	}
 	l.hits[ip] = append(keep, now)
+	return true
+}
+
+// window counts the claim tries of all sources in the last minute. It keeps
+// one time for each try that it accepts. So it never holds more than
+// segmentPerMin times, and a flood cannot grow it.
+type window struct {
+	mu sync.Mutex
+	at []time.Time
+}
+
+func (w *window) allow() bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	now := time.Now()
+	keep := w.at[:0]
+	for _, t := range w.at {
+		if now.Sub(t) < time.Minute {
+			keep = append(keep, t)
+		}
+	}
+	w.at = keep
+	if len(keep) >= segmentPerMin {
+		return false
+	}
+	w.at = append(keep, now)
 	return true
 }
 

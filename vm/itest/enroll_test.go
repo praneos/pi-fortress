@@ -172,14 +172,14 @@ func enrollTests(t *testing.T) {
 		}
 	})
 
-	t.Run("a claim code is six characters of the unambiguous alphabet", func(t *testing.T) {
+	t.Run("a claim code is eight characters of the unambiguous alphabet", func(t *testing.T) {
 		code, _, _ := issueClaim(t, slot, &codes)
-		// The faq promises six. The test also asserts the alphabet, because
+		// The faq promises eight. The test also asserts the alphabet, because
 		// the promise is a code that an operator reads from a screen and
 		// types on a different box. An O or a 1 in it causes a support call.
 		const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
-		if len(code) != 6 {
-			t.Fatalf("claim code %q is %d characters, want 6", code, len(code))
+		if len(code) != 8 {
+			t.Fatalf("claim code %q is %d characters, want 8", code, len(code))
 		}
 		if strings.ContainsFunc(code, func(r rune) bool { return !strings.ContainsRune(alphabet, r) }) {
 			t.Fatalf("claim code %q has a character outside %s", code, alphabet)

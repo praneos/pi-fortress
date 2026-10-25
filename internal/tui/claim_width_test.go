@@ -36,7 +36,7 @@ func TestClaimOverlayUnclippedAt80Columns(t *testing.T) {
 	if !regexp.MustCompile(`^  h=[0-9a-f]{64}$`).MatchString(find("h=")) {
 		t.Fatalf("hash line clipped: %q\n%s", find("h="), last)
 	}
-	if !regexp.MustCompile(`^  f=\$\(mktemp\) && curl -fsSo "\$f" http://255\.255\.255\.255/claim/[A-Z0-9]{6} &&$`).MatchString(find("/claim/")) {
+	if !regexp.MustCompile(`^  f=\$\(mktemp\) && curl -fsSo "\$f" http://255\.255\.255\.255/claim/[A-HJ-NP-Z2-9]{8} &&$`).MatchString(find("/claim/")) {
 		t.Fatalf("fetch line clipped: %q\n%s", find("/claim/"), last)
 	}
 	if got := find("sha256sum -c"); got != `  echo "$h  $f" | sha256sum -c && sh "$f"` {

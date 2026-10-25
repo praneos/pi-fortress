@@ -254,7 +254,7 @@ The Devices and Activity sections of the TUI show this data for each device:
 **What is a claim code?**
 A one-time code that puts a placeholder on the agent. You do not copy a file.
 
-It is a six-character code that the TUI issues for one slot. It is valid for five minutes. You can use it only one time.
+It is an eight-character code that the TUI issues for one slot. It is valid for five minutes. You can use it only one time.
 
 The agent redeems the code with the three lines that the TUI shows. These lines fetch `http://10.77.0.1/claim/<CODE>`. They run the fetched file only if its sha256 matches the sha256 that the gateway calculated. The script then checks `setup.sh` and the CA in the same way.
 

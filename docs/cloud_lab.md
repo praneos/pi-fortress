@@ -229,7 +229,7 @@ PF_E2E_REBOOT=1 vm/cloudlab/lab.sh test -v -run 'TestLab/ops'
 | `secrets` | agent, gateway | The fence substitutes a placeholder on the `pf-core-echo.test` core host, and refuses or strips it on other hosts. OAuth refresh capture, WebSocket frame scrub, hourly budget. Lab only. |
 | `setup` | agent, gateway | The gateway serves `setup.sh` and `ca.pem` on port 80. `setup.sh` enrols the agent. It refuses a CA with no sha256. Lab only. |
 | `agent-vm` | agent | The agent has no checkout and no Guest Additions. Its clock follows the gateway. It has only the sudo that it was provisioned with. |
-| `enroll` | agent, gateway | The documented setup lines. `pf enroll mint`, the claim code (six characters, five minutes, one use), and substitution until the slot is deleted. Lab only. |
+| `enroll` | agent, gateway | The documented setup lines. `pf enroll mint`, the claim code (eight characters, five minutes, one use), and substitution until the slot is deleted. Lab only. |
 | `dns-segments` | gateway, agent | The Go resolver serves each segment from `dns.json`, writes log rows and fills `resolved_v4`. |
 | `house` | house | DHCP lease, DNS, blocklists, SSH only from the admin device |
 | `house-devices` | house (`phone`, `iot`) | Pool lease and DNS option. No SSH from the pool. The setup page and the desk are unreachable. The gateway drops QUIC. No IPv6 route. The gateway refuses a hardcoded resolver in less than 2s. The test disconnects the house cable for 30s and then connects it again. |

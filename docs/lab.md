@@ -157,7 +157,7 @@ To enrol the agent with a claim code:
 3. Select the slot.
 4. Push `c`.
 
-The screen shows a six-character code. The code is valid for five minutes and works one time. The screen also shows three lines to paste in the agent VM. The hash is the hash of the claim script. The Pi calculates it:
+The screen shows an eight-character code. The code is valid for five minutes and works one time. The screen also shows three lines to paste in the agent VM. The hash is the hash of the claim script. The Pi calculates it:
 
 ```
 h=<sha256>

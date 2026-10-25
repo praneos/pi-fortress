@@ -513,7 +513,7 @@ func TestClaimsQuarantineAndLedger(t *testing.T) {
 	cl := v.(Claim)
 	// -f, not bare -s: without -f, the code saves a 404 body and checks it. The
 	// code checks the script against its hash before sh sees it.
-	if len(cl.Code) != 6 || !strings.Contains(cl.Command, `curl -fsSo "$f" http://10.77.0.1/claim/`+cl.Code+" && ") ||
+	if len(cl.Code) != 8 || !strings.Contains(cl.Command, `curl -fsSo "$f" http://10.77.0.1/claim/`+cl.Code+" && ") ||
 		!strings.Contains(cl.Command, `sha256sum -c && sh "$f"`) || strings.HasSuffix(cl.Command, "| sh") ||
 		len(cl.CommandLines) != 3 || time.Until(cl.Expires) > www.ClaimTTL {
 		t.Fatalf("%+v", cl)

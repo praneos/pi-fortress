@@ -1444,7 +1444,10 @@ the slot has `GITHUB_TOKEN`. www:
 - Refuses expired claims, and a claim file that root does not own.
 - Never serves a listing of either directory.
 - Answers wrong, used, and expired codes with the same 404.
-- Allows ten attempts for each source address each minute.
+- Allows ten attempts for each source address each minute, and 30
+  attempts each minute for all sources on the agent segment together. An
+  attempt that the per-source limit refuses does not count against the
+  segment.
 
 Root sweeps: each claim issue and each `pf apply` (`pf www -init-ledger`)
 remove the claims with an mtime more than one hour old, and then the

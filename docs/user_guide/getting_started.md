@@ -153,7 +153,7 @@ A slot expires after 90 days, unless you give `--expires 30d`, an RFC 3339 time 
 3. Select the slot.
 4. Press `c`.
 
-You get a code of six characters. The code is valid for five minutes, and you can use it one time only. You also get three lines. Paste all three lines on the agent:
+You get a code of eight characters. The code is valid for five minutes, and you can use it one time only. You also get three lines. Paste all three lines on the agent:
 ```
 h=<the claim script's sha256, computed by the gateway>
 f=$(mktemp) && curl -fsSo "$f" http://10.77.0.1/claim/<CODE> &&
