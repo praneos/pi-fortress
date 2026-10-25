@@ -157,10 +157,16 @@ func hostEntry(tok string) (string, bool) {
 
 // hostProblem says why the host column tok, read as host by hostEntry,
 // can never get a credential, or it gives "". Load and LoadForward skip
-// such a line.
+// such a line. The fence refuses a Host that is not a name (validName).
+// Thus a host with one label or with "_" never gets a credential.
 func hostProblem(tok, host string) string {
-	if !IsASCII(host) {
+	switch {
+	case !IsASCII(host):
 		return ASCIIHint(tok)
+	case !strings.Contains(host, "."):
+		return "a host with one label is not a name that the fence accepts"
+	case strings.Contains(host, "_"):
+		return `a host with "_" is not a name that the fence accepts`
 	}
 	return ""
 }

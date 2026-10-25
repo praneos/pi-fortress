@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -85,5 +86,46 @@ func TestLeadingDotIsTheExactHost(t *testing.T) {
 	f := testForward(t, "", ".api.anthropic.com CLAUDE_OAT\n")
 	if !f.Allowed("api.anthropic.com", false) || f.Allowed("x.api.anthropic.com", false) {
 		t.Fatal("forward set reads the dotted line in a different way")
+	}
+}
+
+// A host with one label, or with "_", can never get a credential: the
+// fence reads such a Host as not a name. The load skips the line with a
+// warning. It does not stop the load. The forward set skips it too.
+func TestOneLabelOrUnderscoreHostIsRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "core.hosts.local")
+	body := "localhost CLAUDE_OAT\n_x.example.com GITHUB_TOKEN\n*.a_b.example GITHUB_TOKEN\npf-core-echo.test *\napi.anthropic.com CLAUDE_OAT\n"
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, h := range []string{"localhost", "_x.example.com", "a_b.example"} {
+		if _, ok := p.Hosts[h]; ok {
+			t.Errorf("%s is a host", h)
+		}
+	}
+	if !p.HostAllowed("api.anthropic.com") || !KindAllowed("GITHUB_TOKEN", p.KindsFor("pf-core-echo.test")) {
+		t.Fatal("a good line is lost")
+	}
+	want := [][]string{
+		{`core.hosts.local line 1: "localhost"`, "one label"},
+		{`core.hosts.local line 2: "_x.example.com"`, `"_"`},
+		{`core.hosts.local line 3: "*.a_b.example"`, `"_"`},
+	}
+	if len(p.Warnings) != len(want) {
+		t.Fatalf("warnings %q, want %d", p.Warnings, len(want))
+	}
+	for i, w := range want {
+		for _, s := range w {
+			if !strings.Contains(p.Warnings[i], s) {
+				t.Errorf("warning %d %q lacks %q", i, p.Warnings[i], s)
+			}
+		}
+	}
+	if f := testForward(t, "", "localhost CLAUDE_OAT\n_x.example.com GITHUB_TOKEN\n"); f.Allowed("localhost", false) || f.Allowed("_x.example.com", false) {
+		t.Fatal("the forward set keeps a refused line")
 	}
 }

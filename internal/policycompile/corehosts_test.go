@@ -30,3 +30,20 @@ func TestCompileRefusesADeniedCredentialHeader(t *testing.T) {
 		t.Fatalf("denied header accepted: %v", err)
 	}
 }
+
+// A core.hosts line whose host can never get a credential is a warning in
+// the compile, not an error. The line did nothing before, so a Pi that
+// worked must still apply.
+func TestCompileWarnsOnAOneLabelCoreHost(t *testing.T) {
+	dir, out := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "core.hosts.local"), []byte("# seed\nlocalhost CLAUDE_OAT\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	sum, err := Compile(dir, Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sum.Warnings) != 1 || !strings.Contains(sum.Warnings[0], `core.hosts.local line 2: "localhost"`) {
+		t.Fatalf("warnings %q", sum.Warnings)
+	}
+}
