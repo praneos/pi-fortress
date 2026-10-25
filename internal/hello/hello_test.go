@@ -275,3 +275,60 @@ func TestExtensionBlockExact(t *testing.T) {
 		t.Fatalf("h=%+v err=%v", h, err)
 	}
 }
+
+// sniEntry is one entry of a ServerNameList: the name type and the name.
+type sniEntry struct {
+	typ  byte
+	name string
+}
+
+// sniListExt is a server_name extension with the entries given, in order.
+// extra bytes go after the last entry, inside the list.
+func sniListExt(extra []byte, entries ...sniEntry) []byte {
+	var list []byte
+	for _, e := range entries {
+		list = append(list, e.typ)
+		list = append(list, u16(len(e.name))...)
+		list = append(list, e.name...)
+	}
+	list = append(list, extra...)
+	return ext(0, append(u16(len(list)), list...))
+}
+
+// A ServerNameList must not hold more than one name of the same type
+// (RFC 6066 3). Parse refuses a list with two entries of one type, and
+// does not select one of them.
+func TestServerNameList(t *testing.T) {
+	for _, tc := range []struct {
+		desc    string
+		extra   []byte
+		entries []sniEntry
+		want    string
+		err     error
+	}{
+		{desc: "one host_name", entries: []sniEntry{{0, "example.com"}}, want: "example.com"},
+		{desc: "host_name in upper case", entries: []sniEntry{{0, "Example.COM"}}, want: "example.com"},
+		{desc: "no entry"},
+		{desc: "other type then host_name", entries: []sniEntry{{7, "x"}, {0, "example.com"}}, want: "example.com"},
+		{desc: "invalid host_name", entries: []sniEntry{{0, "a b"}}},
+		{desc: "entry cut short after host_name", extra: []byte{7, 0, 9, 'x'}, entries: []sniEntry{{0, "example.com"}}},
+		{desc: "two host_names", entries: []sniEntry{{0, "a.example"}, {0, "b.example"}}, err: ErrMalformed},
+		{desc: "same host_name two times", entries: []sniEntry{{0, "a.example"}, {0, "a.example"}}, err: ErrMalformed},
+		{desc: "invalid then valid host_name", entries: []sniEntry{{0, "a b"}, {0, "b.example"}}, err: ErrMalformed},
+		{desc: "two of other type", entries: []sniEntry{{0, "a.example"}, {7, "x"}, {7, "y"}}, err: ErrMalformed},
+	} {
+		t.Run(tc.desc, func(t *testing.T) {
+			e := sniListExt(tc.extra, tc.entries...)
+			h, err := Parse(helloWithExts(e, len(e)))
+			if tc.err != nil {
+				if err != tc.err || h != nil {
+					t.Fatalf("h=%+v err=%v, want %v", h, err, tc.err)
+				}
+				return
+			}
+			if err != nil || h.SNI != tc.want {
+				t.Fatalf("h=%+v err=%v, want SNI %q", h, err, tc.want)
+			}
+		})
+	}
+}

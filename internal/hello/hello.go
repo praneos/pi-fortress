@@ -151,7 +151,11 @@ func parseBody(raw []byte) (*Hello, error) {
 			off += n
 			switch typ {
 			case 0:
-				sni = parseSNI(body)
+				name, err := parseSNI(body)
+				if err != nil {
+					return nil, err
+				}
+				sni = name
 			case 16:
 				alpnPresent = true
 				alpns = parseALPN(body)
@@ -177,9 +181,14 @@ func h2Only(present bool, alpns []string) bool {
 	return true
 }
 
-func parseSNI(body []byte) string {
+// parseSNI reads the full ServerNameList of a server_name extension
+// (RFC 6066 §3) and gives its host_name. The list must not hold more than
+// one name of the same type. A list with two entries of one type is
+// ErrMalformed, so no name in it is used. A list that is cut short, or a
+// host_name that is not a valid name, gives an empty SNI.
+func parseSNI(body []byte) (string, error) {
 	if len(body) < 2 {
-		return ""
+		return "", nil
 	}
 	n := int(binary.BigEndian.Uint16(body[0:2]))
 	off := 2
@@ -187,23 +196,27 @@ func parseSNI(body []byte) string {
 	if end > len(body) {
 		end = len(body)
 	}
+	var seen [256]bool
+	host := ""
 	for off+3 <= end {
 		nameType := body[off]
 		ln := int(binary.BigEndian.Uint16(body[off+1 : off+3]))
 		off += 3
 		if off+ln > end {
-			return ""
+			return "", nil
 		}
+		if seen[nameType] {
+			return "", ErrMalformed
+		}
+		seen[nameType] = true
 		if nameType == 0 {
-			name := strings.ToLower(string(body[off : off+ln]))
-			if !ValidHostName(name) {
-				return ""
+			if name := strings.ToLower(string(body[off : off+ln])); ValidHostName(name) {
+				host = name
 			}
-			return name
 		}
 		off += ln
 	}
-	return ""
+	return host, nil
 }
 
 func parseALPN(body []byte) []string {
