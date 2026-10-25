@@ -498,3 +498,51 @@ func TestHandKeptListsWarnOnSkippedLines(t *testing.T) {
 		t.Fatalf("clean lists: warnings %q err %v", sum.Warnings, err)
 	}
 }
+
+// never_block.domains and core.hosts shield a name and each name below it.
+// Thus a line of the operator in blacklist.domains can compile to nothing.
+// The compiler then gives a warning that names the entry and the two files.
+// A feed entry that a shield removes gets no warning: the shield is there
+// for the feeds.
+func TestShieldedBlacklistLineWarns(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "generated"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"never_block.domains":         "example.com\n",
+		"core.hosts":                  "api.anthropic.com CLAUDE_OAT\n",
+		"blacklist.domains":           "www.example.com\nanthropic.com\nevil.example\nwww.example.com\n",
+		"generated/blacklist.domains": "cdn.example.com\napi.anthropic.com\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := t.TempDir()
+	sum, err := Compile(dir, Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dns, _ := os.ReadFile(filepath.Join(out, "d.conf"))
+	if string(dns) != dnsLines([]string{"evil.example"}) || sum.Domains != 1 {
+		t.Fatalf("d.conf=%q summary=%+v", dns, sum)
+	}
+	want := [][]string{
+		{`blacklist.domains: "www.example.com"`, "never_block.domains"},
+		{`blacklist.domains: "anthropic.com"`, "core.hosts"},
+	}
+	if len(sum.Warnings) != len(want) {
+		t.Fatalf("warnings %q, want %d", sum.Warnings, len(want))
+	}
+	for i, w := range want {
+		for _, s := range w {
+			if !strings.Contains(sum.Warnings[i], s) {
+				t.Errorf("warning %d %q lacks %q", i, sum.Warnings[i], s)
+			}
+		}
+	}
+	if line := sum.Line(); strings.Contains(line, "cdn.example.com") || !strings.Contains(line, "\ncompile: warning: blacklist.domains:") {
+		t.Fatalf("Line:\n%s", line)
+	}
+}

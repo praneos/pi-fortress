@@ -151,7 +151,8 @@ type Summary struct {
 	// Warnings are lines that the operator wrote into a hand-kept address list
 	// (ssh_allow.ips, direct_ip.allow, the direct_ip.allow of the house). Each
 	// line was not an address that the list accepts, and the compiler skipped
-	// it. Line prints each one after the counts.
+	// it. They are also the lines of blacklist.domains that a shield removed
+	// (shieldWarnings). Line prints each one after the counts.
 	Warnings []string
 	// SharedParents are the feed entries that did not compile because each
 	// is at a shared parent (AtSharedParent), in order. Line prints them.
@@ -379,6 +380,34 @@ func SharedParents(names []string) map[string]struct{} {
 func AtSharedParent(entry string, shared map[string]struct{}) bool {
 	_, ok := shared[entry]
 	return ok
+}
+
+// shieldWarnings gives one warning for each line of the operator's block
+// list (local) that never_block.domains or core.hosts removes. The shield
+// is a suffix match (IsNeverDomain). Thus a line for www.example.com goes
+// when never_block has example.com. The operator wrote that line to block
+// the name, so the compiler tells why it did not. A feed entry that a
+// shield removes gets no warning: the shield is there for the feeds.
+func shieldWarnings(seg SegmentPolicy, local []string, never map[string]struct{}, core *corepolicy.Policy) []string {
+	var warn []string
+	seen := map[string]struct{}{}
+	for _, d := range local {
+		if _, ok := seen[d]; ok {
+			continue
+		}
+		seen[d] = struct{}{}
+		var why string
+		switch {
+		case IsNeverDomain(d, never):
+			why = seg.File("never_block.domains") + " shields it (the name or a parent of it is there)"
+		case BlocksCoreHost(d, core):
+			why = `core.hosts shields it (a credential host there is the name, is below it, or is under a "*." line that covers it)`
+		default:
+			continue
+		}
+		warn = append(warn, fmt.Sprintf("%s: %q is not blocked: %s", seg.Sinkhole("domains"), d, why))
+	}
+	return warn
 }
 
 // dropFeed removes from items each entry that refuse matches, and adds it
@@ -935,6 +964,7 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	domainFinal := keepNew(nil, domains, map[string]struct{}{}, func(d string) bool {
 		return IsNeverDomain(d, neverDomains) || BlocksCoreHost(d, core)
 	})
+	warnings := shieldWarnings(agent, localDomains, neverDomains, core)
 
 	if err := writeFile(out.NFT, nftElements(ipFinal)); err != nil {
 		return Summary{}, err
@@ -969,7 +999,6 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	if err := writeFile(out.DoHDNS, dnsLines(dohDomains)); err != nil {
 		return Summary{}, err
 	}
-	var warnings []string
 	directFinal, err := compileOperatorIPs(filepath.Join(policyDir, agent.File("direct_ip.allow")), "allow_ips", allowWhat, &warnings, out.DirectIPNFT)
 	if err != nil {
 		return Summary{}, err
