@@ -414,32 +414,40 @@ func ParseSpamhaus(body string) []string {
 	return out
 }
 
-func readListFile(path, kind string) []string {
+// readListFile reads a never_block file of the operator. pf compile reads
+// the same file with policycompile.LoadTokens, so each line goes through
+// the parser that LoadTokens uses for kind. Before, a domain line that did
+// not parse was kept as written. It then shielded nothing, or, as a single
+// label, it shielded names in fetch that compile still blocked. A skipped
+// line is a mistake of the operator, so it goes in the report as a WARN.
+func readListFile(path, kind string, report *[]string) []string {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
+	parse, what := policycompile.ParseDomain, "a domain"
+	if kind == "ips" {
+		parse, what = policycompile.ParseIPv4, "an IPv4 address or prefix"
+	}
 	var out []string
 	seen := map[string]struct{}{}
+	n := 0
 	for line := range strings.SplitSeq(string(raw), "\n") {
+		n++
 		tok := policycompile.StripLine(line)
 		if tok == "" {
 			continue
 		}
-		parsed, ok := parseToken(tok, kind)
-		if !ok && kind == "domains" {
-			name := strings.ToLower(strings.TrimRight(tok, "."))
-			if name != "" {
-				parsed, ok = name, true
-			}
+		parsed, ok := parse(tok)
+		if !ok {
+			*report = append(*report, fmt.Sprintf("WARN %s line %d: %q is not %s; skipped", filepath.Base(path), n, tok, what))
+			continue
 		}
-		if ok {
-			if _, dup := seen[parsed]; dup {
-				continue
-			}
-			seen[parsed] = struct{}{}
-			out = append(out, parsed)
+		if _, dup := seen[parsed]; dup {
+			continue
 		}
+		seen[parsed] = struct{}{}
+		out = append(out, parsed)
 	}
 	return out
 }
@@ -650,9 +658,9 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 	ua, timeout, maxIPs, maxDoms := spec.settings()
 	agent := policycompile.SegmentFor(policycompile.DenyByDefault)
 	house := policycompile.SegmentFor(policycompile.AllowByDefault)
-	neverNets := neverIPSet(readListFile(filepath.Join(policy, agent.File("never_block.ips")), "ips"))
-	neverDoms := toSet(readListFile(filepath.Join(policy, agent.File("never_block.domains")), "domains"))
-	houseNever := toSet(readListFile(filepath.Join(policy, house.File("never_block.domains")), "domains"))
+	neverNets := neverIPSet(readListFile(filepath.Join(policy, agent.File("never_block.ips")), "ips", &report))
+	neverDoms := toSet(readListFile(filepath.Join(policy, agent.File("never_block.domains")), "domains", &report))
+	houseNever := toSet(readListFile(filepath.Join(policy, house.File("never_block.domains")), "domains", &report))
 	// Each list holds the kept items of each feed apart, so capShare can
 	// give each feed its share of the cap.
 	var ips, domains, houseDomains, houseVPN [][]string
