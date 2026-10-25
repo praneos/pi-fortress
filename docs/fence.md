@@ -1436,12 +1436,17 @@ The TUI writes `claims/<CODE>.json` (0640). It has `code`, `slot`, `kinds`,
 `issued`, `expires`, `setup_sha256`, and `ca_sha256`, and `git_hosts` when
 the slot has `GITHUB_TOKEN`. www:
 
-- Redeems by making `claims-redeemed/<CODE>.redeemed` with `O_EXCL`. This
-  is what makes a second redeem fail. It makes the marker only for a claim
-  file that exists, and before it reads the claim. The marker is on disk,
-  so a spent code stays spent after a restart or a reboot. A claim that
-  was not redeemed stays valid until it expires.
-- Refuses expired claims, and a claim file that root does not own.
+- Refuses expired claims, a claim file that root does not own, and a claim
+  whose `setup_sha256` or `ca_sha256` is not the hash of the file that www
+  serves now (a `pf apply` replaced it after the issue). A refused request
+  does not spend the code.
+- Redeems by making `claims-redeemed/<CODE>.redeemed` with `O_EXCL`, after
+  all checks pass. This is what makes a second redeem fail, also when two
+  redeems come at the same time. The marker is on disk, so a spent code
+  stays spent after a restart or a reboot. A claim that was not redeemed
+  stays valid until it expires.
+- Writes `PI_IP`, the address that www binds, into the claim script. The
+  `Host` of the request has no effect on the script.
 - Never serves a listing of either directory.
 - Answers wrong, used, and expired codes with the same 404.
 - Allows ten attempts for each source address each minute, and 30

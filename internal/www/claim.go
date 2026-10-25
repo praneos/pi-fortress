@@ -228,14 +228,16 @@ func groupOfDir(dir string, f *os.File) error {
 }
 
 // RedeemClaim consumes a code. www reads claims from dir and writes only in
-// RedeemedDir(dir). The marker <CODE>.redeemed, made with O_EXCL, is the
-// single-use guarantee: a second caller cannot make it again. The marker
-// is on disk, so a code stays spent after a restart. RedeemClaim makes a
-// marker only for a claim file that exists, so a guess leaves no file.
-// After the marker, it reads the claim. It refuses an expired claim, a
-// claim file that the owner of dir did not make, and a field that
-// scriptFields does not accept. That answer is the same as for an unknown
-// code.
+// RedeemedDir(dir). First it reads the claim. It refuses an expired claim,
+// a claim file that the owner of dir did not make, a field that
+// scriptFields does not accept, and a claim whose setup.sh or ca.pem hash
+// is not the hash of the file that www serves now. That answer is the same
+// as for an unknown code, and it does not spend the code. Only after all
+// checks pass does it make the marker <CODE>.redeemed with O_EXCL. The
+// O_EXCL create is the lock and the single-use guarantee: of two callers
+// that pass the checks at the same time, only one makes the marker. The
+// marker is on disk, so a code stays spent after a restart. A guess leaves
+// no file.
 func RedeemClaim(dir, code string) (Claim, error) {
 	code = strings.ToUpper(strings.TrimSpace(code))
 	if !validCode(code) {
@@ -245,6 +247,14 @@ func RedeemClaim(dir, code string) (Claim, error) {
 	if _, err := os.Lstat(src); err != nil {
 		return Claim{}, ErrNoClaim
 	}
+	raw, err := readClaim(dir, src)
+	if err != nil {
+		return Claim{}, ErrNoClaim
+	}
+	var c Claim
+	if json.Unmarshal(raw, &c) != nil || c.Code != code || time.Now().After(c.Expires) || !scriptFields(c) || !servesSame(dir, c) {
+		return Claim{}, ErrNoClaim
+	}
 	m, err := os.OpenFile(markerPath(dir, code), os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0640)
 	if err != nil {
 		return Claim{}, ErrNoClaim
@@ -252,15 +262,20 @@ func RedeemClaim(dir, code string) (Claim, error) {
 	if err := m.Close(); err != nil {
 		return Claim{}, ErrNoClaim
 	}
-	raw, err := readClaim(dir, src)
-	if err != nil {
-		return Claim{}, ErrNoClaim
-	}
-	var c Claim
-	if json.Unmarshal(raw, &c) != nil || c.Code != code || time.Now().After(c.Expires) || !scriptFields(c) {
-		return Claim{}, ErrNoClaim
-	}
 	return c, nil
+}
+
+// servesSame reports whether www serves now the setup.sh and ca.pem that c
+// has the hashes of. After a pf apply that replaced one of them, the claim
+// script fails its hash check on the agent. So such a claim is refused
+// before the marker. A claim with an empty hash passes here. ClaimScript
+// then gives the operator the message for that case.
+func servesSame(dir string, c Claim) bool {
+	www := filepath.Dir(dir)
+	if c.SetupSHA256 != "" && fileSHA256(setupPath(www)) != c.SetupSHA256 {
+		return false
+	}
+	return c.CASHA256 == "" || fileSHA256(caPath(www)) == c.CASHA256
 }
 
 // claimMax bounds the read of one claim file. A real claim is far smaller.

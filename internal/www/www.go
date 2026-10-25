@@ -227,17 +227,30 @@ func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, claims, code
 		Args:  map[string]string{"slot": c.Slot},
 		OK:    true,
 	})
-	pi := s.Bind
-	if h, _, err := net.SplitHostPort(r.Host); err == nil && net.ParseIP(h) != nil {
-		pi = h
-	} else if net.ParseIP(r.Host) != nil {
-		pi = r.Host
-	}
-	body := ClaimScript(pi, c)
+	body := ClaimScript(s.claimPi(r), c)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = io.WriteString(w, body)
+}
+
+// claimPi is the Pi address that the claim script writes. The command of
+// the operator checks the script against the hash for PI_IP, and www binds
+// PI_IP. So when the bind is an IP address, claimPi uses it, and the Host
+// of the request has no effect. A wrong Host thus cannot give a script that
+// fails its hash after the code is spent. The Host is used only when the
+// bind is not an IP address (for example "localhost").
+func (s *Server) claimPi(r *http.Request) string {
+	if net.ParseIP(s.Bind) != nil {
+		return s.Bind
+	}
+	if h, _, err := net.SplitHostPort(r.Host); err == nil && net.ParseIP(h) != nil {
+		return h
+	}
+	if net.ParseIP(r.Host) != nil {
+		return r.Host
+	}
+	return s.Bind
 }
 
 // maxConns bounds the number of connections that the server accepts at
