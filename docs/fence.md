@@ -91,8 +91,12 @@ as one `/etc/pi-fortress/core.hosts`, with the local part below a marker
 line.
 
 A placeholder in `Host` or `Connection` refuses the request, as in any other
-non-credential header. The fence never substitutes into these two headers,
-and it strips every live value in them.
+non-credential header. The fence never substitutes into these two headers.
+It strips every live value in `Connection`. It never changes `Host`: the
+authority decision, the blocklist and paranoid mode read the `Host`, and the
+origin server routes the request by it. Thus a live value or a token-prefix
+match in `Host` refuses the request (`live_in_host`, an alert), also a live
+value of a kind that the host injects.
 
 The fence writes a credential into one body only: the body of the refresh
 token, `CLAUDE_ORT` on `/v1/oauth/token` or `/oauth/token`. This body is
@@ -111,7 +115,7 @@ the URL and any other buffered body. A placeholder in a streamed body stops
 the copy (`placeholder_in_streamed_body`, §5.2b). Data in a body or a URL can
 come back past the literal scrub. Examples are a model that is asked to print
 its prompt in reverse, a public gist, and an access log. Stripping does not
-change. It runs over the URL, every header, and the body.
+change. It runs over the URL, every header except `Host`, and the body.
 
 What the fence scans:
 
@@ -582,6 +586,9 @@ Substitution can fail for these reasons:
   match that the raw target does not show, or the target does not decode to
   a stable form in a few rounds (`encoded_url_token`). The raw bytes are
   different, so the fence cannot strip the value in place.
+- The `Host` holds a live value or a token-prefix match (`live_in_host`).
+  The origin server routes the request by its `Host`, so a strip there
+  sends the request to a name that the fence did not judge.
 
 For all of them, the agent gets one response, byte for byte: a 503 with
 `Retry-After: 60` and a body that names no cause. The broker refuses the
@@ -605,15 +612,15 @@ The detail is not deleted. It only goes to a different place. The broker
 writes each cause to the strip log as `substitution_refused`, with the cause,
 slot, kind, and SNI. `kind_not_allowed_for_sni`,
 `placeholder_outside_header`, `placeholder_in_ws` (5.3c),
-`encoded_body_token`, `key_in_header_name`, `key_in_method`, and
-`encoded_url_token` are always marked `alert`. Each other cause is marked
-`alert` one time for each broker start. These seven are not an operational
-fault to fix. They show the fence
-catching a credential aimed where it may not go. This is the signature of a
-compromised or badly broken agent. A refresh response that the broker
-refuses (the harvest cannot read the new pair, or a token shape stays after
-the scrub) writes `harvest_leftover` with the slot. It is always marked
-`alert`.
+`encoded_body_token`, `key_in_header_name`, `key_in_method`,
+`encoded_url_token`, and `live_in_host` are always marked `alert`. Each other
+cause is marked `alert` one time for each broker start. These eight are not
+an operational fault to fix. They show the fence catching a credential aimed
+where it may not go. This is the signature of a compromised or badly broken
+agent. A `live_in_host` row has the SNI as its `host`, so the live value goes
+to no log and no webhook. A refresh response that the broker refuses (the
+harvest cannot read the new pair, or a token shape stays after the scrub)
+writes `harvest_leftover` with the slot. It is always marked `alert`.
 
 The broker does not read a streamed body (over 1 MiB, or chunked) before the
 head goes to the origin server. Thus the broker cannot refuse a placeholder
@@ -1120,7 +1127,8 @@ These all refuse in the same way, `encoded_body_unscannable`:
 A live value or token-prefix match found after the decode is
 `encoded_body_token`. `encoded_body_token` alerts every time, the same as
 `kind_not_allowed_for_sni`, `placeholder_outside_header`,
-`key_in_header_name`, `key_in_method`, and `encoded_url_token` (5.2b).
+`key_in_header_name`, `key_in_method`, `encoded_url_token`, and
+`live_in_host` (5.2b).
 `encoded_body_unscannable` alerts one time for each broker run, like a sealed
 store. Reason: the broker refuses every request of a harmless client that
 compresses its uploads with zstd. An alert on each one would fill the hourly

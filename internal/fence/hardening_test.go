@@ -12,7 +12,7 @@ import (
 	"pi-fortress/internal/secrets"
 )
 
-func TestHostAndConnectionStrippedNeverInjected(t *testing.T) {
+func TestHostAndConnectionNeverInjected(t *testing.T) {
 	live := "sk-ant-oat01-" + strings.Repeat("A", 64)
 	raw := "GET / HTTP/1.1\r\nHost: pf-core-echo.test\r\n" +
 		"Connection: close, " + live + "\r\n" +
@@ -70,6 +70,57 @@ func TestHostAndConnectionStrippedNeverInjected(t *testing.T) {
 		}
 		if v := req.Get(name); strings.Contains(v, "lab_fence_github") {
 			t.Fatalf("placeholder in %s was injected: %q", name, v)
+		}
+	}
+}
+
+// The origin routes by the Host that it gets. A strip there sends the
+// request to a name that the fence did not judge. Thus a live value or a
+// token-prefix match in Host refuses the request, on a core host and on a
+// foreign host, also for a kind that the core host injects. The fence
+// writes nothing into the request, and the Host stays as the agent sent it.
+func TestLiveValueInHostRefused(t *testing.T) {
+	re, pol := testPolicy(t)
+	oat := "sk-ant-oat01-" + strings.Repeat("A", 64)
+	ghp := "ghp_" + strings.Repeat("A", 36)
+	auth := "Authorization: Bearer pf_a1b2c3d4e5f67890_GITHUB_TOKEN\r\n"
+	for _, tc := range []struct {
+		name, sni, host string
+		slot, kind      string
+	}{
+		{"core, injected kind", "pf-core-echo.test", "lab_fence_github.pf-core-echo.test", "a1b2c3d4e5f67890", "GITHUB_TOKEN"},
+		{"core, with port", "pf-core-echo.test", "lab_fence_github.pf-core-echo.test:443", "a1b2c3d4e5f67890", "GITHUB_TOKEN"},
+		{"core, other slot", "pf-core-echo.test", oat + ".pf-core-echo.test", "b0b1b2b3b4b5b6b7", "CLAUDE_OAT"},
+		{"foreign", "evil.example", "lab_fence_github.evil.example", "a1b2c3d4e5f67890", "GITHUB_TOKEN"},
+		{"token prefix", "evil.example", ghp + ".evil.example", "", ""},
+		{"token prefix, core", "pf-core-echo.test", ghp + ".pf-core-echo.test", "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := "GET / HTTP/1.1\r\nHost: " + tc.host + "\r\n" + auth + "\r\n"
+			req := parseReq(t, raw)
+			injected := false
+			_, err := Decide(Ctx{SNI: tc.sni, TokenRE: re, OnInject: func(string) { injected = true }}, req, pol, labSlots())
+			want := Refusal{Cause: CauseLiveInHost, Slot: tc.slot, Kind: tc.kind, Where: "header:Host"}
+			found := false
+			for _, r := range refusalsOf(t, err) {
+				found = found || r == want
+			}
+			if !found {
+				t.Fatalf("refusals %+v, want %+v", refusalsOf(t, err), want)
+			}
+			if injected || req.Get("Host") != tc.host || strings.Contains(req.Get("Authorization"), "lab_fence_github") {
+				t.Fatalf("the fence changed the request: injected=%v host=%q auth=%q", injected, req.Get("Host"), req.Get("Authorization"))
+			}
+		})
+	}
+	// A Host with no live value and no token-prefix match goes out as it came.
+	for _, host := range []string{"pf-core-echo.test", "pf-core-echo.test:443", "a.pf-core-echo.test"} {
+		req := parseReq(t, "GET / HTTP/1.1\r\nHost: "+host+"\r\n"+auth+"\r\n")
+		if _, err := Decide(Ctx{SNI: "pf-core-echo.test", TokenRE: re}, req, pol, labSlots()); err != nil {
+			t.Fatalf("%s: %v", host, err)
+		}
+		if req.Get("Host") != host || req.Get("Authorization") != "Bearer lab_fence_github" {
+			t.Fatalf("%s: host %q auth %q", host, req.Get("Host"), req.Get("Authorization"))
 		}
 	}
 }

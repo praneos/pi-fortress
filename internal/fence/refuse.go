@@ -111,6 +111,12 @@ const (
 	// form in a few rounds is also this cause, because the fence cannot see
 	// what the origin decodes. Thus the fence refuses the request.
 	CauseEncodedURLToken RefusalCause = "encoded_url_token"
+	// CauseLiveInHost is a Host that holds a live value or a token-prefix
+	// match. The origin routes the request by its Host. A strip there
+	// sends the request to a name that the fence did not judge, and the
+	// credential of the judged name goes with it. Thus the fence cannot
+	// strip the value in place, and it refuses the request.
+	CauseLiveInHost RefusalCause = "live_in_host"
 )
 
 type Refusal struct {
@@ -220,6 +226,20 @@ func (s *scanner) noteMethod(method string) {
 	}
 	if s.all.match(b) {
 		s.refuse(CauseKeyInMethod, "", "", "method")
+	}
+}
+
+// noteHost refuses the request when the Host holds a live value or a
+// token-prefix match. It checks every live value, also one of a kind that
+// this host injects, and every token rule, as noteNames does.
+func (s *scanner) noteHost(host string) {
+	for _, sl := range s.idx.Lives {
+		if httpwire.Contains([]byte(host), []byte(sl.Live)) {
+			s.refuse(CauseLiveInHost, sl.ID, sl.Kind, "header:Host")
+		}
+	}
+	if s.all.match([]byte(host)) {
+		s.refuse(CauseLiveInHost, "", "", "header:Host")
 	}
 }
 

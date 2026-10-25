@@ -296,13 +296,10 @@ func framingHeader(name string) bool {
 
 // stripOnlyHeader names fields that no credential belongs in. The fence
 // scans and strips them like all other fields, and never injects into them.
-// A placeholder in one refuses the request, as in all other non-credential headers.
+// A placeholder in one refuses the request, as in all other non-credential
+// headers. Host is not here: the fence never strips it (noteHost).
 func stripOnlyHeader(name string) bool {
-	switch strings.ToLower(name) {
-	case "host", "connection":
-		return true
-	}
-	return false
+	return strings.EqualFold(name, "connection")
 }
 
 // maxFieldLine is the httpwire limit on one request header line. The fence
@@ -676,6 +673,15 @@ func plan(s *scanner, req *httpwire.Request) PlanResult {
 			continue
 		}
 		sc, stripOnly := s.header(f.Name), stripOnlyHeader(f.Name)
+		if strings.EqualFold(f.Name, "host") {
+			// The authority decision and the broker checks read this Host,
+			// and the origin routes by it. Thus the fence never changes it.
+			// A placeholder refuses as in all other non-credential headers.
+			// A live value refuses also.
+			sc.noteAll([]byte(f.Value), "header")
+			s.noteHost(f.Value)
+			continue
+		}
 		if stripOnly {
 			// The fence refuses this as in all other non-credential headers.
 			// It still strips each live value here, an allowed kind also.

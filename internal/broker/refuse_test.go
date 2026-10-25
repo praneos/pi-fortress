@@ -224,6 +224,42 @@ func TestOperationalCauseAlertsOnce(t *testing.T) {
 	}
 }
 
+// A live value in Host is attempted egress: the origin routes by that
+// name. Each one alerts, and the agent gets the one refusal. The row names
+// the SNI, not the Host, so the value does not go to the log or to the
+// webhook.
+func TestLiveValueInHostAlertsEachTime(t *testing.T) {
+	b, _ := testBroker(t)
+	b.Logs = &jsonl.Writer{StripPath: filepath.Join(t.TempDir(), "strip.jsonl")}
+	for _, sni := range []string{"pf-open-echo.test", "pf-core-echo.test"} {
+		p := preamble.Preamble{SNI: sni, OrigDst: netip.MustParseAddrPort("192.0.2.3:443")}
+		raw := "GET / HTTP/1.1\r\nHost: lab_fence_github." + sni + "\r\n\r\n"
+		for range 2 {
+			got := rawRoundtrip(t, b, p, raw)
+			if !strings.Contains(got, "503 Service Unavailable") || !strings.HasSuffix(got, RefusedBody) {
+				t.Fatalf("%s: not the one refusal: %q", sni, got)
+			}
+		}
+	}
+	body, _ := os.ReadFile(b.Logs.StripPath)
+	if strings.Contains(string(body), "lab_fence_github") {
+		t.Fatalf("the live value is in the log:\n%s", body)
+	}
+	alerts := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		var r jsonl.Refused
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			t.Fatal(err)
+		}
+		if r.Cause == "live_in_host" && r.Alert && r.Slot == "a1b2c3d4e5f67890" && r.Host == r.SNI {
+			alerts++
+		}
+	}
+	if alerts != 4 {
+		t.Fatalf("%d alerts, want 4:\n%s", alerts, body)
+	}
+}
+
 // A key in a field name is attempted egress, like a placeholder aimed at a
 // wrong host. Each one alerts, and the agent gets the one refusal.
 func TestKeyInHeaderNameAlertsEachTime(t *testing.T) {
