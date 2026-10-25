@@ -996,9 +996,10 @@ func tuiAgentListTests(t *testing.T) {
 	if n := count(); n != 0 {
 		t.Fatalf("%s already has %d %s lines; an earlier run left them", path, n, tuiListToken)
 	}
-	// a, the name, Enter; then End onto the new last row, d, y.
+	// a, the name, Enter; then End onto the new last row, d, y. The two
+	// saves wait for an apply, so the q on the menu asks first, and y quits.
 	open := box.open(t, "agent", "Filtering")
-	keys := tuiKeys(open, "a", tuiTyped(tuiListToken), kEnter, kEnd, "d", "y", "q", "q")
+	keys := tuiKeys(open, "a", tuiTyped(tuiListToken), kEnter, kEnd, "d", "y", "q", "q", "y")
 	s := tuiDrive(t, tuiRun{keys: keys})
 	s.steady(t, keys)
 	n := len(open) + len(tuiListToken)
@@ -1025,7 +1026,12 @@ func tuiAgentListTests(t *testing.T) {
 	if n := count(); n != 0 {
 		t.Fatalf("%s still has %d %s lines after the delete", path, n, tuiListToken)
 	}
+	s.frame(t, -2).must(t, "q with saved edits asks first", tuiQuitAsk)
 }
+
+// tuiQuitAsk is the end of the prompt that q on the menu shows while saved
+// edits wait for an apply.
+const tuiQuitAsk = "never applied; quit anyway [y/N]"
 
 // --- checklist: A applies ---
 
@@ -1078,8 +1084,9 @@ func tuiFeedTests(t *testing.T) {
 	path := tuiPolicyDir(t) + "/sources.json"
 	defer tuiKeepFile(t, path, true)()
 	open := box.open(t, "system", "Feeds")
-	// The first feed ships on. Disable asks first; enable does not.
-	keys := tuiKeys(open, "e", "y", kCtrlR, "e", kCtrlR, "q", "q")
+	// The first feed ships on. Disable asks first; enable does not. The
+	// toggles wait for an apply, so the q on the menu asks first, and y quits.
+	keys := tuiKeys(open, "e", "y", kCtrlR, "e", kCtrlR, "q", "q", "y")
 	s := tuiDrive(t, tuiRun{keys: keys})
 	s.steady(t, keys)
 	// The cursor is on the first feed row, and the enabled column is its
@@ -1109,6 +1116,7 @@ func tuiFeedTests(t *testing.T) {
 	if back != first || backAfterR != first {
 		t.Fatalf("toggling back did not restore %q: %q then %q", first, back, backAfterR)
 	}
+	s.frame(t, -2).must(t, "q with saved edits asks first", tuiQuitAsk)
 }
 
 // --- checklist :251 Secrets ---
