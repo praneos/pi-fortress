@@ -182,10 +182,15 @@ func (a *App) Run() error {
 	defer workers.Wait()
 	// After the restore, so that the line stays on the shell screen. An
 	// operator who comes back to a shell prompt must not read it as a
-	// logout.
+	// logout. The idle exit does not ask about saved edits, as q does. Thus
+	// the second line names them.
 	defer func() {
 		if a.idleOut {
-			_ = a.t.Write([]byte(idleNote + "\n"))
+			note := idleNote + "\n"
+			if n := len(a.edits); n > 0 {
+				note += unapplied(n) + "\n"
+			}
+			_ = a.t.Write([]byte(note))
 		}
 	}()
 	defer a.t.Restore()
@@ -500,10 +505,7 @@ func (a *App) askQuit() {
 		a.quit = true
 		return
 	}
-	what := "1 saved edit was never applied"
-	if n > 1 {
-		what = fmt.Sprintf("%d saved edits were never applied", n)
-	}
+	what := unapplied(n)
 	switch {
 	case a.paneBusy && n > 0:
 		what = "an action still runs; " + what
@@ -511,6 +513,14 @@ func (a *App) askQuit() {
 		what = "an action still runs and quit stops it"
 	}
 	a.confirm(what+"; quit anyway", func() { a.quit = true })
+}
+
+// unapplied names n saved edits that no apply took.
+func unapplied(n int) string {
+	if n == 1 {
+		return "1 saved edit was never applied"
+	}
+	return fmt.Sprintf("%d saved edits were never applied", n)
 }
 
 // open shows menu entry i at the section where the operator last left it.

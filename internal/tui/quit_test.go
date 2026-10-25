@@ -128,3 +128,40 @@ func TestQuitDuringAnActionWithEditsAsksOnce(t *testing.T) {
 	a.events <- event{key: Key{Kind: KeyRune, Rune: 'y'}}
 	waitRun(t, done, 3*time.Second)
 }
+
+// The idle exit leaves the shell with no prompt to ask. Thus the line that
+// it writes on the tty names the saved edits that no apply took. Without
+// it, the operator who comes back is sure of a change that never took
+// effect.
+func TestIdleExitNamesUnappliedEdits(t *testing.T) {
+	for _, tc := range []struct {
+		name, save, want string
+	}{
+		{"none", "", ""},
+		{"one", "x.example", "1 saved edit was never applied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, _ := testConfig(t)
+			f := NewFake(80, 24)
+			if tc.save != "" {
+				f.Type(keys(netHouse, secFiltering) + "a").Type(tc.save).Press(KeyEnter)
+			}
+			f.Hold = true
+			a := New(c, f)
+			a.Idle = 50 * time.Millisecond
+			if err := a.Run(); err != nil {
+				t.Fatal(err)
+			}
+			last := f.Last()
+			if !strings.Contains(last, idleNote) {
+				t.Fatalf("no idle note: %q", last)
+			}
+			if got := strings.Contains(last, "never applied"); got != (tc.want != "") || !strings.Contains(last, tc.want) {
+				t.Fatalf("idle exit line: %q, want %q", last, tc.want)
+			}
+		})
+	}
+	if got := unapplied(2); got != "2 saved edits were never applied" {
+		t.Fatalf("plural: %q", got)
+	}
+}
