@@ -1584,6 +1584,11 @@ func (c *Config) checkHouse() error {
 	if c.HouseAdminIP != "" && !netHas(c.HouseNet, c.HouseAdminIP) {
 		return fmt.Errorf("house: HOUSE_ADMIN_IP=%s is not inside HOUSE_NET=%s", c.HouseAdminIP, c.HouseNet)
 	}
+	// HOUSE_ADMIN_IP is the reservation of one device, so it must be a host
+	// address, as HOUSE_IP must.
+	if what := notHostAddr(c.HouseNet, c.HouseAdminIP); c.HouseAdminIP != "" && what != "" {
+		return fmt.Errorf("house: HOUSE_ADMIN_IP=%s is the %s address of HOUSE_NET=%s, which no device can hold", c.HouseAdminIP, what, c.HouseNet)
+	}
 	// HOUSE_SSH_TO widens the destination of the one house->agent ssh
 	// hole past AgentIP. The check uses AGENT_NET, not HOUSE_NET,
 	// because its addresses are actually inside that fence.
@@ -1617,6 +1622,17 @@ func (c *Config) checkHouse() error {
 			continue
 		}
 		return fmt.Errorf("house: the DHCP range HOUSE_DHCP_START=%s to HOUSE_DHCP_END=%s covers %s=%s, so a house device would be leased an address the Pi already holds", c.HouseDHCPStart, c.HouseDHCPEnd, x.key, x.val)
+	}
+	// As in checkSegDHCP, the range never gives out the two addresses that
+	// are not host addresses.
+	p := netip.MustParsePrefix(c.HouseNet).Masked()
+	for _, x := range []struct {
+		what string
+		a    netip.Addr
+	}{{"network", p.Addr()}, {"broadcast", lastAddr(p)}} {
+		if x.a.Compare(start) >= 0 && x.a.Compare(end) <= 0 {
+			return fmt.Errorf("house: the DHCP range HOUSE_DHCP_START=%s to HOUSE_DHCP_END=%s covers %s, the %s address of HOUSE_NET=%s, which no device can hold", c.HouseDHCPStart, c.HouseDHCPEnd, x.a, x.what, c.HouseNet)
+		}
 	}
 	return nil
 }
