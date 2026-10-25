@@ -490,16 +490,25 @@ func (a *App) handle(k Key) {
 
 // askQuit is q on the menu and Ctrl-C. With saved edits that no apply
 // took, it asks first and names the count. A silent quit leaves the
-// operator sure of a change that never took effect.
+// operator sure of a change that never took effect. While an action
+// streams, it also asks: the quit stops that action, and Ctrl-C is the
+// reflex of an operator who only wants the screen to stop. When both are
+// true, one prompt names both.
 func (a *App) askQuit() {
 	n := len(a.edits)
-	if n == 0 {
+	if n == 0 && !a.paneBusy {
 		a.quit = true
 		return
 	}
 	what := "1 saved edit was never applied"
 	if n > 1 {
 		what = fmt.Sprintf("%d saved edits were never applied", n)
+	}
+	switch {
+	case a.paneBusy && n > 0:
+		what = "an action still runs; " + what
+	case a.paneBusy:
+		what = "an action still runs and quit stops it"
 	}
 	a.confirm(what+"; quit anyway", func() { a.quit = true })
 }

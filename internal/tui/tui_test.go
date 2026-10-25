@@ -495,6 +495,7 @@ func TestQuitCancelsRunningAction(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	a.events <- event{key: Key{Kind: KeyCtrlC}}
+	a.events <- event{key: Key{Kind: KeyRune, Rune: 'y'}}
 	waitRun(t, done, 3*time.Second)
 	if a.ctx.Err() == nil {
 		t.Fatal("context alive after quit")
