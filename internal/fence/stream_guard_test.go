@@ -175,3 +175,24 @@ func TestPlaceholderGuardChainIsLinear(t *testing.T) {
 		t.Fatalf("a pass over a 600-run chain allocated %v times, a 4-run one %v: the chain is rescanned per run", long, short)
 	}
 }
+
+// A placeholder-shaped run that does not settle within maxHold stops the
+// copy. The error names the slot and the kind as far as the run got. Thus
+// the refusal row shows which credential the run was about.
+func TestPlaceholderGuardOverlongRunNamesSlot(t *testing.T) {
+	body := []byte("payload pf_0123456789ABCDEF_A" + strings.Repeat("a", maxHold+1024))
+	for _, sizes := range [][]int{nil, {7}, {4096}} {
+		g := newPlaceholderGuard(&chunkReader{src: body, sizes: sizes})
+		out, err := io.ReadAll(g)
+		var sp *StreamPlaceholderError
+		if !errors.As(err, &sp) || !errors.Is(err, ErrPlaceholderInStream) {
+			t.Fatalf("sizes %v: %v", sizes, err)
+		}
+		if sp.Slot != "0123456789abcdef" || !strings.HasPrefix(sp.Kind, "Aaaa") {
+			t.Fatalf("sizes %v: slot %q kind %.8q", sizes, sp.Slot, sp.Kind)
+		}
+		if bytes.Contains(out, []byte("pf_")) {
+			t.Fatalf("sizes %v: emitted %.40q", sizes, out)
+		}
+	}
+}
