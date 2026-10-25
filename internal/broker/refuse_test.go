@@ -281,9 +281,8 @@ func TestLiveValueInConnectionAlertsEachTime(t *testing.T) {
 		{"Connection: lab_fence_github\r\n", RefusedBody},
 		{ws + "Connection: Upgrade, " + oat + "\r\n", RefusedBody},
 		{"Connection: keep-alive, " + ghp + "\r\n", RefusedBody},
-		// The broker answers each Upgrade other than websocket with 501
-		// before the fence runs.
-		{"Upgrade: lab_fence_github\r\nConnection: Upgrade\r\n", "upgrade\n"},
+		// TestLiveValueInRefusedUpgradeAlerts has the 501 of an Upgrade
+		// other than websocket.
 	} {
 		got := rawRoundtrip(t, b, anthropic, "GET /socket HTTP/1.1\r\nHost: api.anthropic.com\r\n"+tc.fields+"\r\n")
 		if !strings.HasSuffix(got, tc.want) {
@@ -324,6 +323,48 @@ func TestLiveValueInConnectionAlertsEachTime(t *testing.T) {
 		if !slots[slot] {
 			t.Fatalf("no live_in_connection alert for slot %q:\n%s", slot, all)
 		}
+	}
+}
+
+// The broker answers each Upgrade other than websocket with 501 before the
+// fence runs. A live value in that Upgrade or Connection writes the same
+// live_in_connection row as the fence path, and it alerts. A plain refused
+// Upgrade writes no row.
+func TestLiveValueInRefusedUpgradeAlerts(t *testing.T) {
+	b, _ := testBroker(t)
+	dir := t.TempDir()
+	b.Logs = &jsonl.Writer{StripPath: filepath.Join(dir, "strip.jsonl"), UnknownPath: filepath.Join(dir, "unknown.jsonl")}
+	ghp := "ghp_" + strings.Repeat("A", 36)
+	for _, fields := range []string{
+		"Upgrade: h2c\r\nConnection: Upgrade\r\n",
+		"Upgrade: lab_fence_github\r\nConnection: Upgrade\r\n",
+		"Upgrade: h2c, " + ghp + "\r\nConnection: Upgrade\r\n",
+	} {
+		got := rawRoundtrip(t, b, anthropic, "GET /socket HTTP/1.1\r\nHost: api.anthropic.com\r\n"+fields+"\r\n")
+		if !strings.Contains(got, "501 Not Implemented") || !strings.HasSuffix(got, "upgrade\n") {
+			t.Fatalf("%q: not the 501: %q", fields, got)
+		}
+	}
+	strip, _ := os.ReadFile(b.Logs.StripPath)
+	unknown, _ := os.ReadFile(b.Logs.UnknownPath)
+	all := strings.TrimSpace(string(strip) + string(unknown))
+	if strings.Contains(all, "lab_fence_github") || strings.Contains(all, ghp) {
+		t.Fatalf("the live value is in a row:\n%s", all)
+	}
+	slots := map[string]bool{}
+	for _, line := range strings.Split(all, "\n") {
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("row %q: %v", line, err)
+		}
+		if m["cause"] != "live_in_connection" || m["alert"] != true || m["where"] != "header:Upgrade" {
+			t.Fatalf("row %s", line)
+		}
+		slot, _ := m["slot"].(string)
+		slots[slot] = true
+	}
+	if len(slots) != 2 || !slots["a1b2c3d4e5f67890"] || !slots[""] {
+		t.Fatalf("slots %v:\n%s", slots, all)
 	}
 }
 

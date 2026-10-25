@@ -310,6 +310,21 @@ func SecretInHost(ctx Ctx, host string, slots map[string]secrets.Slot) bool {
 	return len(livesIn(secrets.NewIndex(slots).Lives, host)) > 0 || allTokens(ctx).match([]byte(host))
 }
 
+// LiveIn gives the refusals that noteLive records for v: one for each live
+// value of slots that v holds, and one with no slot for a token-prefix
+// match. The broker uses it for a field of a request that it refuses
+// before the fence runs.
+func LiveIn(ctx Ctx, v string, slots map[string]secrets.Slot, cause RefusalCause, where string) []Refusal {
+	var rs []Refusal
+	for _, sl := range livesIn(secrets.NewIndex(slots).Lives, v) {
+		rs = append(rs, Refusal{Cause: cause, Slot: sl.ID, Kind: sl.Kind, Where: where})
+	}
+	if allTokens(ctx).match([]byte(v)) {
+		rs = append(rs, Refusal{Cause: cause, Where: where})
+	}
+	return rs
+}
+
 // noteTarget scans the percent-decoded target, because the origin decodes
 // it. A placeholder there refuses the request as in the raw target. The
 // live value and token scans read the decoded form of the target after

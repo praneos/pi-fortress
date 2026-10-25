@@ -342,6 +342,24 @@ func (b *Broker) rowHost(p *preamble.Preamble, req *httpwire.Request, host strin
 	return host
 }
 
+// logLiveConn writes the live_in_connection rows of the fence for a
+// protocol switch that the broker refuses before the fence runs. The
+// agent gets the same 501 in all cases.
+func (b *Broker) logLiveConn(c *call) {
+	var slots map[string]secrets.Slot
+	if b.Store != nil {
+		slots, _ = b.Store.Snapshot()
+	}
+	ctx := fence.Ctx{TokenRE: b.TokenRE, Rules: b.Rules}
+	var rs []fence.Refusal
+	for _, name := range []string{"Connection", "Upgrade"} {
+		for _, v := range c.req.Values(name) {
+			rs = append(rs, fence.LiveIn(ctx, v, slots, fence.CauseLiveInConnection, "header:"+name)...)
+		}
+	}
+	b.logRefusals(c, rs)
+}
+
 func prettyHost(req *httpwire.Request, sni string) string {
 	h := req.Get("Host")
 	if i := strings.Index(h, ":"); i >= 0 && !strings.Contains(h, "]") {

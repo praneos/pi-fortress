@@ -349,6 +349,7 @@ func (b *Broker) admit(c *call) (done bool, err error) {
 	// that runs end to end.
 	c.ws = isWebSocketUpgrade(c.req) && (!c.echo || b.echoUpgrade(c))
 	if isUpgrade(c.req) && !c.ws {
+		b.logLiveConn(c)
 		return true, b.refuse(c.client, c.req, c.expect, 501, "501 Not Implemented", "upgrade\n")
 	}
 	if c.ws {

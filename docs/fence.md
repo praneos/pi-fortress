@@ -1194,6 +1194,10 @@ extension anyway, the broker ends the connection. The broker sends nothing of
 that response to the agent, and it logs the extension. Any other
 `Upgrade` is still a 501. A live value or a token-prefix match in the
 `Connection` of a handshake refuses the request (`live_in_connection`, 5.2b).
+The broker sends the 501 before the fence runs. A live value or a
+token-prefix match in the `Connection` or the `Upgrade` of such a request
+writes the same `live_in_connection` row, an alert. The agent still gets the
+501.
 
 The broker relays the `101` of the origin server to the agent as it arrived.
 One exception applies: the broker changes a live credential that the origin
