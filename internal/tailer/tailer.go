@@ -5,6 +5,8 @@ package tailer
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"os"
@@ -35,8 +37,17 @@ const tailWindow = 64 << 10
 // creates the file first). Thus it cannot write a temp file and rename it.
 // It writes the record in place, at one length, and never truncates first.
 // A crash during a write leaves the old record or the new one. It never
-// leaves the empty file that made Run skip to the end of the log.
-const offsetWidth = 64
+// leaves the empty file that made Run skip to the end of the log. The width
+// holds the offset, the dev:ino and the head sum with space to spare.
+const offsetWidth = 128
+
+// headSpan is how many bytes at the start of the log the head sum covers.
+// The sum covers min(offset, headSpan) bytes. Thus the code can compute it
+// again at a restart from the saved offset alone.
+const headSpan = 4096
+
+// headSumLen is the length of the head sum in hex digits.
+const headSumLen = 32
 
 // fileID names an inode. A byte offset is correct only for the file in
 // which the code counted it. logrotate renames the log and the writer opens
@@ -71,6 +82,46 @@ func parseID(s string) fileID {
 		return fileID{}
 	}
 	return fileID{d, i}
+}
+
+// headSum is the hex of the first 16 bytes of the SHA-256 of the first n
+// bytes of f. The dev:ino pair does not identify a file for all time. When
+// the log rotates two or more times while the sidecar is stopped, the
+// file system can give the old inode number to a new log. The head of that
+// new log has other records. Thus the sum of the head tells the two files
+// apart, and the inode number does not.
+func headSum(f *os.File, n int64) (string, error) {
+	h := sha256.New()
+	if _, err := io.Copy(h, io.NewSectionReader(f, 0, n)); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil))[:headSumLen], nil
+}
+
+// headIs reports if the first min(off, headSpan) bytes of f have the head
+// sum want. A file that is shorter than that has another head.
+func headIs(f *os.File, off int64, want string) bool {
+	n := min(off, headSpan)
+	if n <= 0 {
+		return true
+	}
+	fi, err := f.Stat()
+	if err != nil || fi.Size() < n {
+		return false
+	}
+	got, err := headSum(f, n)
+	return err == nil && got == want
+}
+
+// parseSum returns s when it is a head sum, and "" when it is not.
+func parseSum(s string) string {
+	if len(s) != headSumLen {
+		return ""
+	}
+	if _, err := hex.DecodeString(s); err != nil {
+		return ""
+	}
+	return s
 }
 
 type Tail struct {
@@ -109,6 +160,10 @@ type Tail struct {
 	// saved is the last record written. Thus a pass that moved nothing
 	// writes nothing.
 	saved string
+	// sum is the head sum of f over its first sumN bytes. The code
+	// computes it again only when sumN changes.
+	sum  string
+	sumN int64
 	// After runs at the end of each Drain pass, after the code saves the
 	// checkpoint. internal/alert posts from it. Thus the code waits for a
 	// slow or failed webhook only after it records the lines of the pass.
@@ -200,27 +255,36 @@ func (t *Tail) sink() func(string) error {
 	}
 }
 
-// loadOffset reads "<bytes>[ <dev>:<ino>]". apply creates the file empty
-// first, so the sidecar can own it. An empty or unreadable offset counts
-// as no offset. If not, the code would ignore fromEnd and the first run
-// would replay the full log.
-func (t *Tail) loadOffset() (off int64, id fileID, ok bool) {
+// loadOffset reads "<bytes>[ <dev>:<ino>[ <head sum>]]". apply creates the
+// file empty first, so the sidecar can own it. An empty or unreadable
+// offset counts as no offset. If not, the code would ignore fromEnd and the
+// first run would replay the full log.
+//
+// A record from an older pf has no head sum. sum is then "", and attach
+// trusts the dev:ino pair as before. The other choice, to start again from
+// zero, would send each old alert in the log again after an upgrade. The
+// next save writes the head sum. A pf that does not know the head sum reads
+// only the first two fields, so it can also read the new record.
+func (t *Tail) loadOffset() (off int64, id fileID, sum string, ok bool) {
 	raw, err := os.ReadFile(t.OffsetPath)
 	if err != nil {
-		return 0, fileID{}, false
+		return 0, fileID{}, "", false
 	}
 	f := strings.Fields(string(raw))
 	if len(f) == 0 {
-		return 0, fileID{}, false
+		return 0, fileID{}, "", false
 	}
 	n, err := strconv.ParseInt(f[0], 10, 64)
 	if err != nil {
-		return 0, fileID{}, false
+		return 0, fileID{}, "", false
 	}
 	if len(f) > 1 {
 		id = parseID(f[1])
 	}
-	return n, id, true
+	if len(f) > 2 {
+		sum = parseSum(f[2])
+	}
+	return n, id, sum, true
 }
 
 func (t *Tail) saveOffset() error {
@@ -230,6 +294,17 @@ func (t *Tail) saveOffset() error {
 	mark := strconv.FormatInt(t.off, 10)
 	if t.id != (fileID{}) {
 		mark += " " + t.id.String()
+		// An offset of zero is correct for each file. Thus it needs no sum.
+		if n := min(t.off, headSpan); n > 0 && t.f != nil {
+			if n != t.sumN {
+				sum, err := headSum(t.f, n)
+				if err != nil {
+					return err
+				}
+				t.sum, t.sumN = sum, n
+			}
+			mark += " " + t.sum
+		}
 	}
 	if mark == t.saved {
 		return nil
@@ -261,6 +336,7 @@ func (t *Tail) shut() {
 		_ = t.f.Close()
 	}
 	t.f, t.r, t.off, t.id = nil, nil, 0, fileID{}
+	t.sum, t.sumN = "", 0
 }
 
 // attach opens Path. The rotation path sets restart. The saved offset of
@@ -279,7 +355,7 @@ func (t *Tail) attach(fromEnd, restart bool) error {
 	id := idOf(fi)
 	off := int64(0)
 	if !restart {
-		saved, savedID, ok := t.loadOffset()
+		saved, savedID, savedSum, ok := t.loadOffset()
 		switch {
 		case !ok && fromEnd:
 			off = fi.Size()
@@ -289,6 +365,11 @@ func (t *Tail) attach(fromEnd, restart bool) error {
 		// to use. Thus the offset file tells the inode in which it counted
 		// bytes. An offset from a different inode starts again from zero.
 		case savedID != (fileID{}) && savedID != id:
+			off = 0
+		// The inode number can be the same and the file another. The head
+		// sum tells. A file that has the same head and grew keeps its
+		// offset.
+		case savedSum != "" && !headIs(f, saved, savedSum):
 			off = 0
 		default:
 			off = saved
