@@ -349,7 +349,10 @@ func lifecycleTests(t *testing.T) {
 		before := shipVersion(t)
 		b := buildBundle(t, arch)
 		signBundle(t, release, b)
-		shipInstall(t, b, "-confirm-deadline 60s")
+		shipInstall(t, b, "-confirm-deadline 15s")
+		// The install arms the deadline before it returns. Thus at this
+		// time plus 15 s, the deadline is past. The 2 s more are margin.
+		due := time.Now().Add(17 * time.Second)
 		after := shipVersion(t)
 		if after == before {
 			t.Fatalf("ship did not raise the version")
@@ -361,7 +364,9 @@ func lifecycleTests(t *testing.T) {
 		// exactly one of them act. The other finds the lock held, and leaves
 		// ship.pending to the run that holds the lock. That run clears it
 		// only after its re-apply is done. Thus the test waits for the end state.
-		time.Sleep(70 * time.Second)
+		// A deadman run before the deadline does nothing. Then the timer
+		// of the box reverts in the next minute, inside the wait below.
+		time.Sleep(time.Until(due))
 		piApply(t, "sudo pf ship deadman")
 		eventually(t, 3*time.Minute, func() string {
 			if got := shipVersion(t); got != before {
