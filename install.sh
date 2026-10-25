@@ -135,9 +135,7 @@ main() {
   # docs/release.md "Signing": namespace pi-fortress-dist, principal
   # release@pi-fortress). It is embedded here, not left as a to-do, because
   # the repo already has it in allowed_signers form. PF_SIGNER_PUBKEY
-  # overrides it for key rotation, with no edit to this file. Releases up
-  # to v0.1.5 use the earlier key in verify.md; set PF_SIGNER_PUBKEY to it
-  # to install one of them.
+  # overrides it for key rotation, with no edit to this file.
   PF_SIGNER_PUBKEY="${PF_SIGNER_PUBKEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKVK/2pcp/J483O0Q/NvHVZr6jAR3uzMQfTabUh5B96R}"
   case "${PF_SIGNER_PUBKEY}" in
     "" | *PLACEHOLDER* | *TODO*)
