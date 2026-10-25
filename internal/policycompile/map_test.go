@@ -103,3 +103,46 @@ func TestCompileEmitsFeedMaps(t *testing.T) {
 		t.Fatal("feeds.map changed the compiled lists")
 	}
 }
+
+// An item that the operator lists is "local" in the maps, also when a feed
+// lists it too. The operator line is the reason for the block. The feed
+// label is for an item that only a feed carries.
+func TestFeedMapsLabelOperatorEntriesLocal(t *testing.T) {
+	pol := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(pol, "generated"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"generated/blacklist.domains": "both.example\nfeed.example\n",
+		"generated/blacklist.ips":     "192.0.2.7\n",
+		"generated/house.domains":     "ads.example\n",
+		"generated/feeds.map":         "both.example\turlhaus-domains-online\nfeed.example\turlhaus-domains-online\n192.0.2.7\tspamhaus-drop\nads.example\thagezi-pro\n",
+		"blacklist.domains":           "both.example\n",
+		"blacklist.ips":               "192.0.2.7\n",
+		"house.domains":               "ads.example\n",
+	}
+	for name, text := range files {
+		if err := os.WriteFile(filepath.Join(pol, name), []byte(text), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tmp := t.TempDir()
+	out := Out{
+		NFT:       filepath.Join(tmp, "elements.nft"),
+		DNS:       filepath.Join(tmp, "blocked.domains"),
+		HouseDNS:  filepath.Join(tmp, "house.domains"),
+		DomainMap: filepath.Join(tmp, "blocked-domains.map"),
+		IPMap:     filepath.Join(tmp, "blocked-ips.map"),
+	}
+	if _, err := Compile(pol, out); err != nil {
+		t.Fatal(err)
+	}
+	dm, _ := os.ReadFile(out.DomainMap)
+	if want := "both.example\tlocal\nfeed.example\turlhaus-domains-online\nads.example\tlocal\n"; string(dm) != want {
+		t.Fatalf("domain map:\n%s", dm)
+	}
+	im, _ := os.ReadFile(out.IPMap)
+	if want := "192.0.2.7\tlocal\n"; string(im) != want {
+		t.Fatalf("ip map:\n%s", im)
+	}
+}

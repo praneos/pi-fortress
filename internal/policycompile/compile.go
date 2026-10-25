@@ -131,7 +131,8 @@ type Out struct {
 	// DomainMap and IPMap receive one "<item>\t<feed>" line for each compiled
 	// sinkhole name (agent, then house) and for each blacklist prefix before
 	// coalescence. The feed comes from generated/feeds.map. It is "local" when
-	// the map does not name the item. pf observe
+	// the map does not name the item, or when a list of the operator
+	// (blacklist.*, house.domains) has the item. pf observe
 	// reads them to label a blocked event.
 	DomainMap string
 	IPMap     string
@@ -813,11 +814,14 @@ func ParseMap(text string) map[string]string {
 	return m
 }
 
-func mapLines(items []string, feeds map[string]string) string {
+// mapLines gives one "<item>\t<feed>" line for each item. An item in local
+// (the operator half of the list) is "local", also when a feed lists it
+// too: the operator line is the reason for the block.
+func mapLines(items []string, feeds map[string]string, local map[string]struct{}) string {
 	var b strings.Builder
 	for _, item := range items {
 		feed := feeds[item]
-		if feed == "" {
+		if _, ok := local[item]; ok || feed == "" {
 			feed = "local"
 		}
 		b.WriteString(item + "\t" + feed + "\n")
@@ -851,17 +855,17 @@ func compileOperatorIPs(src, kind, what string, warn *[]string, path string) ([]
 
 // compileHouse removes the entries of the two house feeds that refuseFeed
 // matches. The shipped defaults and house.domains of the operator compile
-// as written.
-func compileHouse(policyDir string, house SegmentPolicy, out Out, refuseFeed func([]string) []string) (houseFinal, houseVPNFinal []string, err error) {
+// as written. houseLocal is the set of house.domains, for the domain map.
+func compileHouse(policyDir string, house SegmentPolicy, out Out, refuseFeed func([]string) []string) (houseFinal, houseVPNFinal []string, houseLocal map[string]struct{}, err error) {
 	if out.HouseDNS == "" {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	// The shared never_block keeps registries and Google APIs reachable for
 	// agents. On the house side, it would protect ad hosts under google.com.
 	// The house list obeys only its own file.
 	houseNeverList, err := LoadTokens(filepath.Join(policyDir, house.File("never_block.domains")), "domains")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	houseNever := set(houseNeverList)
 	isNever := func(d string) bool { return IsNeverDomain(d, houseNever) }
@@ -869,37 +873,41 @@ func compileHouse(policyDir string, house SegmentPolicy, out Out, refuseFeed fun
 	// The defaults go first. Thus the head of the compiled file is the shipped
 	// baseline, and the volatile feed is in the middle of each diff.
 	for _, f := range []struct {
-		name string
-		feed bool
+		name  string
+		feed  bool
+		local bool
 	}{
-		{house.File("default.domains"), false},
-		{house.Generated("domains"), true},
-		{house.Sinkhole("domains"), false},
+		{house.File("default.domains"), false, false},
+		{house.Generated("domains"), true, false},
+		{house.Sinkhole("domains"), false, true},
 	} {
 		got, err := LoadTokens(filepath.Join(policyDir, f.name), "domains")
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		if f.feed {
 			got = refuseFeed(got)
 		}
+		if f.local {
+			houseLocal = set(got)
+		}
 		houseFinal = keepNew(houseFinal, got, seenHouse, isNever)
 	}
 	if err := writeFile(out.HouseDNS, dnsLines(houseFinal)); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if out.HouseVPNDNS == "" {
-		return houseFinal, nil, nil
+		return houseFinal, nil, houseLocal, nil
 	}
 	got, err := LoadTokens(filepath.Join(policyDir, HouseVPNFile), "domains")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	houseVPNFinal = keepNew(nil, refuseFeed(got), seenHouse, isNever)
 	if err := writeFile(out.HouseVPNDNS, dnsLines(houseVPNFinal)); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return houseFinal, houseVPNFinal, nil
+	return houseFinal, houseVPNFinal, houseLocal, nil
 }
 
 func compilePrivateDNS(policyDir string, house SegmentPolicy, out Out, dohDomains []string) ([]string, error) {
@@ -990,7 +998,7 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	if raw, err := os.ReadFile(filepath.Join(policyDir, "generated", "feeds.map")); err == nil {
 		feeds = ParseMap(string(raw))
 	}
-	if err := writeFile(out.IPMap, mapLines(ipKept, feeds)); err != nil {
+	if err := writeFile(out.IPMap, mapLines(ipKept, feeds, set(localIPs))); err != nil {
 		return Summary{}, err
 	}
 
@@ -1030,11 +1038,11 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	}
 
 	house := SegmentFor(AllowByDefault)
-	houseFinal, houseVPNFinal, err := compileHouse(policyDir, house, out, refuseFeed)
+	houseFinal, houseVPNFinal, houseLocal, err := compileHouse(policyDir, house, out, refuseFeed)
 	if err != nil {
 		return Summary{}, err
 	}
-	if err := writeFile(out.DomainMap, mapLines(domainFinal, feeds)+mapLines(houseFinal, feeds)+mapLines(houseVPNFinal, feeds)); err != nil {
+	if err := writeFile(out.DomainMap, mapLines(domainFinal, feeds, set(localDomains))+mapLines(houseFinal, feeds, houseLocal)+mapLines(houseVPNFinal, feeds, nil)); err != nil {
 		return Summary{}, err
 	}
 
