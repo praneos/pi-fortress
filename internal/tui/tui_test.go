@@ -433,6 +433,31 @@ func TestIdleExit(t *testing.T) {
 	if a.ctx.Err() == nil {
 		t.Fatal("action context alive after exit")
 	}
+	if !strings.Contains(f.Last(), idleNote) {
+		t.Fatalf("idle exit left no note on the tty: %q", f.Last())
+	}
+}
+
+// Help names the idle exit, and says what can lock the seat, on a stock
+// 80x24 terminal.
+func TestHelpNamesIdleExit(t *testing.T) {
+	c, _ := testConfig(t)
+	f := run(t, c, NewFake(80, 24).Type("?"))
+	if !strings.Contains(f.Last(), "the login manager can lock") {
+		t.Fatalf("help does not name the idle exit:\n%s", f.Last())
+	}
+}
+
+// The idle note is for the idle exit only. A q is a choice of the operator,
+// and needs no explanation.
+func TestQuitWritesNoIdleNote(t *testing.T) {
+	c, _ := testConfig(t)
+	f := run(t, c, NewFake(80, 24).Type("q"))
+	for _, fr := range f.Frames {
+		if strings.Contains(fr, idleNote) {
+			t.Fatalf("q wrote the idle note: %q", fr)
+		}
+	}
 }
 
 func TestIdleWaitsForRunningAction(t *testing.T) {
@@ -448,6 +473,9 @@ func TestIdleWaitsForRunningAction(t *testing.T) {
 	waitRun(t, done, 3*time.Second)
 	if time.Since(start) < 250*time.Millisecond || !strings.Contains(strings.Join(a.pane, "\n"), "done") {
 		t.Fatal(time.Since(start), a.pane)
+	}
+	if !strings.Contains(f.Last(), idleNote) {
+		t.Fatalf("idle exit after the action left no note on the tty: %q", f.Last())
 	}
 }
 

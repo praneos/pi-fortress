@@ -116,6 +116,9 @@ type App struct {
 	// login manager must lock the console, not this code.
 	Idle    time.Duration
 	idleHit bool
+	// idleOut is true when the idle timer ended Run. Run then writes
+	// idleNote to the restored terminal.
+	idleOut bool
 	ctx     context.Context
 	cancel  context.CancelFunc
 
@@ -175,6 +178,14 @@ func (a *App) Run() error {
 	// after the cancel and after the restore.
 	var workers sync.WaitGroup
 	defer workers.Wait()
+	// After the restore, so that the line stays on the shell screen. An
+	// operator who comes back to a shell prompt must not read it as a
+	// logout.
+	defer func() {
+		if a.idleOut {
+			_ = a.t.Write([]byte(idleNote + "\n"))
+		}
+	}()
 	defer a.t.Restore()
 	a.ctx, a.cancel = context.WithCancel(context.Background())
 	defer a.cancel()
@@ -208,6 +219,7 @@ func (a *App) Run() error {
 				a.idleHit = true
 				continue
 			}
+			a.idleOut = true
 			return nil
 		}
 		if stop, err := a.dispatch(ev, idle); stop {
@@ -313,6 +325,7 @@ func (a *App) finishApply(done error) bool {
 		// Painted first: an apply that ran longer than the idle timer
 		// ends on its result, not on the line before it.
 		a.draw()
+		a.idleOut = true
 		return true
 	}
 	return false
@@ -330,6 +343,10 @@ func nonEmpty(s ...string) []string {
 	}
 	return out
 }
+
+// idleNote is the line that the idle exit leaves on the tty. The idle exit
+// is not a logout. The shell that started the TUI is still open.
+const idleNote = "session still open; the TUI did not lock the console"
 
 func (a *App) idleWait() time.Duration {
 	if a.Idle > 0 {
@@ -1283,6 +1300,8 @@ var helpText = []string{
 	"Left/Right      section          Tab       next list or view",
 	"j/k, PgUp/PgDn  move             ^R, F5    refresh",
 	"A               apply edits      q (menu)  quit",
+	"No key for some time stops the TUI; its shell stays open. Only",
+	"the login manager can lock this seat.",
 	"",
 	"Every network has Devices, Filtering, Activity and Settings;",
 	"the agent network also has Keys. System is the Pi itself:",
