@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"pi-fortress/internal/testsupport"
 )
 
 var (
@@ -277,6 +279,39 @@ func TestTornLine(t *testing.T) {
 	}
 	if n, _ := tab.Name(c); n != "c.example" {
 		t.Fatalf("c: %q", n)
+	}
+}
+
+// OpenPool cuts a torn last line off the journal. It does not close it
+// with a newline. A closed torn line would read as a full record with a
+// cut name, for the broker now and for the pool at the next restart.
+func TestTornLineIsDropped(t *testing.T) {
+	path := journal(t)
+	full := "1800000000 198.18.0.1 a.example\n"
+	torn := "1800000000 198.18.0.9 b.exa"
+	if err := os.WriteFile(path, []byte(full+torn), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	p := open(t, pool16, path)
+	if got := testsupport.ReadFile(t, path); got != full {
+		t.Fatalf("journal after open is %q, want %q", got, full)
+	}
+	if _, ok := p.byName["b.exa"]; ok {
+		t.Fatal("pool loaded the torn record")
+	}
+	c := assign(t, p, "c.example", t0)
+	want := full + string(line(t0.Unix(), c, "c.example"))
+	if got := testsupport.ReadFile(t, path); got != want {
+		t.Fatalf("journal after append is %q, want %q", got, want)
+	}
+	torn9 := netip.MustParseAddr("198.18.0.9")
+	if n, ok := NewTable(pool16, path).Name(torn9); ok {
+		t.Fatalf("reader maps %v to the torn name %q", torn9, n)
+	}
+	p.Close()
+	q := open(t, pool16, path)
+	if _, ok := q.byAddr[torn9]; ok {
+		t.Fatal("pool loaded the torn record after a restart")
 	}
 }
 

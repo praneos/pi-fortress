@@ -95,14 +95,21 @@ func OpenPool(prefix netip.Prefix, journal string) (*Pool, error) {
 		return nil, err
 	}
 	// A power cut can leave a torn last line with no newline. The next
-	// append would glue onto it, and both would be lost. A close of it
-	// here costs the torn line, which is lost in any case.
-	if st, err := f.Stat(); err == nil && st.Size() > n {
-		if _, err := f.Write([]byte{'\n'}); err != nil {
+	// append would glue onto it, and both would be lost. If a newline
+	// closed it, a reader would then parse the cut text as a full line, for
+	// example a cut name. So the file is cut back to the end of the last
+	// complete line. The torn line is lost in any case, and each reader
+	// stops before it, so no reader has an offset past n.
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if st.Size() > n {
+		if err := f.Truncate(n); err != nil {
 			f.Close()
 			return nil, err
 		}
-		p.lines++
 	}
 	if err := p.maybeCompact(); err != nil {
 		f.Close()
