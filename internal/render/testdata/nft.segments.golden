@@ -16,6 +16,7 @@ table inet fortress {
 
   set resolved_v4 {
     type ipv4_addr
+    size 65535
     flags timeout
     timeout 2h
   }
@@ -28,12 +29,14 @@ table inet fortress {
 
   set resolved_desk_v4 {
     type ipv4_addr
+    size 65535
     flags timeout
     timeout 2h
   }
 
   set resolved_guest_v4 {
     type ipv4_addr
+    size 65535
     flags timeout
     timeout 2h
   }

@@ -693,7 +693,9 @@ done
 # existed. A warm cache is never a reason to leave the fence
 # half-loaded.
 RESOLVED_CARRY="${WORKDIR}/resolved-sets.carry"
-if nft list table inet fortress >/dev/null 2>&1; then
+# -t: the probe needs only to know that the table exists. Without it, nft
+# also prints each element of each set, blacklist_v4 included.
+if nft -t list table inet fortress >/dev/null 2>&1; then
   "${PF}" nftsets save --table "inet fortress" --file "${RESOLVED_CARRY}" ||
     echo "pi-fortress: could not read the resolved-address sets; they come back empty and a client that answers from its own DNS cache waits out that cache before the gate lets it through again" >&2
 fi

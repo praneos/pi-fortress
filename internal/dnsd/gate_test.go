@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -247,21 +248,27 @@ func TestNftCmdRefreshIsOneCommandLine(t *testing.T) {
 // setTimeout is the resolved_* timeout of render, written down a second
 // time. The gate element life is what every answer is cut to fit. The
 // test reads it from the render source, so the two cannot become
-// different without notice.
+// different without notice. render declares each resolved set with
+// resolvedSet: the agent's, the house's and the one of each segment.
 func TestSetTimeoutIsRendersSetTimeout(t *testing.T) {
 	src, err := os.ReadFile("../render/ruleset.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	re := regexp.MustCompile(`set (resolved[^ ]*|" \+ set \+ ") \{(?:\\n|\s)+type ipv4_addr(?:\\n|\s)+flags timeout(?:\\n|\s)+timeout (\w+)`)
-	found := re.FindAllStringSubmatch(string(src), -1)
-	if len(found) < 3 {
-		t.Fatalf("found %d resolved set definitions in render, want the agent's, the house's and the segments'", len(found))
+	re := regexp.MustCompile(`func resolvedSet\(name string\) string \{\s*return "  set " \+ name \+ " \{\\n    type ipv4_addr\\n    size " \+ [^"]+"\\n    flags timeout\\n    timeout (\w+)\\n  \}"`)
+	m := re.FindStringSubmatch(string(src))
+	if m == nil {
+		t.Fatal("no resolvedSet declaration with a timeout in render")
 	}
-	for _, m := range found {
-		d, err := time.ParseDuration(m[2])
-		if err != nil || d != setTimeout {
-			t.Errorf("render gives %s a timeout of %s; dnsd assumes %s", m[1], m[2], setTimeout)
+	if d, err := time.ParseDuration(m[1]); err != nil || d != setTimeout {
+		t.Errorf("render gives the resolved sets a timeout of %s; dnsd assumes %s", m[1], setTimeout)
+	}
+	for _, use := range []string{`resolvedSet("resolved_v4")`, `resolvedSet("resolved_house_v4")`, `resolvedSet(set)`} {
+		if !strings.Contains(string(src), use) {
+			t.Errorf("render does not declare a resolved set with %s", use)
 		}
+	}
+	if n := strings.Count(string(src), "flags timeout"); n != 1 {
+		t.Errorf("render has %d sets with flags timeout, want only resolvedSet", n)
 	}
 }

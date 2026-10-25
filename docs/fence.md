@@ -503,6 +503,11 @@ there is an address gate:
   segment into `resolved_v4` (`flags timeout`, 2 h). A cache hit does not
   write the set again. Thus pf dns cuts the TTL of a cached answer to the
   time that its elements have left in the set.
+- One answer puts at most 16 addresses into the set on an address-only
+  segment (the 16 that the client gets), and at most 64 on a segment that
+  gets the full answer. Each resolved set has `size 65535`. When a set is full, the
+  kernel refuses the add. pf dns logs the error and answers SERVFAIL, and
+  the set gets space again as its elements expire.
 - `chain resolver_gate` drops a *new* TCP 443 connection from the agent
   segment to any address outside that set, `PI_IP`, the TEST-NET-1 canaries,
   and the `direct_ip.allow` of the operator.
