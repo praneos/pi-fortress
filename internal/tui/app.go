@@ -1294,7 +1294,7 @@ var helpText = []string{
 	"one at a time under " + admin.ApplyLockPath + ", for as",
 	"long as it takes; quitting kills it, so wait for done. When a",
 	"fence input changed, open agent connections drop.",
-	"On Activity, ^ before a threat is a row the Pi saw and did",
+	"On Activity and Overview, ^ marks a threat the Pi saw and did",
 	"not stop, such as a neighbour claiming an address. ! marks a",
 	"standing fault, such as a sealed store or a stale feed.",
 	"",

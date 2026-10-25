@@ -54,13 +54,34 @@ func (a *App) buildOverview() []row {
 		}
 	}
 
+	// A threat that the Pi saw and did not stop is the most important fact
+	// on the box. Before, only Activity showed it. The count is the events
+	// that Activity shows: the newest rows of the observe ring, at most
+	// seven days. They are marked with seenMark, not with "!", because they
+	// are events, not a standing fault.
+	alerts := map[string]int{}
+	for _, e := range a.stats.Events {
+		if e.Alert {
+			alerts[e.Segment]++
+		}
+	}
+	var seen []string
+	for _, e := range a.netList() {
+		if n := alerts[e.id]; n > 0 {
+			seen = append(seen, fmt.Sprintf("%d %s seen and not stopped on %s (Activity)", n, plural(n, "threat"), e.label))
+		}
+	}
+
 	var rows []row
-	if len(problems) == 0 {
+	if len(problems)+len(seen) == 0 {
 		rows = append(rows, row{text: "All good"})
 	} else {
 		rows = append(rows, row{text: "Needs attention"})
 		for _, p := range problems {
 			rows = append(rows, row{text: "  ! " + p})
+		}
+		for _, p := range seen {
+			rows = append(rows, row{text: "  " + seenMark + " " + p})
 		}
 	}
 	rows = append(rows, row{text: ""}, row{text: fmt.Sprintf(overviewFmt, "network", "devices", "blocked today", "notes")})
@@ -77,7 +98,11 @@ func (a *App) buildOverview() []row {
 		if days := a.stats.Series[e.id]; len(days) > 0 {
 			blocked = fmt.Sprint(days[len(days)-1].Blocked)
 		}
-		rows = append(rows, row{text: strings.TrimRight(fmt.Sprintf(overviewFmt, clip(e.label, 16), fmt.Sprint(devices), blocked, a.netNotes(e.id, house, st, ifaces)), " ")})
+		notes := a.netNotes(e.id, house, st, ifaces)
+		if n := alerts[e.id]; n > 0 {
+			notes = strings.TrimRight(fmt.Sprintf("%s %d not stopped  %s", seenMark, n, notes), " ")
+		}
+		rows = append(rows, row{text: strings.TrimRight(fmt.Sprintf(overviewFmt, clip(e.label, 16), fmt.Sprint(devices), blocked, notes), " ")})
 	}
 	rows = append(rows, row{text: ""}, row{text: a.piLine(st)})
 	return rows
@@ -122,6 +147,13 @@ func (a *App) piLine(st admin.Status) string {
 		figure(s.Has("temp"), "%.0fC", s.TempC),
 		figure(s.Has("mem"), "%.0f%%", s.MemUsedPct),
 		apply)
+}
+
+func plural(n int, s string) string {
+	if n == 1 {
+		return s
+	}
+	return s + "s"
 }
 
 // checked is get for the verdict of the Overview. A verb that fails, or
