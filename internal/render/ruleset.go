@@ -1098,6 +1098,11 @@ func segEgress(chain string, s Segment) string {
 	return "\n\n  chain " + chain + " {" + body + "\n  }"
 }
 
+// nftTemplate starts with `flush ruleset` on purpose: pf owns the whole
+// ruleset of the Pi. apply loads this file, and nftables.service loads it
+// again at each boot. Thus each table that pf did not write (docker,
+// fail2ban, firewalld, an operator table) goes, and no such table can
+// send traffic around the fence. pf doctor names those tables (rung nft).
 var nftTemplate = template.Must(template.New("nft").Parse(`#!/usr/sbin/nft -f
 flush ruleset
 

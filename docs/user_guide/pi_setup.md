@@ -60,6 +60,8 @@ sudo reboot
 ```
 `nftables` is the Linux firewall that Pi Fortress uses to filter and route traffic. The commands above install it. You do not configure it directly. The later steps and `pf apply` configure it for you.
 
+`pf` owns the whole nftables ruleset of the Pi. Each `pf apply` replaces the full ruleset, and `nftables.service` loads the same file again at each boot. Thus a table that `pf` did not write does not survive the next apply or boot. This includes the tables of docker, fail2ban and firewalld, and tables that you add yourself. This is intentional: no other table can send traffic around the fence. Do not run those tools on the Pi. To open a port or change the filter, use the inputs of `pf`, for example `ALLOW_PORTS` or `EGRESS` in a segment file (step 8). The `nft` rung of `pf doctor` names each table that `pf` does not own.
+
 Steps 3 to 5 run `pf`. Thus, install `pf` first, with step 6. The `pf` installer proposes the uplink and agent ports itself. Steps 3 to 5 explain these choices and how to change them.
 
 ## 3. Choose the uplink
@@ -651,6 +653,7 @@ sudo pf tui
 !!! warning
     - Do not give the agent interface of the Pi a gateway or DNS server, or name it in a blocklist or allow list. (The agent machines do use the Pi as their gateway and DNS, step 5.)
     - Do not manage the gateway from the agent side. From the agent side, only DNS (53), the certificate server (80), the gateway engine (8080), and ping reach the Pi. The gateway drops all other traffic.
+    - Do not run docker, fail2ban, firewalld or your own nftables tables on the Pi. Each `pf apply` and each boot removes their tables (step 2).
     - Do not put the certificate-authority bootstrap of the agent on a shared switch.
     - Do not leave the Pi where other persons can take it. The SD card holds the live credentials and the gateway CA key. They are not encrypted, unless you seal the store (`pf enroll seal`, refer to the [FAQ](faq.md)). If the card is lost, revoke and re-enrol each credential, replace the gateway CA, and run `setup.sh` again on each agent.
 
