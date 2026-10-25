@@ -89,8 +89,14 @@ func (b *Broker) alertRefusal(cause fence.RefusalCause) bool {
 	// the fence could not decode is different. An ordinary client that
 	// compresses its uploads with zstd gets a refusal on each request. A post
 	// for each would use all of the hourly cap of the webhook before a real
-	// strip arrives. It alerts one time, like the conditions below.
-	if cause == fence.CauseKindNotAllowed || cause == fence.CauseOutsideHeader || cause == fence.CausePlaceholderInWS || cause == fence.CauseEncodedBodyToken || cause == fence.CauseKeyInHeaderName || cause == fence.CauseKeyInMethod || cause == fence.CauseEncodedURLToken || cause == fence.CauseLiveInHost || cause == fence.CauseLiveInConnection {
+	// strip arrives. It alerts one time, like the conditions below. A
+	// repeated credential header is an attempt to make the origin read a
+	// value that the fence did not decide on. No ordinary client sends it.
+	switch cause {
+	case fence.CauseKindNotAllowed, fence.CauseOutsideHeader, fence.CausePlaceholderInWS,
+		fence.CauseEncodedBodyToken, fence.CauseKeyInHeaderName, fence.CauseKeyInMethod,
+		fence.CauseEncodedURLToken, fence.CauseLiveInHost, fence.CauseLiveInConnection,
+		fence.CauseRepeatedCredHeader:
 		return true
 	}
 	b.useMu.Lock()

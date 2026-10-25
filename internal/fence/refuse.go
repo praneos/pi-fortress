@@ -124,6 +124,13 @@ const (
 	// does after that decision. Thus the fence cannot strip the value in
 	// place, and it refuses the request. Where names the field.
 	CauseLiveInConnection RefusalCause = "live_in_connection"
+	// CauseRepeatedCredHeader is a credential header that occurs more than
+	// one time: X-Api-Key, or a header that the core.hosts line of the host
+	// declares. The fence writes a credential by name, and the origin can
+	// read either field. Thus the origin can read a value that is different
+	// from the value that the fence decided on. httpwire refuses a repeated
+	// Authorization before the fence runs. Where names the second field.
+	CauseRepeatedCredHeader RefusalCause = "repeated_credential_header"
 )
 
 type Refusal struct {
@@ -214,6 +221,26 @@ func (s *scanner) noteNames(fields httpwire.Fields) {
 	}
 	if s.all.match(b) {
 		s.refuse(CauseKeyInHeaderName, "", "", "header_name")
+	}
+}
+
+// noteRepeats refuses the request when a header that the fence writes a
+// credential into for this host occurs more than one time. A host that
+// gets no credential has no such header.
+func (s *scanner) noteRepeats(fields httpwire.Fields) {
+	if !s.inject {
+		return
+	}
+	seen := map[string]bool{}
+	for _, f := range fields {
+		name := strings.ToLower(f.Name)
+		if !corepolicy.DefaultHeader(name) && s.extra[name] == nil {
+			continue
+		}
+		if seen[name] {
+			s.refuse(CauseRepeatedCredHeader, "", "", "header:"+f.Name)
+		}
+		seen[name] = true
 	}
 }
 

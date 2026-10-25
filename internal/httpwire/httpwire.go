@@ -32,7 +32,9 @@ var (
 )
 
 // singleton reports the fields that must not repeat. The fence rewrites
-// them by name, and the origin must see exactly what the fence saw.
+// them by name, and the origin must see exactly what the fence saw. The
+// fence refuses a repeat of the other credential headers, because only the
+// fence knows which headers a host declares.
 func singleton(name string) bool {
 	switch strings.ToLower(name) {
 	case "host", "authorization", "cookie":

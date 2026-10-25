@@ -283,8 +283,13 @@ other origin server returns `access_token`, it is data.
 
 The HTTP layer of the broker (`internal/httpwire`, no `net/http`) is strict
 where the fence rewrites by name. It rejects a repeated `Host`,
-`Authorization`, or `Cookie`. Reason: the fence rewrites the first one, and
-the origin server must see exactly what the fence saw.
+`Authorization`, or `Cookie` with a `400`. Reason: the fence rewrites the
+first one, and the origin server must see exactly what the fence saw. The
+fence refuses a repeat of each other header that it writes a credential into
+for the host: `X-Api-Key`, and each header that the `core.hosts` line of the
+host declares (`repeated_credential_header`, an alert, §5.2b). The name
+matches in any letter case. A host that gets no credential has no such
+header, so these headers can repeat toward it.
 
 The broker forwards only an origin-form target (`/...`), or `*` with
 `OPTIONS`. Reasons:
@@ -612,6 +617,9 @@ Substitution can fail for these reasons:
 - A `Connection` or an `Upgrade` holds a live value or a token-prefix match
   (`live_in_connection`). The broker decided on a WebSocket from these
   headers, so a strip there makes the origin server do a different thing.
+- A header that the fence writes a credential into for the host occurs more
+  than one time (`repeated_credential_header`). The origin server can read
+  either field, and thus a value that the fence did not decide on.
 
 For all of them, the agent gets one response, byte for byte: a 503 with
 `Retry-After: 60` and a body that names no cause. The broker refuses the
@@ -636,9 +644,9 @@ writes each cause to the strip log as `substitution_refused`, with the cause,
 slot, kind, and SNI. `kind_not_allowed_for_sni`,
 `placeholder_outside_header`, `placeholder_in_ws` (5.3c),
 `encoded_body_token`, `key_in_header_name`, `key_in_method`,
-`encoded_url_token`, `live_in_host`, and `live_in_connection` are always
-marked `alert`. Each other cause is marked `alert` one time for each broker
-start. These nine are not an operational fault to fix. They show the fence
+`encoded_url_token`, `live_in_host`, `live_in_connection`, and
+`repeated_credential_header` are always marked `alert`. Each other cause is
+marked `alert` one time for each broker start. These ten are not an operational fault to fix. They show the fence
 catching a credential aimed where it may not go. This is the signature of a compromised or badly broken
 agent. A `live_in_host` row has the SNI as its `host`, so the live value goes
 to no log and no webhook. The broker writes some rows before the fence runs:

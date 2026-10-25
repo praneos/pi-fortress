@@ -157,6 +157,48 @@ func TestDeclaredCredentialHeaderPerBinding(t *testing.T) {
 	}
 }
 
+// The fence writes a credential into a header by name. A second field
+// with the same name gives the origin two values to choose from, and the
+// fence cannot know which one the origin reads. Thus a repeated credential
+// header refuses the request, in any letter case. A header that the host
+// does not declare can repeat, and a host that gets no credential has no
+// credential header.
+func TestRepeatedCredentialHeaderRefused(t *testing.T) {
+	pol := headerPolicy(t, "api.anthropic.com ANTHROPIC_API_KEY\ngitlab.com GITLAB_TOKEN:PRIVATE-TOKEN\nb.example GITLAB_TOKEN\nc.example API_KEY:api-key\n")
+	ph := secrets.Placeholder(kindSlot, "ANTHROPIC_API_KEY")
+	run := func(sni, fields string) (*httpwire.Request, error) {
+		req := parseReq(t, "GET / HTTP/1.1\r\nHost: "+sni+"\r\n"+fields+"\r\n")
+		_, err := Decide(Ctx{SNI: sni, TokenRE: mustRE(t)}, req, pol, kindSlots())
+		return req, err
+	}
+	for _, c := range []struct{ sni, fields, where string }{
+		{"api.anthropic.com", "X-Api-Key: " + ph + "\r\nx-api-key: " + ph + "\r\n", "header:x-api-key"},
+		{"api.anthropic.com", "X-Api-Key: a\r\nX-API-KEY: b\r\n", "header:X-API-KEY"},
+		{"gitlab.com", "PRIVATE-TOKEN: a\r\nPrivate-Token: b\r\n", "header:Private-Token"},
+		{"c.example", "api-key: a\r\nX-Note: n\r\nAPI-KEY: b\r\n", "header:API-KEY"},
+	} {
+		req, err := run(c.sni, c.fields)
+		want := Refusal{Cause: CauseRepeatedCredHeader, Where: c.where}
+		if rs := refusalsOf(t, err); len(rs) != 1 || rs[0] != want {
+			t.Fatalf("%s %q: %+v", c.sni, c.fields, rs)
+		}
+		for _, v := range req.Values("x-api-key") {
+			if strings.Contains(v, "sk-ant-") {
+				t.Fatalf("%s: a refused request was substituted into: %q", c.sni, v)
+			}
+		}
+	}
+	for _, c := range []struct{ sni, fields string }{
+		{"b.example", "PRIVATE-TOKEN: a\r\nPRIVATE-TOKEN: b\r\n"},
+		{"example.com", "X-Api-Key: a\r\nX-Api-Key: b\r\n"},
+		{"gitlab.com", "X-Note: a\r\nX-Note: b\r\n"},
+	} {
+		if _, err := run(c.sni, c.fields); err != nil {
+			t.Fatalf("%s %q: %v", c.sni, c.fields, err)
+		}
+	}
+}
+
 // The strip behaviour does not change: a live value of a kind that the
 // host does not bind strips from any header, a credential header or not.
 func TestLiveValueStillStrippedInEveryHeader(t *testing.T) {

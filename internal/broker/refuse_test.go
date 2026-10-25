@@ -327,6 +327,41 @@ func TestLiveValueInConnectionAlertsEachTime(t *testing.T) {
 	}
 }
 
+// A repeated credential header is an attempt to make the origin read a
+// value that the fence did not decide on. Each one alerts, the agent gets
+// the one refusal, and the origin gets no request.
+func TestRepeatedCredentialHeaderAlertsEachTime(t *testing.T) {
+	b, _ := testBroker(t)
+	b.Logs = &jsonl.Writer{StripPath: filepath.Join(t.TempDir(), "strip.jsonl")}
+	var got atomic.Bool
+	rawUpstream(t, b, func(int, *httpwire.Request, net.Conn) bool { got.Store(true); return false })
+	raw := "GET / HTTP/1.1\r\nHost: api.anthropic.com\r\nX-Api-Key: a\r\nx-api-key: b\r\n\r\n"
+	for range 3 {
+		resp := rawRoundtrip(t, b, anthropic, raw)
+		if !strings.Contains(resp, "503 Service Unavailable") || !strings.HasSuffix(resp, RefusedBody) {
+			t.Fatalf("not the one refusal: %q", resp)
+		}
+	}
+	time.Sleep(20 * time.Millisecond)
+	if got.Load() {
+		t.Fatal("a refused request reached the origin")
+	}
+	body, _ := os.ReadFile(b.Logs.StripPath)
+	alerts := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(body)), "\n") {
+		var r jsonl.Refused
+		if err := json.Unmarshal([]byte(line), &r); err != nil {
+			t.Fatal(err)
+		}
+		if r.Cause == "repeated_credential_header" && r.Alert && r.Where == "header:x-api-key" {
+			alerts++
+		}
+	}
+	if alerts != 3 {
+		t.Fatalf("%d alerts, want 3:\n%s", alerts, body)
+	}
+}
+
 // A key in a field name is attempted egress, like a placeholder aimed at a
 // wrong host. Each one alerts, and the agent gets the one refusal.
 func TestKeyInHeaderNameAlertsEachTime(t *testing.T) {

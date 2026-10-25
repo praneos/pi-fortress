@@ -671,6 +671,7 @@ func plan(s *scanner, req *httpwire.Request) PlanResult {
 	}
 	s.noteMethod(req.Method)
 	s.noteNames(req.Fields)
+	s.noteRepeats(req.Fields)
 	for i, f := range req.Fields {
 		if framingHeader(f.Name) {
 			continue
