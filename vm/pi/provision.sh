@@ -70,6 +70,26 @@ check_signers() {
   fi
 }
 
+# check_rsync returns 0 when rsync --version is 3.2.7 or later. Else it
+# says why on stderr and returns 1. The pfship key runs rrsync, which
+# runs this rsync. 3.2.7 is the rsync of each supported OS (Debian 12 and
+# 13, Raspberry Pi OS, Ubuntu 24.04) or older than it. The distributions
+# put later fixes into the package and keep the version number, so apt
+# updates (unattended-upgrades) must stay on.
+check_rsync() {
+  local out have
+  out="$(rsync --version 2>/dev/null)" || out=""
+  if [[ ! "${out}" =~ version[[:space:]]+v?([0-9]+)\.([0-9]+)\.([0-9]+) ]]; then
+    echo "pi-fortress: cannot read the rsync version (rsync --version)" >&2
+    return 1
+  fi
+  have="${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}"
+  if ((10#${BASH_REMATCH[1]} * 1000000 + 10#${BASH_REMATCH[2]} * 1000 + 10#${BASH_REMATCH[3]} < 3002007)); then
+    echo "pi-fortress: rsync ${have} is older than 3.2.7, the oldest rsync that signed ship takes" >&2
+    return 1
+  fi
+}
+
 # A signer file to install is checked before apt, so a bad line costs
 # nothing and the box keeps the file it has.
 if [[ -n "${PF_ALLOWED_SIGNERS:-}" ]]; then
@@ -305,15 +325,18 @@ fi
 usermod -p '*' pfship
 install -d -m 0755 -o root -g root "${PF_SHIP_HOME}" "${PF_SHIP_HOME}/.ssh"
 install -d -m 0700 -o pfship -g pfship "${PF_INCOMING}"
-RRSYNC=""
-for _r in /usr/bin/rrsync /usr/share/doc/rsync/scripts/rrsync; do
-  if [[ -x "${_r}" ]]; then
-    RRSYNC="${_r}"
-    break
+# Only the rrsync of the rsync package (/usr/bin/rrsync), which check_rsync
+# checks. An older copy in another place is not used.
+RRSYNC=/usr/bin/rrsync
+if [[ ! -x "${RRSYNC}" ]]; then
+  echo "pi-fortress: rrsync not found at /usr/bin/rrsync (the rsync package ships it from 3.2.4); pfship gets no key and signed ship stays off" >&2
+elif ! check_rsync; then
+  # A key from an earlier provision must not stay on an rsync that is too
+  # old. The file stays, empty, so sshd takes no key for pfship.
+  if [[ -s "${PF_SHIP_HOME}/.ssh/authorized_keys" ]]; then
+    install -m 0644 -o root -g root /dev/null "${PF_SHIP_HOME}/.ssh/authorized_keys"
   fi
-done
-if [[ -z "${RRSYNC}" ]]; then
-  echo "pi-fortress: rrsync not found at /usr/bin/rrsync (rsync >= 3.2.4 ships it, bookworm and trixie do); pfship gets no key and signed ship stays off" >&2
+  echo "pi-fortress: pfship gets no key and signed ship stays off. Update rsync (apt-get install rsync) and run provision.sh again" >&2
 elif [[ ! -f "${PF_SHIP_PUBKEY}" ]]; then
   echo "pi-fortress: ${PF_SHIP_PUBKEY} missing; pfship gets no key (docs/signed_ship.md, setup)" >&2
 else

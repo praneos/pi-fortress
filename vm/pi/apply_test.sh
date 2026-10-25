@@ -1198,6 +1198,47 @@ fi
 grep -q 'has no namespaces= option' "${tmp}/sig.err" || fail "provision.sh signer refusal is unclear: $(cat "${tmp}/sig.err")"
 [[ ! -e "${tmp}/sig.acted" ]] || fail "provision.sh acted before it refused PF_ALLOWED_SIGNERS"
 
+# provision.sh gives pfship its key only with rsync 3.2.7 or later. The
+# rsync stub prints the version line; PATH holds only the stub.
+mkdir -p "${tmp}/rsyncbin"
+(
+  # shellcheck source=/dev/null
+  source <(sed -n '/^check_rsync() {$/,/^}$/p' "${prov}")
+  _rs() { # version-line want(ok|old|bad)
+    printf '#!/bin/bash\nprintf "%%s\\n" "%s" "" "Copyright (C) 1996-2025"\n' "$1" >"${tmp}/rsyncbin/rsync"
+    chmod +x "${tmp}/rsyncbin/rsync"
+    if PATH="${tmp}/rsyncbin" check_rsync 2>"${tmp}/rsync.err"; then
+      [[ "$2" == ok ]] || fail "check_rsync accepted '$1'"
+    else
+      [[ "$2" != ok ]] || fail "check_rsync refused '$1': $(cat "${tmp}/rsync.err")"
+      case "$2" in
+        old) grep -qF 'is older than 3.2.7' "${tmp}/rsync.err" || fail "check_rsync refusal of '$1' is unclear: $(cat "${tmp}/rsync.err")" ;;
+        bad) grep -qF 'cannot read the rsync version' "${tmp}/rsync.err" || fail "check_rsync refusal of '$1' is unclear: $(cat "${tmp}/rsync.err")" ;;
+      esac
+    fi
+  }
+  _rs 'rsync  version 3.2.7  protocol version 31' ok
+  _rs 'rsync  version 3.4.1  protocol version 32' ok
+  _rs 'rsync  version 3.10.0  protocol version 32' ok
+  _rs 'rsync  version 4.0.0pre1  protocol version 33' ok
+  _rs 'rsync  version v3.2.3  protocol version 31' old
+  _rs 'rsync  version 3.2.6  protocol version 31' old
+  _rs 'rsync  version 3.1.3  protocol version 31' old
+  _rs 'rsync  version 2.6.9  protocol version 29' old
+  _rs 'rsync: unknown option' bad
+  mv "${tmp}/rsyncbin/rsync" "${tmp}/rsync.off"
+  PATH="${tmp}/rsyncbin" check_rsync 2>"${tmp}/rsync.err" && fail "check_rsync accepted a box with no rsync"
+  grep -qF 'cannot read the rsync version' "${tmp}/rsync.err" || fail "check_rsync with no rsync is unclear: $(cat "${tmp}/rsync.err")"
+)
+# The check stands between the rrsync check and the key, and a refusal
+# empties a key from an earlier provision.
+_chk="$(grep -nx 'elif ! check_rsync; then' "${prov}" | head -1 | cut -d: -f1)"
+_key="$(grep -n "printf 'restrict,command=" "${prov}" | head -1 | cut -d: -f1)"
+[[ -n "${_chk}" && -n "${_key}" && "${_chk}" -lt "${_key}" ]] || fail "provision.sh does not check the rsync version before it writes the pfship key"
+sed -n "${_chk},${_key}p" "${prov}" | grep -qF 'install -m 0644 -o root -g root /dev/null "${PF_SHIP_HOME}/.ssh/authorized_keys"' ||
+  fail "provision.sh keeps an old pfship key when rsync is too old"
+grep -qF 'doc/rsync/scripts/rrsync' "${prov}" && fail "provision.sh still takes an rrsync from outside the rsync package"
+
 # A second provision keeps the lists of the operator. On a box with no
 # tree, /etc/pi-fortress is the policy. provision.sh seeds each list of
 # PI_OWNED (Makefile) only when it is absent, and never copies one over.
