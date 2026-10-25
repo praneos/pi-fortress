@@ -499,6 +499,38 @@ if command -v make >/dev/null 2>&1; then
 fi
 echo "shell_test: owner placeholder guard and docs-push gate clean"
 
+# release.sh check SUMS SIG SIGNERS: a signed set of two bundles. A set
+# with the bundle of one arch only passes. A bundle with its .sig but
+# not the bundle refuses. A bundle that SHA256SUMS does not list refuses.
+# A changed bundle refuses.
+ck="${tmp}/check"
+mkdir -p "${ck}/aside"
+for arch in amd64 arm64; do
+  echo "bundle ${arch}" >"${ck}/pf-bundle-v0.0.1-${arch}.tar"
+  ssh-keygen -q -Y sign -f "${rel}/key" -n pi-fortress-dist "${ck}/pf-bundle-v0.0.1-${arch}.tar"
+done
+(cd "${ck}" && sha256sum pf-bundle-v0.0.1-amd64.tar pf-bundle-v0.0.1-arm64.tar >SHA256SUMS)
+ssh-keygen -q -Y sign -f "${rel}/key" -n pi-fortress-dist "${ck}/SHA256SUMS"
+printf 'release@pi-fortress namespaces="pi-fortress-dist" %s\n' "$(cut -d' ' -f1,2 "${rel}/key.pub")" >"${ck}/aside/allowed_signers"
+ck_case() {
+  local desc="$1" want_status="$2" want="$3" out status
+  out="$(bash "${here}/scripts/release.sh" check "${ck}/SHA256SUMS" "${ck}/SHA256SUMS.sig" "${ck}/aside/allowed_signers" 2>&1)" && status=0 || status=$?
+  [[ "${status}" == "${want_status}" ]] || fail "release.sh check ${desc}: exit ${status}, want ${want_status}: ${out}"
+  [[ "${out}" == *"${want}"* ]] || fail "release.sh check ${desc}: expected '${want}', got: ${out}"
+}
+ck_case "with the full set" 0 "pf-bundle-v0.0.1-arm64.tar: OK"
+mv "${ck}/pf-bundle-v0.0.1-arm64.tar" "${ck}/pf-bundle-v0.0.1-arm64.tar.sig" "${ck}/aside/"
+ck_case "with the bundle of one arch only" 0 "pf-bundle-v0.0.1-amd64.tar: OK"
+mv "${ck}/aside/pf-bundle-v0.0.1-arm64.tar.sig" "${ck}/"
+ck_case "with a .sig and no bundle" 1 "pf-bundle-v0.0.1-arm64.tar is missing"
+mv "${ck}/aside/pf-bundle-v0.0.1-arm64.tar" "${ck}/"
+cp "${ck}/pf-bundle-v0.0.1-amd64.tar" "${ck}/pf-bundle-v0.0.2-amd64.tar"
+ck_case "with a bundle that SHA256SUMS does not list" 1 "pf-bundle-v0.0.2-amd64.tar is not listed"
+mv "${ck}/pf-bundle-v0.0.2-amd64.tar" "${ck}/aside/"
+echo "changed" >>"${ck}/pf-bundle-v0.0.1-arm64.tar"
+ck_case "with a changed bundle" 1 "checksum mismatch"
+echo "shell_test: release.sh check refuses a partial or unlisted bundle clean"
+
 # mermaid_check.sh refuses a ';' in sequence-diagram text and a '(' in an
 # unquoted flowchart label, and names the line. An entity code, a quoted
 # label and a cylinder shape pass.

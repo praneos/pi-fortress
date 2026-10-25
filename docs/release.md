@@ -13,7 +13,7 @@ and get the same bytes. Code: `scripts/release.sh`.
 | `make release-gate` | `go mod verify`; `govulncheck` (pinned, fetched by `go run`, never linked) on `./...`; `internal/secretscan` over the tracked tree. Run it before you make a tag |
 | `make release` | Refuses a dirty tree, an angle-bracket placeholder left in `EVALUATION_NOTICE.txt` (it ships in the bundle), or an unfilled owner placeholder (below). Builds HEAD into `dist/<version>/`. Refuses if `internal/secretscan` finds anything key-shaped in a binary. Builds one bundle per arch from a `git archive` export of HEAD. Thus, no gitignored file (`.cache/`, `build/`, a `vm/policy/secrets.env`) can go into a bundle. Refuses a bundle that `internal/secretscan` flags. Writes `SHA256SUMS`. Signs it and each bundle |
 | `make release-verify [REV=HEAD]` | Checks out REV into two scratch worktrees. Builds each with its own GOCACHE, GOPATH, time zone and locale. Compares `SHA256SUMS` byte for byte. If they differ, fails and prints the different lines. Removes the worktrees |
-| `make release-check SUMS=… SIG=… SIGNERS=…` | `ssh-keygen -Y verify`, then `sha256sum -c --strict --ignore-missing` beside SUMS |
+| `make release-check SUMS=… SIG=… SIGNERS=…` | `ssh-keygen -Y verify`, then `sha256sum -c --strict --ignore-missing` beside SUMS. A set with only some of the files passes, for example the bundle of one arch. Refuses a `pf-bundle-*.tar.sig` with no bundle next to it, and a `pf-bundle-*.tar` that SUMS does not list |
 
 ## Owner placeholders
 
