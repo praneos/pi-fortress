@@ -736,8 +736,11 @@ func readable(msg []byte) bool {
 //
 // DO is off because that is true. This resolver asks upstream without DO,
 // so the message has no RRSIGs to flag.
+//
+// A message with no room for the 11 bytes of the OPT goes with no change.
+// Over TCP, the length prefix cannot count more than maxMsg bytes.
 func withCallerOPT(msg []byte, e ednsOPT) []byte {
-	if !e.present || len(msg) < 12 {
+	if !e.present || len(msg) < 12 || len(msg)+11 > maxMsg {
 		return msg
 	}
 	ar := binary.BigEndian.Uint16(msg[10:12])

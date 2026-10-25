@@ -138,6 +138,9 @@ func FuzzUpstreamReply(f *testing.F) {
 		if len(withOPT) != len(bare) && len(withOPT) != len(bare)+11 {
 			t.Fatalf("withCallerOPT: %d bytes from %d", len(withOPT), len(bare))
 		}
+		if len(bare) <= maxMsg && len(withOPT) > maxMsg {
+			t.Fatalf("withCallerOPT: %d bytes, more than a TCP frame holds", len(withOPT))
+		}
 		if end, ok := walkEnd(bare); ok && end == len(bare) && readable(bare) && !hasOPT(bare) && len(withOPT) > len(bare) {
 			if !readable(withOPT) || !hasOPT(withOPT) {
 				t.Fatalf("withCallerOPT made a message that does not parse: %x", withOPT)

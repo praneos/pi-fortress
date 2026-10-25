@@ -375,11 +375,25 @@ func (s *Server) serveConn(ctx context.Context, seg *Segment, c net.Conn) {
 		if msg == nil {
 			return
 		}
-		out := make([]byte, 2+len(msg))
-		binary.BigEndian.PutUint16(out[:2], uint16(len(msg)))
-		copy(out[2:], msg)
+		out := tcpFrame(msg)
+		if out == nil {
+			return
+		}
 		if _, err := c.Write(out); err != nil {
 			return
 		}
 	}
+}
+
+// tcpFrame is msg with its two-byte length prefix. It is nil for a
+// message that the prefix cannot count. The low 16 bits of the length
+// would tell the client to read a different message.
+func tcpFrame(msg []byte) []byte {
+	if len(msg) > maxMsg {
+		return nil
+	}
+	out := make([]byte, 2+len(msg))
+	binary.BigEndian.PutUint16(out[:2], uint16(len(msg)))
+	copy(out[2:], msg)
+	return out
 }
