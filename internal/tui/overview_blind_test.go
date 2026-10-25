@@ -81,3 +81,15 @@ func TestOverviewCountsWhatWasSeenAndNotStopped(t *testing.T) {
 		t.Fatalf("the agent network's notes do not count them: %q", agent)
 	}
 }
+
+// A verdict with no time can be ten minutes old on a seat that froze. The
+// Pi line says when the seat made the checks.
+func TestOverviewSaysWhenItChecked(t *testing.T) {
+	c, _ := testConfig(t)
+	at := time.Date(2026, 1, 2, 14, 2, 31, 0, time.Local)
+	c.Now = func() time.Time { return at }
+	last := run(t, c, NewFake(80, 24)).Last()
+	if pi := lineWith(last, "Pi  "); !strings.Contains(pi, "checked 14:02:31") || !strings.Contains(pi, "cpu ") {
+		t.Fatalf("no check time beside the cpu: %q", pi)
+	}
+}

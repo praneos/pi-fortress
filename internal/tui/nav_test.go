@@ -126,7 +126,7 @@ func TestOverviewVerdict(t *testing.T) {
 	c, _ := testConfig(t)
 	writeReport(t, c.PolicyDir, "OK f1: 9 domains\n", time.Hour)
 	last := run(t, c, NewFake(120, 30).Type("1")).Last()
-	for _, want := range []string{"All good", "Agent network", "Home network", "ports strict", "Pi  cpu"} {
+	for _, want := range []string{"All good", "Agent network", "Home network", "ports strict", "Pi  checked ", "  cpu "} {
 		if !strings.Contains(last, want) {
 			t.Fatalf("no %q on Overview:\n%s", want, last)
 		}

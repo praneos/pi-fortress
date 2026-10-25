@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"pi-fortress/internal/admin"
 	"pi-fortress/internal/monitor"
@@ -133,20 +134,32 @@ func (a *App) netNotes(id string, house map[string]string, st admin.Status, ifac
 	return ""
 }
 
+// piLine starts with the time of the checks. A seat that froze continues
+// to show its last verdict, and without a time that verdict looks current.
+// The time goes before the figures, so a narrow terminal does not clip it.
 func (a *App) piLine(st admin.Status) string {
 	apply := "idle"
 	if st.ApplyRunning {
 		apply = "running"
 	}
+	pi := "Pi  checked " + a.now().Format("15:04:05")
 	s := get[*monitor.Sample](a, "sample", admin.Args{})
 	if s == nil {
-		return "Pi  no monitor sample yet  apply " + apply
+		return pi + "  no monitor sample yet  apply " + apply
 	}
-	return fmt.Sprintf("Pi  cpu %s  temp %s  mem %s  apply %s",
+	return fmt.Sprintf("%s  cpu %s  temp %s  mem %s  apply %s", pi,
 		figure(s.Has("cpu"), "%.0f%%", s.CPU),
 		figure(s.Has("temp"), "%.0fC", s.TempC),
 		figure(s.Has("mem"), "%.0f%%", s.MemUsedPct),
 		apply)
+}
+
+// now is the clock of the config, so a test can fix it.
+func (a *App) now() time.Time {
+	if a.cfg != nil && a.cfg.Now != nil {
+		return a.cfg.Now()
+	}
+	return time.Now()
 }
 
 func plural(n int, s string) string {
