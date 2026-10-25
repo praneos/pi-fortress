@@ -751,12 +751,15 @@ func nftElements(items []string) string {
 // The pin is per address. The firewall does not check the SNI of a
 // connection to a pinned address; the house resolver is what answers by
 // name. Each usual device resolves the name first.
+// privateRangeErr is the error for a range in house_private_dns.ips.
+const privateRangeErr = "house_private_dns.ips: %s is a range; list the endpoint's own addresses, one per line (a provider's range also holds its public resolvers)"
+
 func privateDNSEndpoints(names, ips []string) (string, []string, error) {
 	var pins []string
 	for _, ip := range ips {
 		addr, bits, ok := strings.Cut(ip, "/")
 		if ok && bits != "32" {
-			return "", nil, fmt.Errorf("house_private_dns.ips: %s is a range; list the endpoint's own addresses, one per line (a provider's range also holds its public resolvers)", ip)
+			return "", nil, fmt.Errorf(privateRangeErr, ip)
 		}
 		pins = append(pins, addr)
 	}
@@ -918,9 +921,18 @@ func compilePrivateDNS(policyDir string, house SegmentPolicy, out Out, dohDomain
 	if err != nil {
 		return nil, err
 	}
-	privateIPs, err := LoadTokens(filepath.Join(policyDir, house.File("private_dns.ips")), "allow_ips")
+	// The kind is host_ips, as in Lists. That parser refuses a range, and
+	// loadTokens skips a refused line with no message. Thus a line that is a
+	// range stops the compile here, with or without host bits, and at any
+	// width. The file pins exact addresses: a skip would hide the mistake.
+	privateIPs, bad, err := loadTokens(filepath.Join(policyDir, house.File("private_dns.ips")), "host_ips")
 	if err != nil {
 		return nil, err
+	}
+	for _, b := range bad {
+		if p, ok := parsePrefix4(b.token); ok && p.Bits() < 32 {
+			return nil, fmt.Errorf(privateRangeErr, b.token)
+		}
 	}
 	endpoints, pins, err := privateDNSEndpoints(privateNames, privateIPs)
 	if err != nil {

@@ -459,6 +459,23 @@ func TestAllowListsSkipHostBitPrefixes(t *testing.T) {
 	}
 }
 
+// house_private_dns.ips pins exact addresses. A range stops the compile with
+// the "is a range" error, also when it has host bits and another line gives
+// a good pin. Before, the compiler dropped a host-bits line with no message.
+func TestHousePrivateDNSRangeStopsTheCompile(t *testing.T) {
+	for _, ips := range []string{"76.76.2.0/24\n", "76.76.2.22/24\n", "76.76.2.22\n76.76.10.22/24\n", "76.76.2.22\n76.0.0.0/8\n"} {
+		dir := t.TempDir()
+		_ = os.WriteFile(filepath.Join(dir, "house_private_dns.domains"), []byte("abc123.dns.controld.com\n"), 0644)
+		_ = os.WriteFile(filepath.Join(dir, "house_private_dns.ips"), []byte(ips), 0644)
+		out := t.TempDir()
+		_, err := Compile(dir, Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf"),
+			HouseDoHDNS: filepath.Join(out, "house-doh.domains"), HousePrivateDNSNFT: filepath.Join(out, "private.nft")})
+		if err == nil || !strings.Contains(err.Error(), "house_private_dns.ips: ") || !strings.Contains(err.Error(), " is a range;") {
+			t.Errorf("%q: err %v", ips, err)
+		}
+	}
+}
+
 // The house VPN feed compiles to its own file. house_never_block applies.
 // The file does not repeat a name that the house sinkhole already carries.
 // Thus the file is exactly what HOUSE_BLOCK_VPN adds.
