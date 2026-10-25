@@ -64,3 +64,32 @@ func TestSlotDeleteAsksForTypedYes(t *testing.T) {
 		t.Fatal("yes did not delete the slot")
 	}
 }
+
+// Two networks have a list with the label Blocked sites. Thus the delete
+// question names the file, as the list header does. A long item gets the
+// cells that are left on the line, so the file name and [y/N] stay
+// visible at 80 columns.
+func TestListDeleteNamesTheList(t *testing.T) {
+	c, _ := testConfig(t)
+	f := run(t, c, NewFake(80, 24).Type(keys(netHouse, secFiltering)+"d"))
+	if !strings.Contains(f.Last(), "delete ads.example from house.domains [y/N]") {
+		t.Fatalf("the house delete does not name its list:\n%s", f.Last())
+	}
+	f = run(t, c, NewFake(80, 24).Type(keys(netAgent, secFiltering)+"d"))
+	if !strings.Contains(f.Last(), "delete pi-fortress-block.test from blacklist.domains [y/N]") {
+		t.Fatalf("the agent delete does not name its list:\n%s", f.Last())
+	}
+	long := strings.Repeat("a", 60) + ".example"
+	path := filepath.Join(c.PolicyDir, "house.domains")
+	if err := os.WriteFile(path, []byte(long+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f = run(t, c, NewFake(80, 24).Type(keys(netHouse, secFiltering)+"d"))
+	if !strings.Contains(f.Last(), "delete "+long[:30]) || !strings.Contains(f.Last(), "~ from house.domains [y/N]") {
+		t.Fatalf("a long item hides the list name or itself:\n%s", f.Last())
+	}
+	run(t, c, NewFake(80, 24).Type(keys(netHouse, secFiltering)+"d").Type("y"))
+	if got, _ := os.ReadFile(path); len(got) != 0 {
+		t.Fatalf("y did not delete the full item: %q", got)
+	}
+}

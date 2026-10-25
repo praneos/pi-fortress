@@ -1016,7 +1016,7 @@ func tuiAgentListTests(t *testing.T) {
 	if got := onRow.selected(); !strings.HasPrefix(got, tuiListToken) {
 		t.Fatalf("End did not land on the added row; the cursor is on %q:\n%s", got, onRow.text())
 	}
-	s.frame(t, n+4).must(t, "d asks first", "delete "+tuiListToken+" [y/N]")
+	s.frame(t, n+4).must(t, "d asks first", "delete "+tuiListToken+" from "+tuiAgentList+" [y/N]")
 	gone := s.frame(t, n+5)
 	gone.must(t, "after y", "deleted "+tuiListToken)
 	if strings.Count(gone.text(), tuiListToken) != 1 {

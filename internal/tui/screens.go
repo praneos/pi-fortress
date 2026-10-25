@@ -924,7 +924,13 @@ func (a *App) listKey(k Key, i int) {
 			return
 		}
 		it := a.items[i]
-		a.confirm("delete "+it, func() {
+		// Two networks have a list with the same label. Thus the question
+		// names the file, as the header does. The prompt line clips from
+		// the right, and a long item pushed the file name and [y/N] off.
+		// Thus the item gets the cells that are left, at least 20.
+		tail := " from " + name + " [y/N]: _"
+		room := max(a.w-len("delete ")-len(tail), 20)
+		a.confirm("delete "+clip(it, room)+" from "+name, func() {
 			if a.do(prefix+".del", admin.Args{List: name, Value: it}, "deleted "+it) {
 				a.saved(applyLocal)
 			}
