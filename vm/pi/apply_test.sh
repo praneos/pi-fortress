@@ -2590,12 +2590,14 @@ EOF
       -e "s#(^|[^A-Za-z0-9_.~/-])/(etc|usr/local|var|run|vagrant)(/|[^A-Za-z0-9_.-]|\$)#\1$2/\2\3#g" "$1" >"$1.new"
     mv "$1.new" "$1"
   }
+  # $3 is the mode. The default is --local.
   local_apply() {
+    local _mode="${3:---local}"
     : >"$1.systemctl"
     : >"$1.nft"
     PATH="${lstub}:${lsafe}" PF_ALLOW_ANY_HOST=1 PF_INT_IF=lo PF_WAN_IF="${lwan}" SYSTEMCTL_LOG="$1.systemctl" \
       NFT_LOG="$1.nft" NFT_FAIL="${NFT_FAIL:-}" \
-      bash "$2" --local >"$1.log" 2>&1 || { tail -20 "$1.log" >&2; fail "apply --local failed under ${1##*/}"; }
+      bash "$2" "${_mode}" >"$1.log" 2>&1 || { tail -20 "$1.log" >&2; fail "apply ${_mode} failed under ${1##*/}"; }
   }
 
   # A /vagrant checkout: the policy tree and /etc/pi-fortress are two
@@ -2793,6 +2795,66 @@ EOF
   local_apply "${app2}" "${app2}/usr/local/lib/pi-fortress/apply.sh"
   cmp -s "${tmp}/key_prefixes.rules.app2" "${app2}/etc/pi-fortress/key_prefixes.rules" ||
     fail "same-file: a removed key_prefixes.rules.local left its rules in key_prefixes.rules"
+
+  # --refresh, the unattended timer path. A refresh that changes only the
+  # block list does not restart the fence: the sinkhole and the nft sets
+  # get the new list, and nobody is there to accept dropped connections.
+  # A refresh that also finds a change to another fence input restarts
+  # the fence, as --local does, and records the fence state. If not, the
+  # broker stays on the old core.hosts while the ruleset is new.
+  # The pf of this root is a wrapper. Its fetch writes FAKE_FEED as the
+  # feed output and never goes to the network. All other commands go to
+  # the real pf.
+  ref="${tmp}/lroot3"
+  mkdir -p "${ref}/etc/pi-fortress" "${ref}/usr/local/lib/pi-fortress" "${ref}/usr/local/sbin" \
+    "${ref}/etc/systemd/system"
+  cp -a "${lsrc}/vm/policy/." "${ref}/etc/pi-fortress/"
+  cp -a "${lsrc}/vm/pi/." "${ref}/usr/local/lib/pi-fortress/"
+  cp "${here}/net.env" "${ref}/etc/pi-fortress/net.env"
+  install -m 0755 "${pfbin}" "${tmp}/pf-real"
+  cat >"${ref}/usr/local/lib/pi-fortress/pf" <<EOF
+#!/bin/bash
+if [[ "\$1" == fetch ]]; then
+  while [[ \$# -gt 0 && "\$1" != --out ]]; do shift; done
+  printf '%s\n' "\${FAKE_FEED:?}" >"\$2/blacklist.domains"
+  exit 0
+fi
+exec "${tmp}/pf-real" "\$@"
+EOF
+  chmod 0755 "${ref}/usr/local/lib/pi-fortress/pf"
+  lrewrite "${ref}/usr/local/lib/pi-fortress/apply.sh" "${ref}"
+  _rapply="${ref}/usr/local/lib/pi-fortress/apply.sh"
+  _restarted() { grep -q "restart pi-fortress-$2.service" "$1.systemctl"; }
+  export FAKE_FEED='feed-a.example'
+  local_apply "${ref}" "${_rapply}"
+  _restarted "${ref}" broker || fail "refresh setup: the first --local did not start the fence"
+  # The list alone changes.
+  FAKE_FEED='feed-b.example'
+  local_apply "${ref}" "${_rapply}" --refresh
+  grep -q 'feed-b.example' "${ref}/etc/pi-fortress/blocked-domains.conf" ||
+    fail "a --refresh did not install the new feed list"
+  if _restarted "${ref}" broker || _restarted "${ref}" engine; then
+    fail "a --refresh that changed only the block list restarted the fence"
+  fi
+  grep -q 'fence keeps the old name list' "${ref}.log" ||
+    fail "a list-only --refresh did not say that the fence keeps the old list: $(tail -3 "${ref}.log")"
+  # The list and core.hosts.local change.
+  FAKE_FEED='feed-c.example'
+  printf '%s\n' 'gitlab.com GITLAB_TOKEN:PRIVATE-TOKEN' >"${ref}/etc/pi-fortress/core.hosts.local"
+  local_apply "${ref}" "${_rapply}" --refresh
+  if ! _restarted "${ref}" broker || ! _restarted "${ref}" engine; then
+    fail "a --refresh with a list change and a core.hosts.local change did not restart the fence"
+  fi
+  cmp -s "${ref}/etc/pi-fortress/core.hosts" "${ref}/etc/pi-fortress/fence.state/core.hosts" ||
+    fail "a --refresh that restarted the fence did not record the fence state"
+  # The state is recorded. Thus the same refresh again restarts nothing.
+  local_apply "${ref}" "${_rapply}" --refresh
+  _restarted "${ref}" broker && fail "an unchanged --refresh restarted the fence"
+  # --local is as before: a list change alone restarts the fence.
+  echo 'feed-d.example' >"${ref}/etc/pi-fortress/generated/blacklist.domains"
+  local_apply "${ref}" "${_rapply}"
+  _restarted "${ref}" broker || fail "a --local with only a list change did not restart the fence"
+  unset FAKE_FEED
 fi
 
 # Also the shape behind those runs: the restart decision comes from the
