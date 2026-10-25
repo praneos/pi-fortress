@@ -44,7 +44,7 @@ func Commands() []Command {
 		{"fetch", "download blocklist feeds into policy/generated", runFetch},
 		{"compile", "merge local + generated - never_block into nft/dnsmasq files", runCompile},
 		{"render", "house.env + segments.d + DoT keys -> nftables.conf, apply.env", runRender},
-		{"nftsets", "save|restore: carry the resolved-address sets across a ruleset reload", runNFTSets},
+		{"nftsets", "save|restore|policy: carry the resolved-address sets across a ruleset reload", runNFTSets},
 		{"observe", "once|run|show|reset: DNS + conntrack first-seen", runObserve},
 		{"monitor", "once|run|show|avg: cpu, memory, temp, Wi-Fi, per-process CPU/RSS", runMonitor},
 		{"alert", "once|run|show|watch: strip.jsonl -> webhook; wg: handshake age", runAlert},

@@ -21,6 +21,10 @@ import (
 // bugs would be in the parse: the element spelling of nft, its duration
 // units, and the arithmetic that must never give an element more life
 // than it had. apply.sh keeps only the plumbing.
+//
+// policy runs at the restart of pf dns, while pf dns is stopped. It
+// flushes each resolved set whose DNS policy changed since the last
+// apply (nftsets.Policy).
 func runNFTSets(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		nftsetsUsage(stderr)
@@ -33,7 +37,7 @@ func runNFTSets(args []string, stdout, stderr io.Writer) int {
 		// refusal there, and help reads the same as a refusal.
 		nftsetsUsage(stderr)
 		return 0
-	case "save", "restore":
+	case "save", "restore", "policy":
 	default:
 		fmt.Fprintf(stderr, "pf nftsets: unknown verb %q\n", verb)
 		nftsetsUsage(stderr)
@@ -42,8 +46,17 @@ func runNFTSets(args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("nftsets "+verb, stderr)
 	table := fs.String("table", "inet fortress", "nft table holding the sets")
 	file := fs.String("file", "", "carry file: written by save, read by restore")
+	config := fs.String("config", "", "policy: the pf dns config that pf dns starts on next")
+	state := fs.String("state", "", "policy: the fingerprints of the last apply, read and then written")
 	if code, ok := parse(fs, args[1:]); !ok {
 		return code
+	}
+	if verb == "policy" {
+		if *config == "" || *state == "" {
+			nftsetsUsage(stderr)
+			return 2
+		}
+		return nftsetsPolicy(nftsets.Exec, *table, *config, *state, stdout, stderr)
 	}
 	if *file == "" {
 		nftsetsUsage(stderr)
@@ -57,18 +70,24 @@ func runNFTSets(args []string, stdout, stderr io.Writer) int {
 
 func nftsetsUsage(w io.Writer) {
 	fmt.Fprintln(w, "usage: pf nftsets save|restore --file FILE [--table 'inet fortress']")
+	fmt.Fprintln(w, "       pf nftsets policy --config DNS_JSON --state FILE [--table 'inet fortress']")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  save     write the resolved-address sets and their remaining timeouts")
 	fmt.Fprintln(w, "  restore  re-add them to the sets the loaded ruleset still has")
+	fmt.Fprintln(w, "  policy   flush each resolved-address set whose DNS policy changed; run while pf dns is stopped")
 }
 
 func nftsetsSave(table, file string, stderr io.Writer) int {
+	// The time before the listings, not after. Restore subtracts the time
+	// since savedAt from each remaining time. A savedAt after the listings
+	// would give each element the time of the listings again.
+	savedAt := time.Now()
 	sets, err := nftsets.Save(nftsets.Exec, table)
 	if err != nil {
 		return fail(stderr, err)
 	}
 	var b bytes.Buffer
-	if err := nftsets.Format(&b, time.Now(), sets); err != nil {
+	if err := nftsets.Format(&b, savedAt, sets); err != nil {
 		return fail(stderr, err)
 	}
 	// 0600, not the guess of the umask. The file names each address that
@@ -102,6 +121,58 @@ func nftsetsRestore(table, file string, stdout, stderr io.Writer) int {
 	}
 	if n > 0 {
 		fmt.Fprintf(stdout, "pi-fortress: %d resolved addresses carried across the reload\n", n)
+	}
+	return 0
+}
+
+// nftsetsPolicy compares the DNS policy of each resolved set in config
+// with the fingerprints in state, flushes each set that changed, and
+// writes the new fingerprints. If it cannot read config, it flushes all
+// resolved sets: it cannot say which policy changed. If the flush fails,
+// it keeps the old state, so the next apply sees the change again.
+func nftsetsPolicy(run nftsets.Runner, table, config, state string, stdout, stderr io.Writer) int {
+	var fps map[string]string
+	data, err := os.ReadFile(config)
+	if err == nil {
+		fps, err = nftsets.Policy(data, os.ReadFile)
+	}
+	if err != nil {
+		names, lerr := nftsets.Names(run, table)
+		if lerr == nil {
+			_, lerr = nftsets.Flush(run, table, names)
+		}
+		if lerr != nil {
+			fmt.Fprintf(stderr, "pf nftsets: flushing the resolved-address sets: %v\n", lerr)
+		}
+		return fail(stderr, err)
+	}
+	before := map[string]string{}
+	if f, err := os.Open(state); err == nil {
+		before, err = nftsets.ParseState(f)
+		f.Close()
+		if err != nil {
+			return fail(stderr, err)
+		}
+	} else if !os.IsNotExist(err) {
+		return fail(stderr, err)
+	}
+	flushed, err := nftsets.Flush(run, table, nftsets.Changed(before, fps))
+	if err != nil {
+		return fail(stderr, err)
+	}
+	var b bytes.Buffer
+	if err := nftsets.FormatState(&b, fps); err != nil {
+		return fail(stderr, err)
+	}
+	tmp := state + ".new"
+	if err := os.WriteFile(tmp, b.Bytes(), 0o600); err != nil {
+		return fail(stderr, err)
+	}
+	if err := os.Rename(tmp, state); err != nil {
+		return fail(stderr, err)
+	}
+	for _, s := range flushed {
+		fmt.Fprintf(stdout, "pi-fortress: the DNS policy of %s changed; its resolved addresses were removed\n", s)
 	}
 	return 0
 }

@@ -526,6 +526,15 @@ The gate then drops its *new* connections until that cache expires. This gate
 is what makes an IP-literal SNI fail too. The name check cannot see an
 IP-literal SNI.
 
+An element does not name the DNS name that gave it. Thus, when the DNS
+policy of a segment changes (a list, `PARANOID`, a key rule), apply cannot
+remove only the addresses of the names that the new policy blocks. Apply
+keeps a fingerprint of the policy of each resolved set
+(`/var/lib/pi-fortress/resolved-policy.state`). When it changes, apply
+stops `pf dns`, flushes that set, and then starts `pf dns` on the new
+policy (`pf nftsets policy`). A set whose policy did not change keeps its
+elements.
+
 The house segment has the same gate on 80 and 443, from its own
 `resolved_house_v4`. With `HOUSE_BLOCK_HTTP=on`, the gate covers only 443.
 One shared set would let a name resolved on one segment open an address on

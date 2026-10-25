@@ -1809,6 +1809,20 @@ if [[ -n "${HOUSE_IF}" ]]; then
 fi
 systemctl daemon-reload
 systemctl enable pi-fortress-dns-agent-go.service >/dev/null 2>&1 || true
+# An element of a resolved set does not name the DNS name that gave it.
+# Thus, when the DNS policy of a segment changes (a blocklist, an
+# allowlist, PARANOID, a key rule), apply cannot remove only the
+# addresses of the names that the new policy blocks. pf nftsets policy
+# flushes each set whose policy fingerprint changed since the last apply
+# (RESOLVED_POLICY_STATE), and keeps the other sets. It runs while pf dns
+# is stopped: the old pf dns adds no more addresses after the flush, and
+# the new pf dns adds only addresses under the new policy. A client that
+# answers from its own DNS cache waits out that cache, the same as after a
+# reboot. With no state file (the first apply), each set counts as changed.
+RESOLVED_POLICY_STATE=/var/lib/pi-fortress/resolved-policy.state
+systemctl stop pi-fortress-dns-agent-go.service >/dev/null 2>&1 || true
+"${PF}" nftsets policy --table "inet fortress" --config /etc/pi-fortress/dns.json --state "${RESOLVED_POLICY_STATE}" ||
+  echo "pi-fortress: could not compare the DNS policy of the resolved-address sets; a name that this apply blocks can keep its addresses in the set until they expire (2h)" >&2
 systemctl restart pi-fortress-dns-agent-go.service
 
 # House WireGuard egress. Nested on HOUSE_IF so that

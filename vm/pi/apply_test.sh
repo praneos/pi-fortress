@@ -2827,6 +2827,20 @@ EOF
     fail "the carry re-added a compiled set, putting back what compile just took out"
   grep -q 'resolved addresses carried across the reload' "${lab2}.log" ||
     fail "apply --local said nothing about the addresses it carried"
+  # The DNS policy of each resolved set. The first apply has no state, so
+  # it flushes resolved_v4, while pf dns is stopped. A second apply with the
+  # same policy keeps the set. A changed key rule (below) flushes it again.
+  grep -qx 'stdin: flush set inet fortress resolved_v4' "${lab2}.nft" ||
+    fail "the first apply did not flush resolved_v4 for a DNS policy it had no state for"
+  grep -q 'the DNS policy of resolved_v4 changed' "${lab2}.log" ||
+    fail "apply --local did not say that it flushed resolved_v4"
+  _dstop="$(grep -n '^stop pi-fortress-dns-agent-go.service$' "${lab2}.systemctl" | head -1 | cut -d: -f1 || true)"
+  _dstart="$(grep -n '^restart pi-fortress-dns-agent-go.service$' "${lab2}.systemctl" | head -1 | cut -d: -f1 || true)"
+  [[ -n "${_dstop}" && -n "${_dstart}" && "${_dstop}" -lt "${_dstart}" ]] ||
+    fail "apply does not stop pf dns before the policy flush and start it after"
+  local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
+  grep -q '^stdin: flush set' "${lab2}.nft" &&
+    fail "an apply with the same DNS policy flushed a resolved set: $(grep '^stdin: flush' "${lab2}.nft")"
 
   # core.hosts.local: the shipped seed has only comments and adds nothing
   # (the cmp above). With lines in it, the installed core.hosts is the
@@ -2879,6 +2893,8 @@ EOF
     if [[ "${_run}" -eq 1 ]]; then
       grep -q 'restart pi-fortress-broker.service' "${lab2}.systemctl" ||
         fail "a new key_prefixes.rules.local rule did not restart the fence"
+      grep -qx 'stdin: flush set inet fortress resolved_v4' "${lab2}.nft" ||
+        fail "a new key_prefixes.rules.local rule did not flush resolved_v4"
     fi
   done
   grep -q 'restart pi-fortress-broker.service' "${lab2}.systemctl" &&
