@@ -9,12 +9,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"iter"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -143,24 +145,26 @@ func knownSegment(name string) bool {
 // coverage of the feed was quietly smaller than what it said. A name that
 // does not parse is skipped alone. Before, one numeric or malformed alias
 // cost the record each valid name behind it.
-func ParseHosts(body string) []string {
-	var out []string
-	for line := range strings.SplitSeq(body, "\n") {
-		tok := policycompile.StripLine(line)
-		if tok == "" {
-			continue
-		}
-		f := strings.Fields(tok)
-		if len(f) < 2 || !sinkAddr(f[0]) {
-			continue
-		}
-		for _, name := range f[1:] {
-			if parsed, ok := hostName(name); ok {
-				out = append(out, parsed)
+func ParseHosts(body string) []string { return slices.Collect(hostsSeq(body)) }
+
+func hostsSeq(body string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for line := range strings.SplitSeq(body, "\n") {
+			tok := policycompile.StripLine(line)
+			if tok == "" {
+				continue
+			}
+			f := strings.Fields(tok)
+			if len(f) < 2 || !sinkAddr(f[0]) {
+				continue
+			}
+			for _, name := range f[1:] {
+				if parsed, ok := hostName(name); ok && !yield(parsed) {
+					return
+				}
 			}
 		}
 	}
-	return out
 }
 
 // sinkAddr says if a token is an address that a hosts file sends a blocked
@@ -395,43 +399,47 @@ func parseToken(token, kind string) (string, bool) {
 // ParseHosts. All other lines give the first field. A line that is only an
 // address stays an entry. A line keeps one entry: a hosts feed with aliases
 // needs format hosts.
-func ParsePlain(body, kind string) []string {
-	var out []string
-	for line := range strings.SplitSeq(body, "\n") {
-		tok := policycompile.StripLine(line)
-		if tok == "" {
-			continue
-		}
-		f := strings.Fields(tok)
-		if kind == "domains" && len(f) > 1 && sinkAddr(f[0]) {
-			if parsed, ok := hostName(f[1]); ok {
-				out = append(out, parsed)
+func ParsePlain(body, kind string) []string { return slices.Collect(plainSeq(body, kind)) }
+
+func plainSeq(body, kind string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for line := range strings.SplitSeq(body, "\n") {
+			tok := policycompile.StripLine(line)
+			if tok == "" {
+				continue
 			}
-			continue
-		}
-		if parsed, ok := parseToken(f[0], kind); ok {
-			out = append(out, parsed)
+			f := strings.Fields(tok)
+			parsed, ok := "", false
+			if kind == "domains" && len(f) > 1 && sinkAddr(f[0]) {
+				parsed, ok = hostName(f[1])
+			} else {
+				parsed, ok = parseToken(f[0], kind)
+			}
+			if ok && !yield(parsed) {
+				return
+			}
 		}
 	}
-	return out
 }
 
-func ParseSpamhaus(body string) []string {
-	var out []string
-	for raw := range strings.SplitSeq(body, "\n") {
-		if strings.HasPrefix(strings.TrimLeft(raw, " \t"), ";") {
-			continue
-		}
-		tok := policycompile.StripLine(raw)
-		if tok == "" {
-			continue
-		}
-		token := strings.Fields(tok)[0]
-		if parsed, ok := policycompile.ParseIPv4(token); ok {
-			out = append(out, parsed)
+func ParseSpamhaus(body string) []string { return slices.Collect(spamhausSeq(body)) }
+
+func spamhausSeq(body string) iter.Seq[string] {
+	return func(yield func(string) bool) {
+		for raw := range strings.SplitSeq(body, "\n") {
+			if strings.HasPrefix(strings.TrimLeft(raw, " \t"), ";") {
+				continue
+			}
+			tok := policycompile.StripLine(raw)
+			if tok == "" {
+				continue
+			}
+			token := strings.Fields(tok)[0]
+			if parsed, ok := policycompile.ParseIPv4(token); ok && !yield(parsed) {
+				return
+			}
 		}
 	}
-	return out
 }
 
 // readListFile reads a never_block file of the operator. pf compile reads
@@ -555,21 +563,48 @@ func (f *Fetcher) get(u, ua string, timeout time.Duration) (page, error) {
 	return web.get(u, ua, timeout)
 }
 
-func parseFeed(feed Feed, body string) []string {
+// parseFeed gives the distinct entries of a feed, in feed order, and stops
+// after limit of them. cut is true when the body has more distinct entries
+// than limit.
+//
+// The cap of the list applies to each feed while it is parsed, not only
+// after the merge. A body of 8 MiB can hold more than a million short
+// names, and each of them used memory in the parse, the shrink check, the
+// cache and the merge before capShare kept max of them. Now a feed keeps at
+// most max+1 entries. The merged list is the same: in capShare a feed never
+// gives more than max entries, so the entries after the first max+1 do not
+// change which entries it keeps. The one entry past max makes capShare
+// report the cut. The cache keeps the entries that the parse kept, before
+// never_block, as before.
+func parseFeed(feed Feed, body string, limit int) (items []string, cut bool) {
+	var seq iter.Seq[string]
 	switch feed.Format {
 	case "spamhaus":
-		return ParseSpamhaus(body)
+		seq = spamhausSeq(body)
 	case "hosts":
-		return ParseHosts(body)
+		seq = hostsSeq(body)
 	default:
-		return ParsePlain(body, feed.Kind)
+		seq = plainSeq(body, feed.Kind)
 	}
+	seen := map[string]struct{}{}
+	for it := range seq {
+		if _, dup := seen[it]; dup {
+			continue
+		}
+		if len(items) >= limit {
+			return items, true
+		}
+		seen[it] = struct{}{}
+		items = append(items, it)
+	}
+	return items, false
 }
 
-// feedItems downloads and parses one feed. When that fails, it gives the
+// feedItems downloads and parses one feed, and keeps at most limit distinct
+// entries; cut says that the feed has more. When that fails, it gives the
 // last-good copy, and stale tells why. ok is false when the feed has no
 // last-good copy.
-func (f *Fetcher) feedItems(outDir, ua string, timeout time.Duration, feed Feed, report *[]string) (items []string, stale string, ok bool) {
+func (f *Fetcher) feedItems(outDir, ua string, timeout time.Duration, feed Feed, limit int, report *[]string) (items []string, stale string, cut, ok bool) {
 	why := ""
 	pg, gerr := f.get(feed.URL, ua, timeout)
 	if gerr != nil {
@@ -578,7 +613,7 @@ func (f *Fetcher) feedItems(outDir, ua string, timeout time.Duration, feed Feed,
 		if pg.final != feed.URL {
 			*report = append(*report, "REDIRECT "+feed.ID+": "+pg.final)
 		}
-		items = parseFeed(feed, pg.body)
+		items, cut = parseFeed(feed, pg.body, limit)
 		// A feed that answers with an error page parses to nothing.
 		// To treat that as a feed with no entries would drop each
 		// name that it carries, so it is a failure like all others.
@@ -596,14 +631,14 @@ func (f *Fetcher) feedItems(outDir, ua string, timeout time.Duration, feed Feed,
 			// discover it during an outage.
 			*report = append(*report, "WARN "+feed.ID+": last-good copy not saved: "+err.Error())
 		}
-		return items, "", true
+		return items, "", cut, true
 	}
 	cached, when, ok := readCache(outDir, feed)
 	if !ok {
 		*report = append(*report, "FAIL "+feed.ID+": "+why)
-		return nil, "", false
+		return nil, "", false, false
 	}
-	return cached, " (last good " + Ago(f.now().Sub(when)) + ": " + why + ")", true
+	return cached, " (last good " + Ago(f.now().Sub(when)) + ": " + why + ")", false, true
 }
 
 // shrinkFloor and shrinkHold bound the check in shrunk. A feed whose last
@@ -684,6 +719,9 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 	// Each list holds the kept items of each feed apart, so capShare can
 	// give each feed its share of the cap.
 	var ips, domains, houseDomains, houseVPN [][]string
+	// Each cut flag says that a feed of that list had more entries than the
+	// cap, and that the parse did not read the rest.
+	var cutIPs, cutDoms, cutHouse, cutVPN bool
 	sample := ""
 	seen := map[string]bool{}
 	// feedOf remembers which feed carried each item, and the first feed wins.
@@ -700,7 +738,11 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 			report = append(report, "SKIP "+feed.ID+": "+house.Name+" segment feeds must be domains")
 			continue
 		}
-		items, stale, ok := f.feedItems(outDir, ua, timeout, feed, &report)
+		limit := maxDoms
+		if feed.Kind == "ips" {
+			limit = maxIPs
+		}
+		items, stale, cut, ok := f.feedItems(outDir, ua, timeout, feed, limit+1, &report)
 		if !ok {
 			continue
 		}
@@ -718,16 +760,24 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 		if stale != "" {
 			verb = "STALE"
 		}
-		report = append(report, fmt.Sprintf("%s %s: %d %s%s", verb, feed.ID, len(kept), label, stale))
+		note := ""
+		if cut {
+			note = fmt.Sprintf(" (more than the cap of %d; the rest not read)", limit)
+		}
+		report = append(report, fmt.Sprintf("%s %s: %d %s%s%s", verb, feed.ID, len(kept), label, note, stale))
 		switch {
 		case toHouse && feed.Role == "vpn":
 			houseVPN = append(houseVPN, kept)
+			cutVPN = cutVPN || cut
 		case toHouse:
 			houseDomains = append(houseDomains, kept)
+			cutHouse = cutHouse || cut
 		case feed.Kind == "ips":
 			ips = append(ips, kept)
+			cutIPs = cutIPs || cut
 		default:
 			domains = append(domains, kept)
+			cutDoms = cutDoms || cut
 			// Compile blocks an address as an address, not in the name
 			// sinkhole. Thus the sample is the first name.
 			for _, item := range kept {
@@ -739,10 +789,10 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 		}
 	}
 	pruneCache(outDir, seen)
-	ipOut := capShare(ips, maxIPs, "ips", &report)
-	domOut := capShare(domains, maxDoms, "domains", &report)
-	houseOut := capShare(houseDomains, maxDoms, house.Name+" domains", &report)
-	vpnOut := capShare(houseVPN, maxDoms, house.Name+" vpn domains", &report)
+	ipOut := capShare(ips, maxIPs, cutIPs, "ips", &report)
+	domOut := capShare(domains, maxDoms, cutDoms, "domains", &report)
+	houseOut := capShare(houseDomains, maxDoms, cutHouse, house.Name+" domains", &report)
+	vpnOut := capShare(houseVPN, maxDoms, cutVPN, house.Name+" vpn domains", &report)
 	repText := lines(report)
 	// houseOut also counts. A run in which only the house feeds answered
 	// used to be called a total failure, and the house list that it did
@@ -784,16 +834,28 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 // the list. Now the feeds give one new item each in turn until the cap is
 // full: each feed gets an equal share, and a share that a feed does not use
 // goes to the others. The kept items stay in feed order.
-func capShare(lists [][]string, max int, label string, report *[]string) []string {
+//
+// cut says that the parse of a feed stopped at the cap. That feed had more
+// entries than lists shows, so the TRUNCATED line says "had more than".
+// The line is also written when never_block made the list fit, because
+// entries of the feed were still not read.
+func capShare(lists [][]string, max int, cut bool, label string, report *[]string) []string {
 	var all []string
 	for _, l := range lists {
 		all = append(all, l...)
 	}
 	all = uniq(all)
+	had := fmt.Sprint(len(all))
+	if cut {
+		had = "more than " + had
+	}
 	if len(all) <= max {
+		if cut {
+			*report = append(*report, fmt.Sprintf("TRUNCATED %s to %d (had %s)", label, len(all), had))
+		}
 		return all
 	}
-	*report = append(*report, fmt.Sprintf("TRUNCATED %s to %d (had %d)", label, max, len(all)))
+	*report = append(*report, fmt.Sprintf("TRUNCATED %s to %d (had %s)", label, max, had))
 	keep := make(map[string]struct{}, max)
 	next := make([]int, len(lists))
 	for more := true; more && len(keep) < max; {

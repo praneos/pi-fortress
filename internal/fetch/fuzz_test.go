@@ -105,9 +105,11 @@ func FuzzParseFeeds(f *testing.F) {
 		for _, s := range sh {
 			checkIP(t, "spamhaus", s)
 		}
-		// parseFeed only routes; it must give what the parser gives.
+		// parseFeed routes and drops duplicates; it must give the distinct
+		// entries of the parser, in order. With a limit it gives the first
+		// limit of them, and says that it cut.
 		for _, fd := range []Feed{{Format: "hosts", Kind: "domains"}, {Format: "spamhaus", Kind: "ips"}, {Kind: "ips"}, {Kind: "domains"}} {
-			got := parseFeed(fd, body)
+			got, cut := parseFeed(fd, body, len(strings.Fields(body))+1)
 			var want []string
 			switch {
 			case fd.Format == "hosts":
@@ -119,8 +121,15 @@ func FuzzParseFeeds(f *testing.F) {
 			default:
 				want = plain
 			}
-			if strings.Join(got, "\n") != strings.Join(want, "\n") {
+			want = uniq(want)
+			if cut || strings.Join(got, "\n") != strings.Join(want, "\n") {
 				t.Fatalf("parseFeed %+v differs from its parser", fd)
+			}
+			if len(want) > 1 {
+				got, cut := parseFeed(fd, body, len(want)-1)
+				if !cut || strings.Join(got, "\n") != strings.Join(want[:len(want)-1], "\n") {
+					t.Fatalf("parseFeed %+v with a limit: %d entries, cut %v", fd, len(got), cut)
+				}
 			}
 		}
 	})
