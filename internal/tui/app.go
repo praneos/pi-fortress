@@ -767,6 +767,10 @@ func (a *App) stream(title, verb string, args admin.Args) {
 	}
 	a.paneBusy, a.paneFollow = true, true
 	a.pane = []string{"$ " + title}
+	// The message of the last action is old now. If it stays, it takes the
+	// footer from "running...", and a save message still says "A applies"
+	// while A runs.
+	a.msg = ""
 	ctx := a.ctx
 	if ctx == nil {
 		ctx = context.Background()

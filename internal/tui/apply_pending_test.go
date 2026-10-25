@@ -78,3 +78,42 @@ func TestPendingClearedOnlyByASuccessfulApply(t *testing.T) {
 		})
 	}
 }
+
+// footerOf is the bottom row of the newest frame.
+func footerOf(f *Fake) string {
+	rows := strings.Split(strings.TrimRight(f.Last(), "\n"), "\n")
+	return rows[len(rows)-1]
+}
+
+// waitFooter waits until the footer contains s, and fails with the footer
+// when it does not.
+func waitFooter(t *testing.T, f *Fake, s string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !strings.Contains(footerOf(f), s) {
+		if time.Now().After(deadline) {
+			t.Fatalf("the footer never said %q: %q", s, footerOf(f))
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// While A runs, the footer says so. Before, the message of the last save
+// stayed through the apply. At 80 columns, it pushed "running..." off the
+// line and still said that A applies.
+func TestApplyFooterSaysRunningNotTheLastSave(t *testing.T) {
+	c, _ := testConfig(t)
+	c.PfCmd = []string{"/bin/sh", "-c", "sleep 30"}
+	f := NewFake(80, 24).Type(settingsDown("HOUSE_BLOCK_VPN")).Press(KeyEnter).Type("Ay")
+	f.Hold = true
+	a := New(c, f)
+	done := make(chan error, 1)
+	go func() { done <- a.Run() }()
+	waitFooter(t, f, "running...")
+	if footer := footerOf(f); strings.Contains(footer, "A applies") {
+		t.Fatalf("the footer says A applies while A runs: %q", footer)
+	}
+	a.events <- event{key: Key{Kind: KeyCtrlC}}
+	a.events <- event{key: Key{Kind: KeyRune, Rune: 'y'}}
+	waitRun(t, done, 3*time.Second)
+}
