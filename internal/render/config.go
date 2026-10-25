@@ -1542,6 +1542,9 @@ func (c *Config) checkHouse() error {
 	if !netHas(c.HouseNet, c.HouseIP) {
 		return fmt.Errorf("house: HOUSE_IP=%s is not inside HOUSE_NET=%s", c.HouseIP, c.HouseNet)
 	}
+	if what := notHostAddr(c.HouseNet, c.HouseIP); what != "" {
+		return fmt.Errorf("house: HOUSE_IP=%s is the %s address of HOUSE_NET=%s, which no device can hold", c.HouseIP, what, c.HouseNet)
+	}
 	if netsOverlap(c.HouseNet, c.AgentNet) {
 		return fmt.Errorf("house: HOUSE_NET=%s overlaps AGENT_NET=%s", c.HouseNet, c.AgentNet)
 	}
@@ -1609,6 +1612,9 @@ func (c *Config) checkSegments() error {
 		}
 		if !netHas(s.Net, s.IP) {
 			return fmt.Errorf("segment %s: IP=%s is not inside NET=%s", s.Name, s.IP, s.Net)
+		}
+		if what := notHostAddr(s.Net, s.IP); what != "" {
+			return fmt.Errorf("segment %s: IP=%s is the %s address of NET=%s, which no device can hold", s.Name, s.IP, what, s.Net)
 		}
 		if netsOverlap(s.Net, c.AgentNet) {
 			return fmt.Errorf("segment %s: NET=%s overlaps AGENT_NET=%s", s.Name, s.Net, c.AgentNet)
@@ -1679,6 +1685,29 @@ func checkSegDHCP(s Segment) error {
 		return fmt.Errorf("segment %s: %s covers %s, the broadcast address of NET=%s, which no device can hold. Nothing was changed.", s.Name, rng, bcast, s.Net)
 	}
 	return nil
+}
+
+// notHostAddr gives "network" or "broadcast" when ip is that address of
+// cidr, and "" for a host address. The Pi answers on IP as router and DNS
+// server, so IP must be a host address. A /31 has no network or broadcast
+// address (RFC 3021), and a /32 is one address. Thus both give "".
+func notHostAddr(cidr, ip string) string {
+	p, err := netip.ParsePrefix(cidr)
+	if err != nil || p.Bits() > 30 {
+		return ""
+	}
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ""
+	}
+	p = p.Masked()
+	switch a {
+	case p.Addr():
+		return "network"
+	case lastAddr(p):
+		return "broadcast"
+	}
+	return ""
 }
 
 // lastAddr is the highest address in an IPv4 prefix, its broadcast.
