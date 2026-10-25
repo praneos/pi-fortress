@@ -57,7 +57,9 @@ const bindGrace = 60 * time.Second
 // appears and disappears. NetworkManager keeps the address of a segment
 // on the interface when the interface has no carrier. Thus a pulled cable
 // does not remove the address. For an interface that is really absent, a
-// timer rebinds the socket.
+// timer rebinds the socket. An interface that comes back with a new index
+// (a USB adapter that was plugged in again) gets its listeners opened again
+// by watchLinks (linkwatch.go).
 func (s *Server) Run(ctx context.Context) error {
 	if err := s.OpenLogs(); err != nil {
 		return err
@@ -94,6 +96,10 @@ func (s *Server) Run(ctx context.Context) error {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() { defer wg.Done(); s.sweepLogs(ctx) }()
+	if s.watchesLinks() {
+		wg.Add(1)
+		go func() { defer wg.Done(); s.watchLinks(ctx) }()
+	}
 	for _, seg := range s.segs {
 		wg.Add(2)
 		go func() { defer wg.Done(); fail(s.udpLoop(ctx, seg)) }()
@@ -134,7 +140,7 @@ func (s *Server) control(seg *Segment, pinErr *error) func(string, string, sysca
 	}
 	return func(_, _ string, c syscall.RawConn) error {
 		return c.Control(func(fd uintptr) {
-			*pinErr = syscall.SetsockoptString(int(fd), syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, seg.Iface)
+			*pinErr = s.pinDev(int(fd), seg.Iface)
 		})
 	}
 }
@@ -181,12 +187,20 @@ func (s *Server) refusePin(seg *Segment, network string, err error) error {
 // segment while ctx lasts and marks it BROKEN in Segments until it binds.
 // After the grace, it writes its failures once a minute, not once for
 // each attempt.
+//
+// A listener that the watcher closed for a new interface index returns
+// errRebind. retry does not log it and binds again at once. A sweep of the
+// watcher also wakes a retry that waits after a failure, for example for an
+// address that is not back yet. Each of these fast binds comes at least
+// rebindGap after the bind before it.
 func (s *Server) retry(ctx context.Context, seg *Segment, network string, bind func(up func()) error) error {
 	start := time.Now()
 	served := false
 	isolate := s.isolates(seg)
+	kick := seg.pins.kicker(network)
 	var said time.Time
 	for {
+		began := time.Now()
 		err := bind(func() {
 			served = true
 			if seg.setUnbound(network, nil) {
@@ -196,8 +210,9 @@ func (s *Server) retry(ctx context.Context, seg *Segment, network string, bind f
 		if ctx.Err() != nil {
 			return nil
 		}
+		rebind := errors.Is(err, errRebind)
 		marked := seg.unboundWhy(network) != nil
-		if err != nil && (!marked || time.Since(said) >= bindLogEvery) {
+		if err != nil && !rebind && (!marked || time.Since(said) >= bindLogEvery) {
 			s.logf("dns %s %s: %s is not serving: %v; retrying in %s", seg.Iface, network, s.addr(seg), err, s.rebindWait)
 			if marked {
 				said = time.Now()
@@ -217,10 +232,23 @@ func (s *Server) retry(ctx context.Context, seg *Segment, network string, bind f
 				s.logf("pf dns: %v; the other segments keep serving and this one is retried (BROKEN until it binds)", gave)
 			}
 		}
+		wait, fast := s.rebindWait, rebind
+		if rebind {
+			wait = 0
+		}
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(s.rebindWait):
+		case <-time.After(wait):
+		case <-kick:
+			fast = true
+		}
+		if d := s.rebindGap - time.Since(began); fast && d > 0 {
+			select {
+			case <-ctx.Done():
+				return nil
+			case <-time.After(d):
+			}
 		}
 	}
 }
@@ -228,6 +256,7 @@ func (s *Server) retry(ctx context.Context, seg *Segment, network string, bind f
 func (s *Server) udpLoop(ctx context.Context, seg *Segment) error {
 	slots := make(chan struct{}, s.udpSlots)
 	return s.retry(ctx, seg, "udp", func(up func()) error {
+		idx := s.ifIndex(seg)
 		var pinErr error
 		lc := net.ListenConfig{Control: s.control(seg, &pinErr)}
 		pc, err := lc.ListenPacket(ctx, "udp4", s.addr(seg))
@@ -239,16 +268,24 @@ func (s *Server) udpLoop(ctx context.Context, seg *Segment) error {
 			return err
 		}
 		defer pc.Close()
+		p, err := s.hold(seg, "udp", idx, pc.Close)
+		if err != nil {
+			return err
+		}
+		defer seg.pins.release("udp", p)
 		// Bound and pinned. From here, each failure of this socket is a rebind,
 		// not a transport that never started.
 		up()
-		go func() { <-ctx.Done(); _ = pc.Close() }()
+		s.noteServing(seg, idx)
+		// AfterFunc, not a goroutine that waits on ctx: a goroutine stays for
+		// each rebind until the process stops.
+		defer context.AfterFunc(ctx, func() { _ = pc.Close() })()
 		uc := pc.(*net.UDPConn)
 		buf := make([]byte, maxMsg)
 		for {
 			n, from, err := uc.ReadFromUDP(buf)
 			if err != nil {
-				return err
+				return p.why(err)
 			}
 			if n < 12 {
 				continue
@@ -286,6 +323,7 @@ func (s *Server) tcpLoop(ctx context.Context, seg *Segment) error {
 	// connections. In the same way, a rebind does not give out new slots.
 	perSrc := srclimit.New(s.tcpPerSource)
 	return s.retry(ctx, seg, "tcp", func(up func()) error {
+		idx := s.ifIndex(seg)
 		var pinErr error
 		lc := net.ListenConfig{Control: s.control(seg, &pinErr)}
 		ln, err := lc.Listen(ctx, "tcp4", s.addr(seg))
@@ -297,8 +335,14 @@ func (s *Server) tcpLoop(ctx context.Context, seg *Segment) error {
 			return err
 		}
 		defer ln.Close()
+		p, err := s.hold(seg, "tcp", idx, ln.Close)
+		if err != nil {
+			return err
+		}
+		defer seg.pins.release("tcp", p)
 		up()
-		go func() { <-ctx.Done(); _ = ln.Close() }()
+		s.noteServing(seg, idx)
+		defer context.AfterFunc(ctx, func() { _ = ln.Close() })()
 		for {
 			c, err := ln.Accept()
 			if err != nil {
@@ -306,7 +350,7 @@ func (s *Server) tcpLoop(ctx context.Context, seg *Segment) error {
 				if errors.As(err, &ne) && ne.Timeout() {
 					continue
 				}
-				return err
+				return p.why(err)
 			}
 			select {
 			case slots <- struct{}{}:

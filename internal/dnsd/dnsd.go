@@ -197,6 +197,8 @@ type Segment struct {
 	// retry). It is separate from broken, which refuses each query. A segment
 	// whose UDP bound but whose TCP did not still answers over UDP.
 	unbound [2]atomic.Pointer[string]
+	// pins is the interface index of each live listener (linkwatch.go).
+	pins pinTable
 	// logErr is the reason why the query log of an isolated segment did not
 	// open. The segment answers without a log until a reload opens it (log.go
 	// OpenLogs).
@@ -256,6 +258,14 @@ type Server struct {
 	// stops the attempts for it. rebindWait is the pause between attempts.
 	// Refer to the constants in serve.go.
 	bindGrace, rebindWait time.Duration
+	// rebindGap, linkSettle and pinSweep time the rebind of a listener whose
+	// interface has a new index (linkwatch.go). links, pinDev and linkEvents
+	// are the lookup of interface indexes, the pin of a socket to its device
+	// and the source of link events. A test replaces them.
+	rebindGap, linkSettle, pinSweep time.Duration
+	links                           func() (map[string]int, error)
+	pinDev                          func(fd int, iface string) error
+	linkEvents                      func(ctx context.Context) (<-chan struct{}, error)
 
 	// queries counts the goroutines that each answer one query. Run can then
 	// wait for them. Otherwise Run returns into a CloseLogs that removes the
@@ -282,6 +292,12 @@ func New(cfg Config) (*Server, error) {
 		logf:         log.Printf,
 		bindGrace:    bindGrace,
 		rebindWait:   rebindWait,
+		rebindGap:    rebindGap,
+		linkSettle:   linkSettle,
+		pinSweep:     pinSweep,
+		links:        ifIndexes,
+		pinDev:       pinToDevice,
+		linkEvents:   routeEvents,
 	}
 	if s.nft == nil {
 		s.nft = &nftCmd{table: cfg.NFTTable}
