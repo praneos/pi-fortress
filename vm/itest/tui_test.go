@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -70,14 +71,13 @@ const (
 const (
 	// tuiKeyGap is the pause between keystrokes; see the escape note above.
 	tuiKeyGap = 200 * time.Millisecond
-	// tuiStart is the head start that `sudo pf tui` gets before the first
-	// key. Keys that arrive earlier are not lost (the line discipline holds
-	// them). But the frames of a run that has not reached EnterRaw yet
-	// cannot be counted against the keys.
-	tuiStart = 2 * time.Second
-	// tuiCooked is the same for a run left in the normal mode of the tty,
-	// where an early Ctrl-C would be a signal, not a keystroke.
-	tuiCooked = 4 * time.Second
+	// tuiFirstFrame bounds the wait for the first paint before the first
+	// key. The app writes tuiAltEnter after EnterRaw, and then paints its
+	// first frame before it reads a key. Thus a key sent after that paint
+	// starts is counted against the frames, and in a cooked run, Ctrl-C is
+	// a keystroke, not a signal. If the paint does not come in this time,
+	// the keys go anyway, and parse reports what the Pi painted.
+	tuiFirstFrame = 10 * time.Second
 	// tuiIdle bounds a run from the far end: with no key for this long, the
 	// TUI exits by itself. Thus a key script that does not reach a quit
 	// cannot leave the suite waiting on a live pty.
@@ -369,11 +369,7 @@ func tuiDrive(t *testing.T, r tuiRun) *tuiSession {
 	if r.cols == 0 {
 		r.cols = 80
 	}
-	head := tuiStart
-	if r.cooked {
-		head = tuiCooked
-	}
-	budget := head + time.Duration(len(r.keys))*tuiKeyGap + r.wait + tuiIdle + tuiSlack
+	budget := tuiFirstFrame + time.Duration(len(r.keys))*tuiKeyGap + r.wait + tuiIdle + tuiSlack
 	ctx, cancel := context.WithTimeout(t.Context(), budget)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "ssh", "-tt", "-F", sshCfg, "-o", "BatchMode=yes", "pi", r.remote())
@@ -381,15 +377,22 @@ func tuiDrive(t *testing.T, r tuiRun) *tuiSession {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out, errb bytes.Buffer
-	cmd.Stdout = &out
+	out := &tuiOut{painted: make(chan struct{})}
+	var errb bytes.Buffer
+	cmd.Stdout = out
 	cmd.Stderr = &errb
 	start := time.Now()
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	exited := make(chan struct{})
 	go func() {
-		time.Sleep(head)
+		select {
+		case <-out.painted:
+		case <-exited:
+			return
+		case <-time.After(tuiFirstFrame):
+		}
 		for _, k := range r.keys {
 			// A write that fails means that the session is already gone. The
 			// wait below reports that with the full transcript.
@@ -400,6 +403,7 @@ func tuiDrive(t *testing.T, r tuiRun) *tuiSession {
 		}
 	}()
 	waitErr := cmd.Wait()
+	close(exited)
 	s := &tuiSession{out: strings.ReplaceAll(out.String(), "\x00", ""), took: time.Since(start)}
 	tail := s.out
 	if len(tail) > 4000 {
@@ -413,6 +417,38 @@ func tuiDrive(t *testing.T, r tuiRun) *tuiSession {
 	}
 	s.parse(t)
 	return s
+}
+
+// tuiOut is the ssh stdout of a session. It closes painted when the
+// first frame starts: tuiAltEnter, then the cursor-home of the clear that
+// follows it, then the cursor-home of the first paint.
+type tuiOut struct {
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	painted chan struct{}
+	seen    bool
+}
+
+func (o *tuiOut) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	n, err := o.buf.Write(p)
+	if !o.seen {
+		// The check reads the full buffer on each write. It stops after
+		// the first paint, so it reads only the short head of the session.
+		s := strings.ReplaceAll(o.buf.String(), "\x00", "")
+		if a := strings.Index(s, tuiAltEnter); a >= 0 && strings.Count(s[a:], tuiFrameHome) >= 2 {
+			o.seen = true
+			close(o.painted)
+		}
+	}
+	return n, err
+}
+
+func (o *tuiOut) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.buf.String()
 }
 
 // parse splits the transcript into frames. Each paint starts with a
@@ -1042,7 +1078,10 @@ const tuiApplyToken = "zz-tui-apply.example"
 // the footer that says it waits for an apply, A and y that run apply
 // --local on System > Actions, and the note gone after the apply. Then the
 // same to remove the line again. No q while the apply streams: q would
-// cancel it. Thus each session ends on the idle exit, which waits for the action.
+// cancel it. Thus each session ends on the idle exit, which waits for the
+// action. A short -idle is sufficient: the keys come tuiKeyGap apart, and
+// the timer does not end the app while the action runs. It paints the
+// result first and then exits.
 func tuiApplyTests(t *testing.T) {
 	box := tuiBoxOf(t)
 	path := tuiPolicyDir(t) + "/house.domains"
@@ -1054,7 +1093,7 @@ func tuiApplyTests(t *testing.T) {
 	session := func(what string, edit ...any) *tuiSession {
 		open := box.open(t, "house", "Filtering")
 		keys := tuiKeys(append([]any{open}, append(edit, "A", "y")...)...)
-		s := tuiDrive(t, tuiRun{keys: keys, wait: 3 * time.Minute})
+		s := tuiDrive(t, tuiRun{keys: keys, flags: "-idle 5s", wait: 3 * time.Minute})
 		s.first(t, pending)
 		s.first(t, "run pf apply --local now [y/N]")
 		s.first(t, box.title("system", "Actions"), "$ pf apply --local")
@@ -1381,10 +1420,12 @@ func tuiResizeTests(t *testing.T) {
 	// Nothing local can resize this pty: ssh forwards a window change only
 	// from its own terminal, and the test has none. Thus the Pi resizes it
 	// from the inside. That is the same SIGWINCH that the app would get
-	// from a dragged window.
-	pre := "T=$(tty); (sleep 6; stty -F \"$T\" rows 40 cols 120) & "
+	// from a dragged window. The resize comes 4 s after the shell starts,
+	// so the app first paints at 80x24. The app exits 6 s after the last
+	// key, so it paints the resize first.
+	pre := "T=$(tty); (sleep 4; stty -F \"$T\" rows 40 cols 120) & "
 	keys := box.open(t, "house", "Activity")
-	s := tuiDrive(t, tuiRun{keys: keys, pre: pre, flags: "-idle 12s", wait: 20 * time.Second})
+	s := tuiDrive(t, tuiRun{keys: keys, pre: pre, flags: "-idle 6s", wait: 20 * time.Second})
 	var small, big *tuiFrame
 	for i := range s.frames {
 		f := s.frames[i]
