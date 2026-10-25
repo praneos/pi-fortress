@@ -244,6 +244,32 @@ func sniExt(name string) []byte {
 	return append(out, name...)
 }
 
+// sniEntry is one entry of a ServerNameList: the name type and the name.
+type sniEntry struct {
+	typ  byte
+	name string
+}
+
+// sniList is the data of a server_name extension (the ServerNameList)
+// with the entries in the order given.
+func sniList(entries ...sniEntry) []byte {
+	var list []byte
+	for _, e := range entries {
+		list = append(list, e.typ)
+		list = binary.BigEndian.AppendUint16(list, uint16(len(e.name)))
+		list = append(list, e.name...)
+	}
+	return append(binary.BigEndian.AppendUint16(nil, uint16(len(list))), list...)
+}
+
+// sniListExt is a server_name extension with the entries given.
+func sniListExt(entries ...sniEntry) []byte {
+	data := sniList(entries...)
+	out := []byte{0x00, 0x00}
+	out = binary.BigEndian.AppendUint16(out, uint16(len(data)))
+	return append(out, data...)
+}
+
 // An extension type may occur only one time in a ClientHello (RFC 8446
 // 4.2). Parse refuses a hello with a type two times. Thus the name that it
 // gives is the one name that the TLS stack of the origin can read.
@@ -252,10 +278,12 @@ func TestDuplicateExtensionMalformed(t *testing.T) {
 	if h := mustParse(t, insertExt(t, hello, []byte{0x0a, 0x0a, 0x00, 0x00})); h.ServerName != "example.com" {
 		t.Fatalf("ServerName=%q", h.ServerName)
 	}
+	noSNI := captureClientHello(t, &tls.Config{InsecureSkipVerify: true})
 	for name, buf := range map[string][]byte{
-		"server_name": insertExt(t, hello, sniExt("other.example")),
-		"ech":         insertECH(t, insertECH(t, hello)),
-		"other type":  insertExt(t, insertExt(t, hello, []byte{0x0a, 0x0a, 0x00, 0x00}), []byte{0x0a, 0x0a, 0x00, 0x01, 0x00}),
+		"server_name":    insertExt(t, hello, sniExt("other.example")),
+		"two host_names": insertExt(t, noSNI, sniListExt(sniEntry{0, "a.example"}, sniEntry{0, "b.example"})),
+		"ech":            insertECH(t, insertECH(t, hello)),
+		"other type":     insertExt(t, insertExt(t, hello, []byte{0x0a, 0x0a, 0x00, 0x00}), []byte{0x0a, 0x0a, 0x00, 0x01, 0x00}),
 	} {
 		if _, _, err := Parse(buf); err != ErrMalformed {
 			t.Fatalf("%s: err=%v, want ErrMalformed", name, err)
@@ -285,6 +313,37 @@ func TestNormalizeHostNameLabels(t *testing.T) {
 		}
 		if err != nil || got != want {
 			t.Errorf("%q: got %q, %v; want %q", in, got, err, want)
+		}
+	}
+}
+
+// A ServerNameList must not hold more than one name of the same type
+// (RFC 6066 3). A list with two host_name entries is malformed. Thus
+// Parse never selects one of two names that the origin can read in a
+// different way.
+func TestParseServerNameList(t *testing.T) {
+	for _, tc := range []struct {
+		desc    string
+		entries []sniEntry
+		want    string
+		bad     bool
+	}{
+		{"one host_name", []sniEntry{{0, "a.example"}}, "a.example", false},
+		{"no entry", nil, "", false},
+		{"host_name and other type", []sniEntry{{7, "x"}, {0, "a.example"}}, "a.example", false},
+		{"two host_names", []sniEntry{{0, "a.example"}, {0, "b.example"}}, "", true},
+		{"same host_name two times", []sniEntry{{0, "a.example"}, {0, "a.example"}}, "", true},
+		{"two of other type", []sniEntry{{0, "a.example"}, {7, "x"}, {7, "y"}}, "", true},
+	} {
+		got, err := parseServerName(sniList(tc.entries...))
+		if tc.bad {
+			if err != ErrMalformed {
+				t.Errorf("%s: got %q, %v; want ErrMalformed", tc.desc, got, err)
+			}
+			continue
+		}
+		if err != nil || got != tc.want {
+			t.Errorf("%s: got %q, %v; want %q", tc.desc, got, err, tc.want)
 		}
 	}
 }

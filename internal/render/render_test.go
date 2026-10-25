@@ -1684,3 +1684,57 @@ func TestAntiSpoofOpensRawPrerouting(t *testing.T) {
 		t.Errorf("want the agent's check alone:\n%s", chain(t, nft, "filter_prerouting"))
 	}
 }
+
+// With --live, INT_IF and WAN_IF come from the kernel when net.env does
+// not declare them. A detected name goes into the ruleset inside a quoted
+// iifname match, the same as a declared one. Thus it must pass the same
+// name check, and a name that fails it stops the render.
+func TestLiveDetectedInterfaceNames(t *testing.T) {
+	cases := []struct {
+		name, intIF, wanIF string // detected names
+		declaredIntIF      string
+		want               string // "" means the config loads
+	}{
+		{name: "detected names load", intIF: "eth0", wanIF: "wlan0"},
+		{name: "detected int if with a quote", intIF: `eth0"x`, wanIF: "wlan0",
+			want: `INT_IF="eth0\"x", found on this box, is not an interface name`},
+		{name: "detected wan if with a brace", intIF: "eth0", wanIF: "wlan0}",
+			want: `WAN_IF="wlan0}", found on this box, is not an interface name`},
+		{name: "detected name too long", intIF: "eth0", wanIF: "w234567890123456",
+			want: `WAN_IF="w234567890123456", found on this box, is not an interface name`},
+		{name: "declared int if skips detection", declaredIntIF: "eth0", intIF: `bad"`, wanIF: "wlan0"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			segs := filepath.Join(dir, "segments.d")
+			if err := os.Mkdir(segs, 0755); err != nil {
+				t.Fatal(err)
+			}
+			detect := func(key, piIP string) (string, error) {
+				if piIP != lab.PiIP {
+					t.Fatalf("detection got PI_IP=%s", piIP)
+				}
+				if key == "INT_IF" {
+					return tc.intIF, nil
+				}
+				return tc.wanIF, nil
+			}
+			ifaces := map[string]bool{"lo": true, "eth0": true, "wlan0": true}
+			c, err := Load(Options{Net: lab, HouseEnv: "/nonexistent/house.env", SegmentsDir: segs,
+				IntIF: tc.declaredIntIF, Live: true, ifaces: ifaces, liveIF: detect, Stderr: &strings.Builder{}})
+			if tc.want != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.want) {
+					t.Fatalf("got %v, want %q", err, tc.want)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("a config that must load was refused: %v", err)
+			}
+			if c.IntIF != "eth0" || c.WanIF != "wlan0" {
+				t.Fatalf("INT_IF=%q WAN_IF=%q", c.IntIF, c.WanIF)
+			}
+		})
+	}
+}

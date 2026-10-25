@@ -27,6 +27,55 @@ if [[ "${PF_ALLOW_ANY_HOST:-}" != 1 && "${_model}" != *"Raspberry Pi"* && "${PF_
   exit 1
 fi
 
+# check_signers FILE NAMESPACE refuses an ssh allowed_signers file unless
+# each key line has namespaces="NAMESPACE" as its one namespaces option.
+# ssh-keygen -Y verify lets a key on a line with no namespaces option sign
+# in each namespace. The ship key (pi-fortress-release, allowed_signers)
+# and the release key (pi-fortress-dist, release-signers) must each verify
+# only in their own namespace. pf applies the same rule before each verify
+# (internal/ship/signers.go).
+check_signers() {
+  local file="$1" ns="$2" n=0 keys=0 line _p opts _rest count val
+  if [[ ! -f "${file}" ]]; then
+    echo "pi-fortress: ${file}: no such file" >&2
+    return 1
+  fi
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    n=$((n + 1))
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z "${line}" || "${line}" == \#* ]] && continue
+    keys=$((keys + 1))
+    read -r _p opts _rest <<<"${line}"
+    count=0
+    val=""
+    while [[ "${opts}" =~ ^([A-Za-z-]+)(=\"([^\"]*)\")?(,|$) ]]; do
+      if [[ "${BASH_REMATCH[1],,}" == namespaces ]]; then
+        count=$((count + 1))
+        val="${BASH_REMATCH[3]}"
+      fi
+      opts="${opts:${#BASH_REMATCH[0]}}"
+    done
+    if [[ "${count}" -eq 0 ]]; then
+      echo "pi-fortress: ${file} line ${n} has no namespaces= option; add namespaces=\"${ns}\" after the principal" >&2
+      return 1
+    fi
+    if [[ "${count}" -ne 1 || "${val}" != "${ns}" ]]; then
+      echo "pi-fortress: ${file} line ${n} has namespaces=\"${val}\"; this file needs namespaces=\"${ns}\" only" >&2
+      return 1
+    fi
+  done <"${file}"
+  if [[ "${keys}" -eq 0 ]]; then
+    echo "pi-fortress: ${file} holds no key line" >&2
+    return 1
+  fi
+}
+
+# A signer file to install is checked before apt, so a bad line costs
+# nothing and the box keeps the file it has.
+if [[ -n "${PF_ALLOWED_SIGNERS:-}" ]]; then
+  check_signers "${PF_ALLOWED_SIGNERS}" pi-fortress-release || exit 1
+fi
+
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
@@ -284,6 +333,12 @@ if [[ -n "${PF_ALLOWED_SIGNERS:-}" ]]; then
 fi
 if [[ ! -f /etc/pi-fortress/allowed_signers ]]; then
   echo "pi-fortress: /etc/pi-fortress/allowed_signers missing; pf ship install refuses every bundle until it exists" >&2
+elif ! check_signers /etc/pi-fortress/allowed_signers pi-fortress-release; then
+  echo "pi-fortress: pf ship install refuses every bundle until /etc/pi-fortress/allowed_signers is correct (docs/signed_ship.md)" >&2
+fi
+# pf install writes release-signers. Here it is only checked.
+if [[ -f /etc/pi-fortress/release-signers ]] && ! check_signers /etc/pi-fortress/release-signers pi-fortress-dist; then
+  echo "pi-fortress: pf upgrade refuses every bundle until /etc/pi-fortress/release-signers is correct (docs/gateway_install.md)" >&2
 fi
 install -m 0644 "${SRC}"/vm/pi/ship.path /etc/systemd/system/pi-fortress-ship.path
 install -m 0644 "${SRC}"/vm/pi/ship.service /etc/systemd/system/pi-fortress-ship.service

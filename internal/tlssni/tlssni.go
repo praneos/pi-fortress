@@ -202,9 +202,11 @@ func parseClientHello(body []byte) (Hello, int, error) {
 	return h, 0, nil
 }
 
-// parseServerName gets the first host_name from the data of a server_name
+// parseServerName gets the host_name from the data of a server_name
 // extension (RFC 6066 §3): ServerNameList = 2-byte length, then entries of
-// type(1) len(2) name.
+// type(1) len(2) name. The list must not hold more than one name of the
+// same type (RFC 6066 §3). A list with two entries of one type is
+// malformed, so no name in it is used.
 func parseServerName(data []byte) (string, error) {
 	if len(data) < 2 {
 		return "", ErrMalformed
@@ -215,6 +217,8 @@ func parseServerName(data []byte) (string, error) {
 	if end > len(data) {
 		return "", ErrMalformed
 	}
+	var seen [256]bool
+	host := ""
 	for off < end {
 		if off+3 > end {
 			return "", ErrMalformed
@@ -227,11 +231,19 @@ func parseServerName(data []byte) (string, error) {
 		}
 		name := data[off : off+nameLen]
 		off += nameLen
+		if seen[nameType] {
+			return "", ErrMalformed
+		}
+		seen[nameType] = true
 		if nameType == 0 {
-			return normalizeHostName(name)
+			s, err := normalizeHostName(name)
+			if err != nil {
+				return "", err
+			}
+			host = s
 		}
 	}
-	return "", nil
+	return host, nil
 }
 
 // normalizeHostName changes the name to lowercase and removes a trailing dot.

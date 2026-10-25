@@ -262,7 +262,23 @@ check() {
 	command -v ssh-keygen >/dev/null || die "ssh-keygen not found"
 	ssh-keygen -Y verify -f "$signers" -I "$PRINCIPAL" -n "$NAMESPACE" -s "$sig" <"$sums" ||
 		die "signature does not verify for $PRINCIPAL in namespace $NAMESPACE"
-	(cd "$(dirname "$sums")" && sha256sum --strict --ignore-missing -c "$(basename "$sums")") ||
+	# A downloaded set can hold only part of the release, for example the
+	# bundle of one arch. Thus a listed file that is not here is not an
+	# error (--ignore-missing). But each bundle that is here, or that has
+	# its .sig here, must be here and listed in SHA256SUMS. Then the
+	# sha256sum below checks each bundle of the set.
+	local dir b s
+	dir=$(dirname "$sums")
+	for s in "$dir"/pf-bundle-*.tar.sig; do
+		[ -e "$s" ] || continue
+		[ -f "${s%.sig}" ] || die "$(basename "$s") is here but $(basename "${s%.sig}") is missing; download the bundle too"
+	done
+	for b in "$dir"/pf-bundle-*.tar; do
+		[ -e "$b" ] || continue
+		awk -v n="$(basename "$b")" '$2 == n || $2 == "*" n { f = 1 } END { exit !f }' "$sums" ||
+			die "$(basename "$b") is not listed in $(basename "$sums")"
+	done
+	(cd "$dir" && sha256sum --strict --ignore-missing -c "$(basename "$sums")") ||
 		die "checksum mismatch"
 }
 

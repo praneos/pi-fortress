@@ -17,7 +17,8 @@ import (
 // verbatim. An RFC 9112 origin routes a target that carries its own
 // authority to a vhost that nobody judged, with the credential that the
 // Host earned. The broker refuses each such line before the fence runs:
-// no strip of the slot list, no injection, no origin.
+// no strip of the slot list, no injection, no origin. An HTTP/1.1 Host
+// that is empty or holds only blanks gets the same refusal as no Host.
 func TestNonOriginFormTargetRefused(t *testing.T) {
 	const oat = "pf_b0b1b2b3b4b5b6b7_CLAUDE_OAT"
 	for _, tc := range []struct{ name, raw, rule string }{
@@ -33,6 +34,12 @@ func TestNonOriginFormTargetRefused(t *testing.T) {
 			"GET * HTTP/1.1\r\nHost: api.anthropic.com\r\nAuthorization: Bearer " + oat + "\r\n\r\n", "request_target"},
 		{"no host",
 			"GET /v1/messages HTTP/1.1\r\nAuthorization: Bearer " + oat + "\r\n\r\n", "no_host"},
+		{"empty host",
+			"GET /v1/messages HTTP/1.1\r\nHost: \r\nAuthorization: Bearer " + oat + "\r\n\r\n", "no_host"},
+		{"empty host, no space",
+			"GET /v1/messages HTTP/1.1\r\nHost:\r\nAuthorization: Bearer " + oat + "\r\n\r\n", "no_host"},
+		{"host of only blanks",
+			"GET /v1/messages HTTP/1.1\r\nHost: \t \r\nAuthorization: Bearer " + oat + "\r\n\r\n", "no_host"},
 		{"host port that is not the dialled port",
 			"GET /v1/messages HTTP/1.1\r\nHost: api.anthropic.com:8443\r\nAuthorization: Bearer " + oat + "\r\n\r\n", "host_port_mismatch"},
 		{"websocket absolute-form",

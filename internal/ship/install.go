@@ -467,8 +467,12 @@ func (in *Installer) verifyAs(id Identity, bundle, sig string) error {
 }
 
 // KeygenVerify runs keygen -Y verify on bundle against sig. Its error
-// carries the first line of the ssh-keygen output.
+// carries the first line of the ssh-keygen output. It first refuses a
+// signers file with a line that is not bound to namespace (CheckSigners).
 func KeygenVerify(keygen, signers, principal, namespace, bundle, sig string) error {
+	if err := CheckSigners(signers, namespace); err != nil {
+		return err
+	}
 	f, err := os.Open(bundle)
 	if err != nil {
 		return err

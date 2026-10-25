@@ -269,3 +269,52 @@ func TestApplyClampsArchiveModes(t *testing.T) {
 		}
 	}
 }
+
+// A directory below the target root can be a symlink to some other
+// location. Restore writes only inside the root. So it refuses the file,
+// and the other location stays empty. The test does this for an absolute
+// and for a relative link.
+func TestApplyStaysInsideTheTargetRoot(t *testing.T) {
+	for _, abs := range []bool{true, false} {
+		t.Run(map[bool]string{true: "absolute", false: "relative"}[abs], func(t *testing.T) {
+			dir := t.TempDir()
+			etc := filepath.Join(dir, "etc")
+			pol := filepath.Join(dir, "policy")
+			outside := filepath.Join(dir, "outside")
+			for _, d := range []string{etc, outside} {
+				if err := os.MkdirAll(d, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			target := outside
+			if !abs {
+				target = filepath.Join("..", "outside")
+			}
+			if err := os.Symlink(target, filepath.Join(etc, SegmentsDir)); err != nil {
+				t.Fatal(err)
+			}
+			body := "IF=eth2\n"
+			name := "etc/" + SegmentsDir + "/lab.env"
+			raw := manifestOf(t, Manifest{Schema: Schema, Files: []File{row(name, body)}}, map[string]string{name: body})
+			arc, err := Read(bytes.NewReader(raw))
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, err := arc.Plan(etc, pol)
+			if err != nil {
+				t.Fatal(err)
+			}
+			done, err := plan.Apply()
+			if err == nil {
+				t.Errorf("restore wrote through a symlinked directory: done %v", done)
+			}
+			ents, err := os.ReadDir(outside)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(ents) != 0 {
+				t.Errorf("restore wrote %d entries outside the target root, first %q", len(ents), ents[0].Name())
+			}
+		})
+	}
+}

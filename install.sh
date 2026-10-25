@@ -1,20 +1,23 @@
 #!/bin/bash
-# pi-fortress gateway bootstrap (docs/gateway_install.md). On the Pi:
+# pi-fortress gateway bootstrap (docs/gateway_install.md).
 #
-#   curl -fsSL https://raw.githubusercontent.com/praneos/pi-fortress/main/install.sh | sudo bash
+# Until v1, the project publishes no release bundles. Build the bundle
+# from the latest signed stable tag on your desktop, sign it with your
+# own SSH key, and give it to this script with PF_BUNDLE. The steps are
+# in README.md "Install from source" and in docs/user_guide/pi_setup.md
+# step 6. On the Pi:
+#   sudo PF_SIGNER_PUBKEY='ssh-ed25519 AAAA...' PF_BUNDLE=./pf-bundle-v1.2.3-arm64.tar bash install.sh
+# SHA256SUMS and its .sig are next to the bundle, or PF_SUMS names them.
+# There is no network fetch.
 #
-# With no settings, it installs the newest release from GitHub. To pin
-# a release: sudo PF_VERSION=v1.2.3 bash install.sh. To skip the
-# questions: curl ... | sudo bash -s -- -wan eth0 -agent eth1.
-# PF_RELEASE_URL names a different release server; PF_VERSION is then
-# required.
-#
-# The questions go to /dev/tty, never to stdin. With no terminal, the
+# To skip the questions, add -wan eth0 -agent eth1 as arguments. The
+# questions go to /dev/tty, never to stdin. With no terminal, the
 # install refuses unless -wan and -agent (or -yes) answer them.
 #
-# Offline / local bundle, no network fetch (SHA256SUMS and its .sig from
-# the same release are next to it, or PF_SUMS names them):
-#   sudo PF_BUNDLE=./pf-bundle-v1.2.3-arm64.tar bash install.sh
+# From v1, the script can also fetch a release. With no PF_BUNDLE and no
+# PF_VERSION, it installs the newest GitHub release. To pin a release:
+# sudo PF_VERSION=v1.2.3 bash install.sh. PF_RELEASE_URL names a
+# different release server; PF_VERSION is then required.
 #
 # This script only puts the signed bundle on the box and gives it to
 # `pf install` (internal/install, internal/cli/install.go). After that,
@@ -179,7 +182,7 @@ main() {
     if [[ -z "${PF_VERSION:-}" ]]; then
       [[ "${PF_RELEASE_URL%/}" == "${PF_REPO_URL}/releases/download" ]] ||
         fail "PF_VERSION is not set: with your own PF_RELEASE_URL, set PF_VERSION to a release tag, e.g. PF_VERSION=v0.1.0"
-      PF_VERSION="$(latest_tag)" || fail "no published release found at ${PF_REPO_URL}/releases/latest. Set PF_VERSION to a tag from ${PF_REPO_URL}/releases, or use PF_BUNDLE for an offline install."
+      PF_VERSION="$(latest_tag)" || fail "no published release found at ${PF_REPO_URL}/releases/latest. The project publishes no release bundles before v1. Build the bundle from source at the latest signed tag and install it with PF_BUNDLE; the steps are at https://pi-fortress.praneos.ai/pi_setup/ (step 6) and ${PF_REPO_URL}#install-from-source."
       echo "install.sh: newest release is ${PF_VERSION}"
     fi
     [[ "${PF_VERSION}" != latest ]] || fail "PF_VERSION=latest is not a release tag; leave PF_VERSION unset for the newest release"

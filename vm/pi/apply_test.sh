@@ -1154,6 +1154,50 @@ grep -q 'apt-get\|install' "${tmp}/prov.out" && fail "provision.sh acted before 
 grep -qE '(^|[^A-Za-z_])/vagrant/' "${prov}" && fail "provision.sh still hardcodes a /vagrant path"
 grep -q 'SRC="\${SRC:-/vagrant}"' "${prov}" || fail "provision.sh lost the /vagrant default the lab mounts"
 
+# provision.sh installs a signer file only if each key line carries the
+# namespace of that file, and checks the files that are there.
+# internal/ship/signers_test.go has the full rule.
+(
+  # shellcheck source=/dev/null
+  source <(sed -n '/^check_signers() {$/,/^}$/p' "${prov}")
+  _k="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest"
+  _s="${tmp}/signers"
+  printf 'release namespaces="pi-fortress-release" %s\n' "${_k}" >"${_s}"
+  check_signers "${_s}" pi-fortress-release 2>"${tmp}/sig.err" ||
+    fail "check_signers refused a correct ship line: $(cat "${tmp}/sig.err")"
+  printf '# key 2\n\nrelease@pi-fortress namespaces="pi-fortress-dist" %s old\nrelease@pi-fortress namespaces="pi-fortress-dist" %s' "${_k}" "${_k}" >"${_s}"
+  check_signers "${_s}" pi-fortress-dist 2>"${tmp}/sig.err" ||
+    fail "check_signers refused a correct dist file: $(cat "${tmp}/sig.err")"
+  _bad() { # body namespace error-part
+    printf '%s\n' "$1" >"${_s}"
+    if check_signers "${_s}" "$2" 2>"${tmp}/sig.err"; then
+      fail "check_signers accepted '$1' for $2"
+    fi
+    grep -qF -- "${_s}" "${tmp}/sig.err" && grep -qF -- "$3" "${tmp}/sig.err" ||
+      fail "check_signers refusal of '$1' is unclear: $(cat "${tmp}/sig.err")"
+  }
+  _bad "release ${_k}" pi-fortress-release 'line 1 has no namespaces= option; add namespaces="pi-fortress-release"'
+  _bad "release valid-after=\"20260101\" ${_k}" pi-fortress-release 'has no namespaces= option'
+  _bad "release namespaces=\"pi-fortress-dist\" ${_k}" pi-fortress-release 'needs namespaces="pi-fortress-release" only'
+  _bad "release@pi-fortress namespaces=\"pi-fortress-release\" ${_k}" pi-fortress-dist 'needs namespaces="pi-fortress-dist" only'
+  _bad "release namespaces=\"pi-fortress-release,pi-fortress-dist\" ${_k}" pi-fortress-release 'only'
+  _bad "release namespaces=\"*\" ${_k}" pi-fortress-release 'only'
+  _bad "# no key" pi-fortress-release 'holds no key line'
+)
+# A bad PF_ALLOWED_SIGNERS stops provision before apt and before install.
+# The host guard passes with PF_LAB=1. The stubs leave a mark if reached.
+mkdir -p "${tmp}/sigbin"
+for _c in apt-get install; do
+  printf '#!/bin/bash\ntouch "%s"\nexit 1\n' "${tmp}/sig.acted" >"${tmp}/sigbin/${_c}"
+  chmod +x "${tmp}/sigbin/${_c}"
+done
+printf 'release ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItest\n' >"${tmp}/signers.bad"
+if PATH="${tmp}/sigbin:${PATH}" PF_LAB=1 PF_ALLOWED_SIGNERS="${tmp}/signers.bad" SRC="${here}/../.." bash "${prov}" >/dev/null 2>"${tmp}/sig.err"; then
+  fail "provision.sh accepted a PF_ALLOWED_SIGNERS line with no namespaces"
+fi
+grep -q 'has no namespaces= option' "${tmp}/sig.err" || fail "provision.sh signer refusal is unclear: $(cat "${tmp}/sig.err")"
+[[ ! -e "${tmp}/sig.acted" ]] || fail "provision.sh acted before it refused PF_ALLOWED_SIGNERS"
+
 # A second provision keeps the lists of the operator. On a box with no
 # tree, /etc/pi-fortress is the policy. provision.sh seeds each list of
 # PI_OWNED (Makefile) only when it is absent, and never copies one over.

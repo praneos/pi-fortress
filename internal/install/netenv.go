@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"pi-fortress/internal/ship"
 )
 
 // UpsertEnv rewrites path so that each key in kv has the given value, as a
@@ -116,10 +118,14 @@ func WriteGatewayRole(path string) error {
 // SaveReleaseSigners keeps the allowed_signers file that pf install verified
 // the bundle with at dst, where pf upgrade reads it. install.sh gives pf
 // install a temporary copy. Without this, a box could install one time and
-// never upgrade. It does nothing for the same path, or an empty dst.
+// never upgrade. It does nothing for the same path, or an empty dst. It
+// refuses a src with a line that is not bound to DistNamespace.
 func SaveReleaseSigners(src, dst string) error {
 	if dst == "" || src == dst {
 		return nil
+	}
+	if err := ship.CheckSigners(src, DistNamespace); err != nil {
+		return err
 	}
 	raw, err := os.ReadFile(src)
 	if err != nil {

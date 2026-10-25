@@ -68,6 +68,33 @@ func TestSaveReleaseSigners(t *testing.T) {
 	}
 }
 
+// A line with no namespaces option, or with the ship namespace, never
+// gets into release-signers, and the file that is there stays.
+func TestSaveReleaseSignersRefusesAnUnboundLine(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "release-signers")
+	kept := "release@pi-fortress namespaces=\"pi-fortress-dist\" ssh-ed25519 AAAA\n"
+	if err := os.WriteFile(dst, []byte(kept), 0644); err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{
+		"release@pi-fortress ssh-ed25519 BBBB\n",
+		"release@pi-fortress namespaces=\"pi-fortress-release\" ssh-ed25519 BBBB\n",
+	} {
+		src := filepath.Join(dir, "signers.tmp")
+		if err := os.WriteFile(src, []byte(line), 0600); err != nil {
+			t.Fatal(err)
+		}
+		err := SaveReleaseSigners(src, dst)
+		if err == nil || !strings.Contains(err.Error(), `namespaces="pi-fortress-dist"`) {
+			t.Fatalf("%q: want a refusal that names namespaces=\"pi-fortress-dist\", got %v", line, err)
+		}
+		if raw, _ := os.ReadFile(dst); string(raw) != kept {
+			t.Fatalf("%q: release-signers changed to %q", line, raw)
+		}
+	}
+}
+
 func TestSaveReleaseURLFeedsUpgrade(t *testing.T) {
 	dst := filepath.Join(t.TempDir(), "etc", "pi-fortress", "release.url")
 	base := "https://github.com/praneos/pi-fortress/releases/download"
