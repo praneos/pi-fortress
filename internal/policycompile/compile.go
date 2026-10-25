@@ -90,7 +90,7 @@ const sshMinBits = 16
 // must be. The warning for a skipped line uses them. A feed line that is
 // skipped gets no warning: it is feed noise.
 var (
-	allowWhat = fmt.Sprintf("a public IPv4 address or range (/%d or narrower)", allowMinBits)
+	allowWhat = fmt.Sprintf("a public IPv4 address or range (/%d or narrower, no host bits)", allowMinBits)
 	sshWhat   = fmt.Sprintf("a public IPv4 address or network (/%d or narrower, no host bits)", sshMinBits)
 )
 
@@ -249,18 +249,24 @@ func prefixContains(outer, inner netip.Prefix) bool {
 func ParseIPv4(token string) (string, bool) { return parseIPv4(token, minBits) }
 
 // ParseAllowIPv4 is ParseIPv4 for a list that opens something
-// (direct_ip.allow, house_direct_ip.allow): it accepts nothing wider than /24.
-func ParseAllowIPv4(token string) (string, bool) { return parseIPv4(token, allowMinBits) }
+// (direct_ip.allow, house_direct_ip.allow): it accepts nothing wider than /24,
+// and it refuses host bits as ParseSSHIPv4 does.
+func ParseAllowIPv4(token string) (string, bool) { return parseOpenIPv4(token, allowMinBits) }
 
 // ParseSSHIPv4 parses the token of ssh_allow.ips: /16 or narrower, with a
 // prefix written as its network. Before, the code masked 140.82.114.4/20 to
 // 140.82.112.0/20 without a warning. This opened a /20 for an operator who
 // possibly meant the one host.
-func ParseSSHIPv4(token string) (string, bool) {
+func ParseSSHIPv4(token string) (string, bool) { return parseOpenIPv4(token, sshMinBits) }
+
+// parseOpenIPv4 is parseIPv4 for a list that opens something. It refuses a
+// prefix with host bits. It does not mask it into a range wider than the
+// operator possibly meant. loadOperatorIPs gives the network in the warning.
+func parseOpenIPv4(token string, min int) (string, bool) {
 	if p, err := netip.ParsePrefix(strings.TrimSpace(token)); err == nil && p.Masked() != p {
 		return "", false
 	}
-	return parseIPv4(token, sshMinBits)
+	return parseIPv4(token, min)
 }
 
 // ParseHostIPv4 accepts one address, not a range. house_private_dns.ips pins

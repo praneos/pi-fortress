@@ -414,6 +414,51 @@ func TestParseAllowIPv4CapsWidth(t *testing.T) {
 	}
 }
 
+// An allow list refuses a prefix with host bits, as ssh_allow.ips does. A
+// mask would open the full range where the operator possibly meant one
+// host. The warning gives the network.
+func TestAllowListsSkipHostBitPrefixes(t *testing.T) {
+	for _, bad := range []string{"93.184.216.40/24", "151.101.1.9/31"} {
+		if got, ok := ParseAllowIPv4(bad); ok {
+			t.Errorf("ParseAllowIPv4(%q) accepted as %q", bad, got)
+		}
+	}
+	dir := t.TempDir()
+	for name, body := range map[string]string{
+		"direct_ip.allow":       "93.184.216.40/24\n151.101.1.9\n",
+		"house_direct_ip.allow": "76.76.2.9/24\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := t.TempDir()
+	o := Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf"),
+		DirectIPNFT: filepath.Join(out, "direct.nft"), HouseDirectIPNFT: filepath.Join(out, "house-direct.nft")}
+	sum, err := Compile(dir, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	direct, _ := os.ReadFile(o.DirectIPNFT)
+	if sum.DirectIPs != 1 || sum.HouseDirectIPs != 0 || strings.Contains(string(direct), "93.184.216.0/24") {
+		t.Fatalf("direct.nft=%q summary=%+v", direct, sum)
+	}
+	want := [][]string{
+		{`direct_ip.allow line 1: "93.184.216.40/24"`, "host bits", "93.184.216.0/24"},
+		{`house_direct_ip.allow line 1: "76.76.2.9/24"`, "host bits", "76.76.2.0/24"},
+	}
+	if len(sum.Warnings) != len(want) {
+		t.Fatalf("warnings %q, want %d", sum.Warnings, len(want))
+	}
+	for i, w := range want {
+		for _, s := range w {
+			if !strings.Contains(sum.Warnings[i], s) {
+				t.Errorf("warning %d %q lacks %q", i, sum.Warnings[i], s)
+			}
+		}
+	}
+}
+
 // The house VPN feed compiles to its own file. house_never_block applies.
 // The file does not repeat a name that the house sinkhole already carries.
 // Thus the file is exactly what HOUSE_BLOCK_VPN adds.
