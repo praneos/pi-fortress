@@ -560,7 +560,8 @@ func (o *Observer) save(st *State) error {
 	}
 	// The state names each client and what it queried: 0640 for any umask,
 	// and the group of the file that it replaces. Thus pf observe once from
-	// a root shell leaves it as apply set it (root:pf-fortress).
+	// a root shell keeps the group pf-fortress, and the daemon (pf-observe)
+	// can still read it.
 	if err := os.Chmod(tmp, 0640); err != nil {
 		return err
 	}

@@ -481,6 +481,17 @@ else
   usermod -aG pf-fakeip pf-broker
   usermod -aG pf-fence pf-broker
   usermod -aG pf-fence pf-engine
+  # pf-observe: pf observe run. It reads the logs of the other daemons
+  # through pf-fortress, and owns only its state and its two logs.
+  if ! id -u pf-observe >/dev/null 2>&1; then
+    useradd --system --no-create-home --gid pf-fortress --home /nonexistent --shell /usr/sbin/nologin pf-observe
+  fi
+  # pf-leases: observe only. It is the group of the DHCP lease files
+  # (house.leases here, dhcp-<name>.leases in lib/dhcp.sh), for the client
+  # names. Not pf-fortress: the leases have the MAC and the name of each
+  # client, and the other daemons do not read them.
+  getent group pf-leases >/dev/null || groupadd --system pf-leases
+  usermod -aG pf-leases pf-observe
   chown root:pf-fence "${LOCK_DIR}"
   chmod 0750 "${LOCK_DIR}"
   install -d -m 0755 /etc/tmpfiles.d
@@ -1188,7 +1199,8 @@ fence_state_record() {
   done
 }
 
-# The logs are group-readable only. pf observe reads them as root.
+# The logs are group-readable only. pf observe (pf-observe) reads them
+# through the group pf-fortress.
 # The query log was dnsmasq.log while dnsmasq wrote it. Now pf dns writes
 # it and it has rows, so its name tells what it holds. The rename must
 # also move the offset sidecar: pf observe holds a byte count into the
@@ -1898,8 +1910,11 @@ if [[ -n "${HOUSE_IF}" ]]; then
   chmod 0644 /etc/pi-fortress/house.hosts
   # dnsmasq no longer starts as root. Thus it cannot open these two files
   # as root and give them to itself when it drops privilege: systemd starts
-  # it as pf-dhcp-house, and the files must already be its own. Group root,
-  # not nogroup -- the group of the daemon owns nothing on this box. The
+  # it as pf-dhcp-house, and the files must already be its own. Not
+  # nogroup -- the group of the daemon owns nothing on this box. The lease
+  # file has the group pf-leases, so that observe (pf-observe) can read
+  # the client names. dnsmasq writes the file in place, so the group stays.
+  # The log has the group root. The
   # chown is also the upgrade: a box installed before this unit dropped its
   # privilege has a root:root lease file, and an older box has files of
   # the shared dnsmasq account. dnsmasq would fail to open the lease file
@@ -1907,7 +1922,7 @@ if [[ -n "${HOUSE_IF}" ]]; then
   # instance has its own account (dhcp_account, lib/dhcp.sh).
   dhcp_account house
   touch /var/lib/pi-fortress/house.leases
-  chown pf-dhcp-house:root /var/lib/pi-fortress/house.leases
+  chown pf-dhcp-house:pf-leases /var/lib/pi-fortress/house.leases
   chmod 0640 /var/lib/pi-fortress/house.leases
   # The DHCP log. Before, dnsmasq did the fchown of this file itself at each
   # start, from root. CAP_CHOWN and CAP_DAC_OVERRIDE were on the unit
@@ -2038,21 +2053,29 @@ if [[ "${#_obs_old[@]}" -gt 0 ]]; then
   mv -f "${_obs_old[@]}" "${OBSERVE_STATE}/"
   rm -f /var/lib/pi-fortress/observe.json.lock
 fi
-# observe runs as root:pf-fortress with umask 027, so observe.json and
-# observe.jsonl are 0640 for the group. Correct the files that exist.
-for _f in "${OBSERVE_STATE}/observe.json" /var/log/pi-fortress/observe.jsonl; do
-  if [[ -f "${_f}" ]]; then
-    chown root:pf-fortress "${_f}"
-    chmod 0640 "${_f}"
-  fi
+# observe runs as pf-observe:pf-fortress (observe.service). It owns its
+# state directory. It replaces each state file with a rename, so a file
+# that root wrote there (an observe from before, or a sudo pf observe
+# once) does not stop it. The flock file is the one file that it opens
+# for write in place. An observe from before made it root:root 0640.
+# chown -h: apply changes the entry in the directory, and never follows
+# a symlink there to a different file.
+chown pf-observe:pf-fortress "${OBSERVE_STATE}"
+if [[ -f "${OBSERVE_STATE}/observe.json.lock" && ! -L "${OBSERVE_STATE}/observe.json.lock" ]]; then
+  chown -h pf-observe:pf-fortress "${OBSERVE_STATE}/observe.json.lock"
+fi
+# observe appends to observe.jsonl and notice.jsonl. It cannot make a
+# file in /var/log/pi-fortress, so apply makes both, owned by
+# pf-observe, 0640 for the group. pf alert (pf-sidecar, in the group)
+# reads notice.jsonl. apply makes it here, not its first writer: that can
+# be a sudo pf observe once from an operator, which makes it root:root.
+# The webhook then never gets the rows in it. logrotate.conf makes new
+# files with the same owner and mode.
+for _f in /var/log/pi-fortress/observe.jsonl /var/log/pi-fortress/notice.jsonl; do
+  [[ -f "${_f}" ]] || : >"${_f}"
+  chown pf-observe:pf-fortress "${_f}"
+  chmod 0640 "${_f}"
 done
-# pf alert (pf-sidecar, in the group) reads notice.jsonl. apply makes it
-# here, not its first writer: that can be a sudo pf observe once from
-# an operator, which makes it root:root. The webhook then never
-# gets the rows in it.
-[[ -f /var/log/pi-fortress/notice.jsonl ]] || : > /var/log/pi-fortress/notice.jsonl
-chown root:pf-fortress /var/log/pi-fortress/notice.jsonl
-chmod 0640 /var/log/pi-fortress/notice.jsonl
 if [[ -f "${PI_LIB}/observe.service" ]]; then
   install -m 0644 "${PI_LIB}/observe.service" /etc/systemd/system/pi-fortress-observe.service
 fi

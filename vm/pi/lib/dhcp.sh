@@ -137,7 +137,10 @@ seg_dhcp_sync() {
     # The chown is also the upgrade from the shared dnsmasq account.
     dhcp_account "${n}"
     touch "${DHCP_STATE}/dhcp-${n}.leases" "${DHCP_LOGS}/dhcp-${n}.log"
-    chown "pf-dhcp-${n}:root" "${DHCP_STATE}/dhcp-${n}.leases" "${DHCP_LOGS}/dhcp-${n}.log"
+    # The lease file has the group pf-leases, for observe (apply.sh
+    # gives the reason). The log has the group root.
+    chown "pf-dhcp-${n}:pf-leases" "${DHCP_STATE}/dhcp-${n}.leases"
+    chown "pf-dhcp-${n}:root" "${DHCP_LOGS}/dhcp-${n}.log"
     chmod 0640 "${DHCP_STATE}/dhcp-${n}.leases" "${DHCP_LOGS}/dhcp-${n}.log"
     systemctl enable "pi-fortress-dhcp@${n}.service" >/dev/null 2>&1 || true
     # Not fatal: the ruleset and the other segments are already applied.

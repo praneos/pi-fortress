@@ -1492,9 +1492,9 @@ grep -q '^SystemCallErrorNumber=' "${hunit}" &&
   fail "dns-house.service turns a filtered call into an errno; the siblings all kill"
 # dnsmasq is unprivileged from the first instruction. Thus it can no longer
 # open these two as root and give them to itself when it drops privilege.
-for _f in /var/lib/pi-fortress/house.leases /var/log/pi-fortress/dnsmasq-house-dhcp.log; do
-  grep -qF "chown pf-dhcp-house:root ${_f}" "${apply}" ||
-    fail "apply.sh does not give ${_f} to the pf-dhcp-house account"
+for _f in pf-leases:/var/lib/pi-fortress/house.leases root:/var/log/pi-fortress/dnsmasq-house-dhcp.log; do
+  grep -qF "chown pf-dhcp-house:${_f%%:*} ${_f#*:}" "${apply}" ||
+    fail "apply.sh does not give ${_f#*:} to pf-dhcp-house:${_f%%:*}"
 done
 grep -qF 'chown root:root /var/lib/pi-fortress/house.leases' "${apply}" &&
   fail "apply.sh still leaves the lease file root-owned; an unprivileged dnsmasq cannot write it"
@@ -1532,12 +1532,17 @@ grep -A12 '^/var/log/pi-fortress/dnsmasq-house-dhcp.log {' "${conf}" | grep -qx 
   || fail "logrotate.conf: dnsmasq-house-dhcp.log is not rotated, or not recreated with the owner it had"
 grep -A12 '^/var/log/pi-fortress/dnsmasq-house-dhcp.log {' "${conf}" | grep -qF 'kill -s USR2 pi-fortress-dns-house.service' \
   || fail "logrotate.conf: dnsmasq is not told to reopen its DHCP log"
-grep -A8 "^/var/log/pi-fortress/notice.jsonl {" "${conf}" | grep -q "create 0640 root pf-fortress" \
-  || fail "logrotate.conf: notice.jsonl is not rotated, or not recreated readable by pf alert"
+# observe (pf-observe) cannot make a file in /var/log/pi-fortress. Thus a
+# rotation makes its two logs as its own, readable by pf alert.
+for _l in observe.jsonl notice.jsonl; do
+  grep -A10 "^/var/log/pi-fortress/${_l} {" "${conf}" | grep -qx "    create 0640 pf-observe pf-fortress" \
+    || fail "logrotate.conf: ${_l} is not rotated, or not recreated as pf-observe:pf-fortress 0640"
+done
 grep -q '^for _f in .*/var/lib/pi-fortress/alert-notice.offset' "${apply}" \
   || fail "apply.sh does not make alert-notice.offset for pf-sidecar, which cannot create it"
-grep -q '^chown root:pf-fortress /var/log/pi-fortress/notice.jsonl' "${apply}" \
-  || fail "apply.sh does not hand notice.jsonl to the group pf alert reads it as"
+grep -qxF 'for _f in /var/log/pi-fortress/observe.jsonl /var/log/pi-fortress/notice.jsonl; do' "${apply}" \
+  && grep -qxF '  chown pf-observe:pf-fortress "${_f}"' "${apply}" \
+  || fail "apply.sh does not make observe.jsonl and notice.jsonl as pf-observe:pf-fortress"
 grep -q 'install -m 0644 "${PI_LIB}/logrotate.conf" /etc/pi-fortress/logrotate.conf' "${apply}" ||
   fail "apply.sh does not install logrotate.conf"
 if grep -vE '^[[:space:]]*#' "${apply}" | grep '/etc/logrotate.d' | grep -qv 'rm -f'; then
@@ -2317,8 +2322,12 @@ grep -q 'desk' "${droot}/systemctl.log" && fail "systemctl was asked about the d
 for _f in "${droot}/lib/dhcp-iot.leases" "${droot}/log/dhcp-iot.log"; do
   [[ "$(stat -c %a "${_f}")" == 640 ]] || fail "${_f##*/} is not 0640"
 done
-grep -qxF "pf-dhcp-iot:root ${droot}/lib/dhcp-iot.leases ${droot}/log/dhcp-iot.log" "${droot}/chown.log" ||
-  fail "the lease file and the log are not given to the pf-dhcp-iot account: $(cat "${droot}/chown.log")"
+# The lease file has the group pf-leases, which observe reads it through.
+# The log does not.
+grep -qxF "pf-dhcp-iot:pf-leases ${droot}/lib/dhcp-iot.leases" "${droot}/chown.log" ||
+  fail "the lease file is not given to pf-dhcp-iot:pf-leases: $(cat "${droot}/chown.log")"
+grep -qxF "pf-dhcp-iot:root ${droot}/log/dhcp-iot.log" "${droot}/chown.log" ||
+  fail "the log is not given to the pf-dhcp-iot account: $(cat "${droot}/chown.log")"
 grep -q 'dnsmasq' "${droot}/chown.log" && fail "a segment file is given to the shared dnsmasq account: $(cat "${droot}/chown.log")"
 [[ "$(grep -c ' pf-dhcp-iot$' "${droot}/useradd.log")" -eq 1 ]] ||
   fail "seg_dhcp_sync did not make the pf-dhcp-iot account: $(cat "${droot}/useradd.log")"
@@ -3122,6 +3131,57 @@ grep -qF 'install -d -m 2770 -o root -g pf-fortress "${WWW}/claims-redeemed"' "$
   fail "observe.service must write only its state directory and the logs"
 [[ "$(grep '^ReadWritePaths=' "${here}/alert.service")" == "ReadWritePaths=-/var/lib/pi-fortress/alert.offset -/var/lib/pi-fortress/alert-notice.offset -/var/lib/pi-fortress/alert.last" ]] ||
   fail "alert.service must write only its three state files"
+# observe runs as its own account, with NET_ADMIN only (the conntrack
+# dump). It reads the leases through pf-leases, not through a DAC
+# capability.
+for _l in User=pf-observe Group=pf-fortress 'SupplementaryGroups=systemd-journal pf-leases' \
+  CapabilityBoundingSet=CAP_NET_ADMIN AmbientCapabilities=CAP_NET_ADMIN; do
+  grep -qxF "${_l}" "${here}/observe.service" || fail "observe.service has no '${_l}'"
+done
+grep -q '^\(CapabilityBoundingSet\|AmbientCapabilities\)=.*DAC_' "${here}/observe.service" &&
+  fail "observe.service has a DAC capability"
+grep -qxF '    useradd --system --no-create-home --gid pf-fortress --home /nonexistent --shell /usr/sbin/nologin pf-observe' "${apply}" ||
+  fail "apply.sh does not make the pf-observe account"
+grep -qxF '  getent group pf-leases >/dev/null || groupadd --system pf-leases' "${apply}" ||
+  fail "apply.sh does not make the pf-leases group"
+grep -qxF '  usermod -aG pf-leases pf-observe' "${apply}" || fail "pf-observe is not in pf-leases"
+# lib/dhcp.sh uses the group, so apply makes it before the DHCP sync.
+_mk="$(grep -nF 'groupadd --system pf-leases' "${apply}" | head -1 | cut -d: -f1 || true)"
+_use="$(grep -nxF 'seg_dhcp_sync || exit 1' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_use}" && "${_mk}" -lt "${_use}" ]] ||
+  fail "apply does not make pf-leases before the DHCP sync gives it the lease files"
+# apply gives the state directory and the old flock file to pf-observe
+# before it starts observe. It never follows a symlink in that directory,
+# because pf-observe can write there.
+_mk="$(grep -nxF 'chown pf-observe:pf-fortress "${OBSERVE_STATE}"' "${apply}" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nF 'systemctl restart pi-fortress-observe.service' "${apply}" | tail -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "apply does not give the observe state directory to pf-observe before it starts observe"
+(
+  ob="${tmp}/obsown"
+  mkdir -p "${ob}/observe" "${ob}/log"
+  # shellcheck disable=SC2329 # the eval of the apply step below calls it
+  chown() { printf '%s\n' "$*" >>"${ob}/chown.log"; }
+  _own="$(sed -n '/^chown pf-observe:pf-fortress "${OBSERVE_STATE}"$/,/^done$/p' "${apply}" | sed "s#/var/log/pi-fortress#${ob}/log#g")"
+  [[ -n "${_own}" ]] || fail "the observe ownership step is gone from apply.sh"
+  OBSERVE_STATE="${ob}/observe"
+  : >"${ob}/target"
+  ln -s "${ob}/target" "${ob}/observe/observe.json.lock"
+  eval "${_own}"
+  grep -q 'observe.json.lock' "${ob}/chown.log" && fail "apply gave a symlinked flock file to pf-observe"
+  grep -qxF "pf-observe:pf-fortress ${ob}/observe" "${ob}/chown.log" || fail "apply did not give the state directory to pf-observe"
+  for _l in observe.jsonl notice.jsonl; do
+    [[ -f "${ob}/log/${_l}" ]] || fail "apply did not make ${_l}"
+    [[ "$(stat -c %a "${ob}/log/${_l}")" == 640 ]] || fail "${_l} is not 0640"
+    grep -qxF "pf-observe:pf-fortress ${ob}/log/${_l}" "${ob}/chown.log" || fail "apply did not give ${_l} to pf-observe"
+  done
+  : >"${ob}/chown.log"
+  mv "${ob}/observe/observe.json.lock" "${ob}/observe/old.link"
+  : >"${ob}/observe/observe.json.lock"
+  eval "${_own}"
+  grep -qxF -- "-h pf-observe:pf-fortress ${ob}/observe/observe.json.lock" "${ob}/chown.log" ||
+    fail "apply did not give the old flock file to pf-observe with chown -h"
+)
 # The units name the paths that the daemons use.
 grep -qF 'const StateDir = "/var/lib/pi-fortress/observe"' "${here}/../../internal/observe/observe.go" ||
   fail "pf observe keeps its state outside the directory that observe.service can write"
