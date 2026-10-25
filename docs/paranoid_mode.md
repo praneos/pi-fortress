@@ -48,7 +48,12 @@ The blocklist runs first and still wins.
 `allow.domains` is now operator state (`PI_OWNED`, `admin.AgentLists`).
 A listed name covers its subdomains. Thus the seed lists `github.com`,
 not `api.github.com`. A `*.name` line in this file matches nothing. The
-`paranoid=N` count of `pf status` does not count it.
+`paranoid=N` count of `pf status` does not count it. `sudo pf tui` writes
+a `*.name` that you type as the bare `name`. Thus that entry allows `name`
+itself and each name below it, at all depths. Each line in this file
+allows all names below it. There is no form for one exact name. Write the
+narrowest name that works, for example `api.example.com` and not
+`example.com`.
 
 - With paranoid off, the file only decides which hosts stay out of
   `unknown.jsonl`.
