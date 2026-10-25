@@ -423,6 +423,38 @@ func shieldWarnings(seg SegmentPolicy, local []string, never map[string]struct{}
 	return warn
 }
 
+// asciiWarnings gives one warning for each line that is not ASCII in a
+// domain list that the operator edits: the lists of each segment and
+// doh.domains.local. LoadTokens skips such a line, because a query, an SNI
+// and a feed carry the xn-- form. The warning gives that form. A feed line
+// that is not ASCII gets no warning: it is feed noise.
+func asciiWarnings(policyDir string) ([]string, error) {
+	files := []string{"doh.domains.local"}
+	for _, seg := range Segments {
+		for _, l := range seg.Lists() {
+			if l.Kind == "domains" || l.Kind == "endpoints" {
+				files = append(files, l.Name)
+			}
+		}
+	}
+	var warn []string
+	for _, name := range files {
+		raw, err := os.ReadFile(filepath.Join(policyDir, name))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for i, line := range strings.Split(string(raw), "\n") {
+			if token := StripLine(line); !corepolicy.IsASCII(token) {
+				warn = append(warn, fmt.Sprintf("%s line %d: %q is skipped (%s)", name, i+1, token, corepolicy.ASCIIHint(token)))
+			}
+		}
+	}
+	return warn, nil
+}
+
 // dropFeed removes from items each entry that refuse matches, and adds it
 // to dropped.
 func dropFeed(items []string, refuse func(string) bool, dropped map[string]struct{}) []string {
@@ -1068,6 +1100,11 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
+	ascii, err := asciiWarnings(policyDir)
+	if err != nil {
+		return Summary{}, err
+	}
+	warnings = append(append(warnings, ascii...), core.Warnings...)
 	if out.HouseWhatsAppNFT != "" {
 		wa, err := LoadTokens(filepath.Join(policyDir, HouseWhatsAppFile), "ips")
 		if err != nil {

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/fetch"
 	"pi-fortress/internal/policycompile"
 )
@@ -69,6 +70,11 @@ func ValidateToken(list, value string) (string, error) {
 		if strings.HasSuffix(list, ".ips") {
 			kind = "ips"
 		}
+	}
+	// A query and a feed carry a name that is not ASCII in its xn-- form.
+	// Thus the seat refuses such a name in a name list, and gives that form.
+	if (kind == "domains" || kind == "endpoints") && !corepolicy.IsASCII(value) {
+		return "", fmt.Errorf("%w: %s", errToken, corepolicy.ASCIIHint(strings.TrimSpace(value)))
 	}
 	var got string
 	var ok bool

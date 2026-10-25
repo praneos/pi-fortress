@@ -10,6 +10,7 @@ import (
 	"maps"
 	"net"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"unicode"
@@ -39,6 +40,11 @@ type Policy struct {
 	// entry and kind, in lowercase.
 	HostHeaders   map[string]map[string]map[string]struct{}
 	SuffixHeaders map[string]map[string]map[string]struct{}
+	// Warnings are the lines that the load skipped because their host can
+	// never get a credential (hostProblem). A warning, not an error: the
+	// line did nothing before, and an error would stop the broker on a Pi
+	// that worked. pf compile prints them.
+	Warnings []string
 }
 
 func newPolicy() *Policy {
@@ -94,6 +100,10 @@ func (p *Policy) load(path string) error {
 		if host == "" {
 			continue
 		}
+		if why := hostProblem(bits[0], host); why != "" {
+			p.Warnings = append(p.Warnings, fmt.Sprintf("%s line %d: %q can never get a credential; skipped (%s)", filepath.Base(path), n, bits[0], why))
+			continue
+		}
 		kindsT, headersT := p.HostKinds, p.HostHeaders
 		if suffix {
 			p.Suffix[host] = struct{}{}
@@ -143,6 +153,16 @@ func hostEntry(tok string) (string, bool) {
 		return normHost(tok[2:]), true
 	}
 	return normHost(strings.TrimPrefix(tok, ".")), false
+}
+
+// hostProblem says why the host column tok, read as host by hostEntry,
+// can never get a credential, or it gives "". Load and LoadForward skip
+// such a line.
+func hostProblem(tok, host string) string {
+	if !IsASCII(host) {
+		return ASCIIHint(tok)
+	}
+	return ""
 }
 
 // DefaultHeaders carry all kinds that a host binds: Bearer and Basic

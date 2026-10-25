@@ -624,3 +624,55 @@ func TestShieldedBlacklistLineWarns(t *testing.T) {
 		t.Fatalf("Line:\n%s", line)
 	}
 }
+
+// A name that is not ASCII never matches: a query, an SNI and a feed carry
+// the xn-- form. A line of the operator with such a name is skipped with a
+// warning that gives the xn-- form to write. This applies to each editable
+// domain list, to doh.domains.local and to core.hosts. A feed line is
+// skipped silently, as before.
+func TestNonASCIINameWarnsWithItsALabel(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "generated"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"blacklist.domains":           "evil.example\nmünchen.de\n",
+		"allow.domains":               "# mine\nbücher.example\n",
+		"house.domains":               "*.straße.example\n",
+		"doh.domains.local":           "dns.bücher.example\n",
+		"core.hosts":                  "api.anthropic.com CLAUDE_OAT\n",
+		"core.hosts.local":            "münchen.de CLAUDE_OAT\n",
+		"generated/blacklist.domains": "feed.bücher.example\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out := t.TempDir()
+	sum, err := Compile(dir, Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf"), HouseDNS: filepath.Join(out, "h.conf")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := [][]string{
+		{`blacklist.domains line 2: "münchen.de"`, "xn--mnchen-3ya.de"},
+		{`allow.domains line 2: "bücher.example"`, "xn--bcher-kva.example"},
+		{`house.domains line 1: "*.straße.example"`, "*.xn--strae-oqa.example"},
+		{`doh.domains.local line 1: "dns.bücher.example"`, "dns.xn--bcher-kva.example"},
+		{`core.hosts.local line 1: "münchen.de"`, "xn--mnchen-3ya.de"},
+	}
+	if len(sum.Warnings) != len(want) {
+		t.Fatalf("warnings %q, want %d", sum.Warnings, len(want))
+	}
+	for _, w := range want {
+		found := false
+		for _, got := range sum.Warnings {
+			found = found || strings.Contains(got, w[0]) && strings.Contains(got, w[1])
+		}
+		if !found {
+			t.Errorf("no warning has %q and %q: %q", w[0], w[1], sum.Warnings)
+		}
+	}
+	if dns, _ := os.ReadFile(filepath.Join(out, "d.conf")); string(dns) != dnsLines([]string{"evil.example"}) {
+		t.Fatalf("d.conf=%q", dns)
+	}
+}

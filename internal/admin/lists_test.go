@@ -188,3 +188,21 @@ func TestListRemoveMatchesTheNormalForm(t *testing.T) {
 		}
 	}
 }
+
+// A name that is not ASCII never matches a query. The seat refuses it and
+// gives the xn-- form to write.
+func TestValidateTokenRefusesNonASCIIWithItsALabel(t *testing.T) {
+	for list, want := range map[string]string{
+		"blacklist.domains":         "xn--mnchen-3ya.de",
+		"allow.domains":             "xn--mnchen-3ya.de",
+		"house_private_dns.domains": "abc.dns.xn--mnchen-3ya.de",
+	} {
+		value := "münchen.de"
+		if list == "house_private_dns.domains" {
+			value = "abc.dns.münchen.de"
+		}
+		if got, err := ValidateToken(list, value); !errors.Is(err, errToken) || !strings.Contains(err.Error(), want) {
+			t.Errorf("ValidateToken(%s, %s) = %q, %v; want a refusal that gives %s", list, value, got, err, want)
+		}
+	}
+}

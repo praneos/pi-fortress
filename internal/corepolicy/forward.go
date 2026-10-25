@@ -61,7 +61,7 @@ func LoadForward(allowPath, corePath string) (*Forward, error) {
 			continue
 		}
 		host, suffix := hostEntry(bits[0])
-		if host == "" {
+		if host == "" || hostProblem(bits[0], host) != "" {
 			continue
 		}
 		// Policy.Load also lists a "*.name" entry as an exact host.
