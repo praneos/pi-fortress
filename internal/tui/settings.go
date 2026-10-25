@@ -522,9 +522,9 @@ const (
 // sets msg to the result of the save just before, so msg names the edit:
 // "KEY=value", "added name", "f1 toggled".
 func (a *App) saved(scope string) {
-	what, _, _ := strings.Cut(a.msg, " -- ")
+	what, _, _ := strings.Cut(a.msg, warnSep)
 	what = strings.TrimSuffix(what, " saved")
-	a.edits = append(a.edits, what)
+	a.edits = addEdit(a.edits, what)
 	if scope == applyFull || a.pending == "" {
 		a.pending = scope
 	}
@@ -532,6 +532,28 @@ func (a *App) saved(scope string) {
 	if cost, ok := widens[what[strings.LastIndexByte(what, ' ')+1:]]; ok {
 		a.msg = cost + "; " + a.msg
 	}
+}
+
+// addEdit appends what to edits, and removes an older entry for the same
+// key. The next apply takes only the newest value. Thus on, off and on
+// again is one edit, not three.
+func addEdit(edits []string, what string) []string {
+	k := editKey(what)
+	edits = slices.DeleteFunc(edits, func(e string) bool { return editKey(e) == k })
+	return append(edits, what)
+}
+
+// editKey is what a save changes: KEY= of "KEY=value" (with the segment
+// name before it, for a segment), the DHCP range of a segment, or else the
+// full entry. Thus each add or delete of a list item is its own edit.
+func editKey(what string) string {
+	if i := strings.IndexByte(what, '='); i >= 0 {
+		return what[:i+1]
+	}
+	if i := strings.Index(what, " DHCP range "); i >= 0 {
+		return what[:i+len(" DHCP range")]
+	}
+	return what
 }
 
 // widens is the cost of a save that opens the fence, by KEY=value, in the
@@ -615,13 +637,32 @@ func (a *App) runApply(scope string) {
 	}
 	a.goTo(netSystem, secActions)
 	a.stream(title, "apply", args)
-	if a.paneBusy {
-		a.applying = &applyRun{scope: scope, edits: len(a.edits)}
+	// The apply takes the saved edits when its scope covers them. Thus they
+	// do not wait for an apply now, and a quit while it runs does not count
+	// them. A save while it runs is a new edit. apply --local from Actions
+	// does not cover an edit that needs the full apply, and takes none.
+	if a.paneBusy && (scope == applyFull || a.pending != applyFull) {
+		a.applying = &applyRun{edits: a.edits, pending: a.pending}
+		a.edits, a.pending = nil, ""
 	}
 }
 
-// applyRun is an A apply in progress. Refer to App.applying.
+// applyRun is an A apply in progress: the edits and the scope that it
+// took. Refer to App.applying.
 type applyRun struct {
-	scope string
-	edits int
+	edits   []string
+	pending string
+}
+
+// untake gives the edits of a failed apply back. They wait for an apply
+// again, with the edits saved while it ran. The wider scope wins.
+func (a *App) untake(run *applyRun) {
+	edits := run.edits
+	for _, e := range a.edits {
+		edits = addEdit(edits, e)
+	}
+	a.edits = edits
+	if run.pending == applyFull || a.pending == "" {
+		a.pending = run.pending
+	}
 }

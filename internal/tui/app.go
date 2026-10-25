@@ -96,10 +96,10 @@ type App struct {
 	// that runs it, and the footer says so until it has run.
 	pending string
 	// edits are the saved edits that wait for an apply, oldest first, each
-	// named as its save message names it. The A confirm shows them. applying
-	// is the scope of the A apply that streams now, with the count at its
-	// start. The code clears pending and edits only when that apply finishes
-	// cleanly and no save occurred in that time.
+	// named as its save message names it, one for each key. The A confirm
+	// shows them. applying is the A apply that streams now, with the edits
+	// that it took from edits and pending. When that apply fails, the code
+	// gives them back.
 	edits    []string
 	applying *applyRun
 	pr       *prompt
@@ -322,11 +322,11 @@ func (a *App) finishApply(done error) bool {
 	a.applying = nil
 	if _, ok := done.(doneMarker); ok {
 		a.pane = append(a.pane, "done")
-		if run != nil && run.edits == len(a.edits) && (run.scope == applyFull || a.pending == applyLocal) {
-			a.pending, a.edits = "", nil
-		}
 	} else {
 		a.pane = append(a.pane, "error: "+done.Error())
+		if run != nil {
+			a.untake(run)
+		}
 	}
 	if a.idleHit {
 		// Painted first: an apply that ran longer than the idle timer
@@ -1247,7 +1247,7 @@ func (a *App) drawMessage(b *buffer, y int, prefix, hint string) {
 	}
 	msg := clip(a.msg, b.w-len(tail))
 	at := reverse
-	if strings.HasPrefix(a.msg, "error: ") {
+	if _, w, ok := strings.Cut(a.msg, warnSep); strings.HasPrefix(a.msg, "error: ") || ok && strings.Contains(w, renderFails) {
 		at = alarm
 	}
 	b.line(0, y, b.w, "", reverse)

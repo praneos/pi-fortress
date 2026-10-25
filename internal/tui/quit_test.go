@@ -112,12 +112,12 @@ func TestQuitDuringAnActionAsks(t *testing.T) {
 }
 
 // A running action and saved edits give one prompt that names both, not
-// two prompts in a row.
+// two prompts in a row. The action is a fetch: an apply takes the edits.
 func TestQuitDuringAnActionWithEditsAsksOnce(t *testing.T) {
 	c, _ := testConfig(t)
 	c.PfCmd = []string{"/bin/sh", "-c", "sleep 30"}
 	f := NewFake(80, 24).Type(keys(netHouse, secFiltering) + "a").Type("x.example").Press(KeyEnter).
-		Type(keys(netSystem, secActions)).Press(KeyEnter)
+		Type(keys(netSystem, secActions) + "jj").Press(KeyEnter)
 	f.Hold = true
 	a := New(c, f)
 	done := make(chan error, 1)

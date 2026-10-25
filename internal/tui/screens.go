@@ -673,12 +673,20 @@ func (a *App) said(verb string, args admin.Args, msg string) bool {
 	}
 	a.reload()
 	if w, _ := v.(string); w != "" {
-		a.msg = msg + " -- " + w
+		a.msg = msg + warnSep + w
 		return true
 	}
 	a.msg = msg
 	return true
 }
+
+// warnSep joins a save message and the warning that said gets back.
+const warnSep = " -- "
+
+// renderFails is in the warning of a save on a box that pf render refuses
+// (admin SetNetEnv and SetSegment). The next apply fails on such a box.
+// Thus the footer shows that message as an error.
+const renderFails = "does not render"
 
 func (a *App) do(verb string, args admin.Args, msg string) bool {
 	if _, err := a.call(verb, args); a.fail(err) {
