@@ -129,3 +129,36 @@ func TestOneLabelOrUnderscoreHostIsRefused(t *testing.T) {
 		t.Fatal("the forward set keeps a refused line")
 	}
 }
+
+// "*" in the host column is valid only as one "*." before a name. A bare
+// "*" is not a match-all, and "*.*.example.com" is not two wildcards: each
+// matches no name. The load skips the line with a warning that says so.
+// "*" in a kind column is all kinds, and stays.
+func TestBareOrRepeatedWildcardHostIsRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "core.hosts.local")
+	if err := os.WriteFile(path, []byte("* CLAUDE_OAT\n*.*.example.com GITHUB_TOKEN\napi.example.com *\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Suffix) != 0 || len(p.Hosts) != 1 {
+		t.Fatalf("hosts %v suffix %v", p.Hosts, p.Suffix)
+	}
+	if !KindAllowed("GITHUB_TOKEN", p.KindsFor("api.example.com")) {
+		t.Fatal(`the "*" kind is lost`)
+	}
+	want := []string{`core.hosts.local line 1: "*"`, `core.hosts.local line 2: "*.*.example.com"`}
+	if len(p.Warnings) != len(want) {
+		t.Fatalf("warnings %q, want %d", p.Warnings, len(want))
+	}
+	for i, w := range want {
+		if !strings.Contains(p.Warnings[i], w) || !strings.Contains(p.Warnings[i], `one "*."`) {
+			t.Errorf("warning %d %q lacks %q and the wildcard rule", i, p.Warnings[i], w)
+		}
+	}
+	if f := testForward(t, "", "*.*.example.com GITHUB_TOKEN\n"); f.Allowed("x.*.example.com", false) {
+		t.Fatal("the forward set keeps a repeated wildcard")
+	}
+}
