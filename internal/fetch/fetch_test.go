@@ -1,7 +1,9 @@
 package fetch
 
 import (
+	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
@@ -210,6 +212,54 @@ func TestPublicAddr(t *testing.T) {
 		if got := publicAddr(netip.MustParseAddr(addr)); got != want {
 			t.Errorf("%s: got %v want %v", addr, got, want)
 		}
+	}
+}
+
+// A feed host can publish a ULA or a private address beside its public
+// ones. One such address failed the whole feed on each run. Now dial skips
+// it, and dials only an address that passed the check. The host fails
+// only when no address passes.
+func TestDialSkipsAnAddressThatIsNotPublic(t *testing.T) {
+	var answer []netip.Addr
+	var dialled []string
+	c := &client{
+		public: publicAddr,
+		lookup: func(context.Context, string) ([]netip.Addr, error) { return answer, nil },
+		dialTo: func(_ context.Context, _, addr string) (net.Conn, error) {
+			dialled = append(dialled, addr)
+			if addr != "9.9.9.9:443" {
+				return nil, fmt.Errorf("%s: refused", addr)
+			}
+			conn, peer := net.Pipe()
+			peer.Close()
+			return conn, nil
+		},
+	}
+	addrs := func(s ...string) []netip.Addr {
+		var out []netip.Addr
+		for _, a := range s {
+			out = append(out, netip.MustParseAddr(a))
+		}
+		return out
+	}
+
+	answer = addrs("fd00::1", "::ffff:10.0.0.1", "1.1.1.1", "192.168.1.1", "9.9.9.9")
+	conn, err := c.dial(context.Background(), "tcp", "feed.test:443")
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	conn.Close()
+	if want := "1.1.1.1:443,9.9.9.9:443"; strings.Join(dialled, ",") != want {
+		t.Fatalf("dialled %q, want %q", dialled, want)
+	}
+
+	dialled = nil
+	answer = addrs("fd00::1", "10.0.0.1")
+	if _, err := c.dial(context.Background(), "tcp", "feed.test:443"); err == nil || err.Error() != "feed.test resolves to fd00::1: not public" {
+		t.Fatalf("dial: %v", err)
+	}
+	if len(dialled) != 0 {
+		t.Fatalf("dialled %q", dialled)
 	}
 }
 

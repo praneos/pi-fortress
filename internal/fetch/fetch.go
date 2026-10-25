@@ -239,10 +239,15 @@ func publicAddr(a netip.Addr) bool {
 
 // client resolves each host itself, and dials only addresses that passed
 // the public check. So a rebinding resolver cannot pass the check with one
-// answer and steer the dial with a different answer.
+// answer and steer the dial with a different answer. An address that does
+// not pass is skipped. A host with no public address fails.
 type client struct {
 	public func(netip.Addr) bool
 	tls    *tls.Config
+	// lookup and dialTo replace the resolver and the dialer in a test. nil
+	// means the system resolver and a net.Dialer.
+	lookup func(ctx context.Context, host string) ([]netip.Addr, error)
+	dialTo func(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
 type page struct {
@@ -255,22 +260,42 @@ func (c *client) dial(ctx context.Context, network, hostport string) (net.Conn, 
 	if err != nil {
 		return nil, err
 	}
-	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	lookup := c.lookup
+	if lookup == nil {
+		lookup = func(ctx context.Context, host string) ([]netip.Addr, error) {
+			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		}
+	}
+	dialTo := c.dialTo
+	if dialTo == nil {
+		d := net.Dialer{Timeout: 10 * time.Second}
+		dialTo = d.DialContext
+	}
+	addrs, err := lookup(ctx, host)
 	if err != nil {
 		return nil, err
 	}
 	if len(addrs) == 0 {
 		return nil, fmt.Errorf("%s: no addresses", host)
 	}
-	for i, a := range addrs {
-		addrs[i] = a.Unmap()
-		if !c.public(addrs[i]) {
-			return nil, fmt.Errorf("%s resolves to %s: not public", host, addrs[i])
+	// A host can publish a private or ULA address beside its public ones.
+	// dial skips that address, and it fails only when no address is
+	// public. The error names the first address that it skipped.
+	var public []netip.Addr
+	var skipped netip.Addr
+	for _, a := range addrs {
+		a = a.Unmap()
+		if c.public(a) {
+			public = append(public, a)
+		} else if !skipped.IsValid() {
+			skipped = a
 		}
 	}
-	d := net.Dialer{Timeout: 10 * time.Second}
-	for _, a := range addrs {
-		conn, derr := d.DialContext(ctx, network, net.JoinHostPort(a.String(), port))
+	if len(public) == 0 {
+		return nil, fmt.Errorf("%s resolves to %s: not public", host, skipped)
+	}
+	for _, a := range public {
+		conn, derr := dialTo(ctx, network, net.JoinHostPort(a.String(), port))
 		if derr == nil {
 			return conn, nil
 		}
