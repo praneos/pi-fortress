@@ -331,6 +331,17 @@ stay on the origin connection after a framed response ended:
 The broker does not check a close-delimited HTTP/1.0 body for leftover bytes
 at all. That connection ends in either case.
 
+The fence does not scan trailers or chunk extensions. The broker reads each
+trailer field after the last chunk of a body, checks that it has the shape
+of a header field, and then discards it. A chunk extension (the text after
+`;` on a chunk size line) is discarded in the same way. A trailer field
+with a bad shape, or a control byte in a chunk extension, ends the request.
+No trailer field and no chunk extension goes to the origin server or to the
+agent. The broker also drops the `Trailer` header, which announces trailer
+fields, in the request and in the response. Thus a placeholder or a live
+value in a trailer or a chunk extension does not leave the Pi, and it
+writes no refusal and no strip row.
+
 The broker also base64-decodes an `Authorization` value with the scheme
 `Basic` (any case, with spaces or tabs before the token), padded or not. The
 `user:password` goes through the same scan as any header value: the same

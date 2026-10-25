@@ -935,10 +935,13 @@ func (b *Broker) writeStreamed(c *call, resp *httpwire.Response, reencode, origi
 // dropHopByHop removes the RFC 9110 hop-by-hop fields that the broker
 // does not already reframe or act on. TE: trailers would promise the
 // origin that trailers reach the client, but the broker drops trailers.
+// Trailer announces trailer fields that the broker drops (httpwire reads
+// them and does not forward them), and the fence does not scan them.
 // Keep-Alive states the connection limits of the origin, not the limits
 // of the broker to the client.
 func dropHopByHop(fs *httpwire.Fields) {
 	fs.Del("TE")
+	fs.Del("Trailer")
 	fs.Del("Keep-Alive")
 }
 
