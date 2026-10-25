@@ -728,8 +728,13 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 			ips = append(ips, kept)
 		default:
 			domains = append(domains, kept)
-			if sample == "" && len(kept) > 0 {
-				sample = kept[0]
+			// Compile blocks an address as an address, not in the name
+			// sinkhole. Thus the sample is the first name.
+			for _, item := range kept {
+				if _, err := netip.ParseAddr(item); sample == "" && err != nil {
+					sample = item
+					break
+				}
 			}
 		}
 	}

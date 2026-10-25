@@ -126,6 +126,28 @@ func TestFetchMockFeeds(t *testing.T) {
 	}
 }
 
+// Compile blocks an address on a domain feed as an address, so the name
+// sinkhole never answers it. Thus the sample is the first name, not an address.
+func TestSampleDomainIsAName(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "1.70.76.187\nbad.example\n")
+	}))
+	t.Cleanup(ts.Close)
+	dir := t.TempDir()
+	spec := fmt.Sprintf(`{"feeds": [{"id": "d", "kind": "domains", "format": "plain", "url": %q}]}`, ts.URL+"/domains")
+	if err := os.WriteFile(filepath.Join(dir, "sources.json"), []byte(spec), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "generated")
+	f := &Fetcher{PolicyDir: dir, OutDir: out, web: lab(ts)}
+	if report, _, _, err := f.Run(); err != nil {
+		t.Fatal(err, report)
+	}
+	if got := strings.TrimSpace(testsupport.ReadFile(t, filepath.Join(out, "sample.domain"))); got != "bad.example" {
+		t.Fatalf("sample.domain = %q", got)
+	}
+}
+
 func TestAllFeedsFailKeepsGenerated(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "sources.json"), []byte(`{"feeds":[{"id":"x","kind":"ips","format":"plain","url":"https://127.0.0.1:1/nope"},{"id":"y","kind":"domains","format":"plain","url":"https://127.0.0.1:1/nope"}]}`), 0644); err != nil {
