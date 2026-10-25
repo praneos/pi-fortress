@@ -2082,6 +2082,14 @@ fi
 # for write in place. An observe from before made it root:root 0640.
 # chown -h: apply changes the entry in the directory, and never follows
 # a symlink there to a different file.
+# An observe from before runs as root with no CAP_DAC_OVERRIDE. When its
+# logs belong to pf-observe, it cannot write them, and it fails on its
+# last write when it stops. Thus stop it before the owners change. The
+# restart below starts the new unit.
+if [[ -f /etc/systemd/system/pi-fortress-observe.service ]] &&
+  ! grep -qx 'User=pf-observe' /etc/systemd/system/pi-fortress-observe.service; then
+  systemctl stop pi-fortress-observe.service >/dev/null 2>&1 || true
+fi
 chown pf-observe:pf-fortress "${OBSERVE_STATE}"
 if [[ -f "${OBSERVE_STATE}/observe.json.lock" && ! -L "${OBSERVE_STATE}/observe.json.lock" ]]; then
   chown -h pf-observe:pf-fortress "${OBSERVE_STATE}/observe.json.lock"

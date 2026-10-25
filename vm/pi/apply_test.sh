@@ -3299,6 +3299,11 @@ _mk="$(grep -nxF 'chown pf-observe:pf-fortress "${OBSERVE_STATE}"' "${apply}" | 
 _start="$(grep -nF 'systemctl restart pi-fortress-observe.service' "${apply}" | tail -1 | cut -d: -f1 || true)"
 [[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
   fail "apply does not give the observe state directory to pf-observe before it starts observe"
+# An observe from before (root, no DAC_OVERRIDE) stops before its logs
+# change owner, so its last write does not fail.
+_stop="$(grep -nxF "  ! grep -qx 'User=pf-observe' /etc/systemd/system/pi-fortress-observe.service; then" "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_stop}" && -n "${_mk}" && "${_stop}" -lt "${_mk}" ]] ||
+  fail "apply does not stop an observe from before before it gives the logs to pf-observe"
 (
   ob="${tmp}/obsown"
   mkdir -p "${ob}/observe" "${ob}/log"
