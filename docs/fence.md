@@ -49,7 +49,9 @@ host". `vm/policy/core.hosts` lists `host KIND…` (`*` = lab echo). A name
 matches exactly, unless it is written as `*.name`. `*.name` matches the name
 and each subdomain of it. `pf compile` and `pf apply` refuse some host forms:
 a host with one label (`localhost`), a host with `_`, a bare `*`, a `*` after
-the first `*.` (`*.*.example.com`), and a non-ASCII host. They print a warning,
+the first `*.` (`*.*.example.com`), a host with an empty label
+(`..example.com`), a label over 63 bytes, a host over 253 bytes, and a
+non-ASCII host. They print a warning,
 skip that line, and change nothing else. For a non-ASCII host, the warning
 gives the `xn--` form to write. `*` as a kind (the lab echo) is not
 changed. A Claude placeholder

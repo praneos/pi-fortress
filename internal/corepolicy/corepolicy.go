@@ -158,7 +158,8 @@ func hostEntry(tok string) (string, bool) {
 // hostProblem says why the host column tok, read as host by hostEntry,
 // can never get a credential, or it gives "". Load and LoadForward skip
 // such a line. The fence refuses a Host that is not a name (validName).
-// Thus a host with one label or with "_" never gets a credential. hostEntry
+// Thus a host with one label, with "_", with an empty label, or over the
+// DNS length limits never gets a credential. hostEntry
 // removes one "*." only. A "*" that is left (a bare "*", "*.*.name") is a
 // literal byte of the host, and it matches no name. It is not a match-all.
 func hostProblem(tok, host string) string {
@@ -171,6 +172,24 @@ func hostProblem(tok, host string) string {
 		return "a host with one label is not a name that the fence accepts"
 	case strings.Contains(host, "_"):
 		return `a host with "_" is not a name that the fence accepts`
+	}
+	return lengthProblem(host)
+}
+
+// lengthProblem says why name breaks the DNS form that validName holds a
+// name to: an empty label, a label over 63 bytes, or a name over 253
+// bytes. Else it gives "".
+func lengthProblem(name string) string {
+	if len(name) > 253 {
+		return "a name over 253 bytes is not a name that the fence accepts"
+	}
+	for label := range strings.SplitSeq(name, ".") {
+		switch {
+		case label == "":
+			return "a name with an empty label (a leading dot or two dots) is not a name that the fence accepts"
+		case len(label) > 63:
+			return "a label over 63 bytes is not a name that the fence accepts"
+		}
 	}
 	return ""
 }
