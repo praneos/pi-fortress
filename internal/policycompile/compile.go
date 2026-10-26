@@ -314,13 +314,7 @@ func parseIPv4(token string, min int) (string, bool) {
 // "*.example.com" and ".example.com" are the same as "example.com". Only one
 // "*." or one dot goes.
 func ParseDomain(token string) (string, bool) {
-	name := strings.ToLower(strings.TrimSpace(token))
-	name = strings.TrimRight(name, ".")
-	if strings.HasPrefix(name, "*.") {
-		name = name[2:]
-	} else {
-		name = strings.TrimPrefix(name, ".")
-	}
+	name := domainForm(token)
 	if len(name) > 253 || !domainRe.MatchString(name) {
 		return "", false
 	}
@@ -330,6 +324,46 @@ func ParseDomain(token string) (string, bool) {
 		}
 	}
 	return name, true
+}
+
+// domainForm is the name of token that ParseDomain checks: lower case, with
+// no dot at the end, and with one "*." or one dot at the start removed.
+func domainForm(token string) string {
+	name := strings.ToLower(strings.TrimSpace(token))
+	name = strings.TrimRight(name, ".")
+	if strings.HasPrefix(name, "*.") {
+		return name[2:]
+	}
+	return strings.TrimPrefix(name, ".")
+}
+
+// DomainProblem says why ParseDomain refuses token, or it gives "".
+func DomainProblem(token string) string {
+	if _, ok := ParseDomain(token); ok {
+		return ""
+	}
+	name := domainForm(token)
+	switch {
+	case !corepolicy.IsASCII(name):
+		return corepolicy.ASCIIHint(strings.TrimSpace(token))
+	case len(name) > 253:
+		return "the name is over 253 bytes"
+	case !strings.Contains(name, "."):
+		return "a name needs two labels or more"
+	}
+	for label := range strings.SplitSeq(name, ".") {
+		switch {
+		case label == "":
+			return "the name has an empty label (two dots)"
+		case len(label) > 63:
+			return "a label is over 63 bytes"
+		case strings.Trim(label, "abcdefghijklmnopqrstuvwxyz0123456789-") != "":
+			return "a label has a character that is not a-z, 0-9 or a hyphen"
+		case strings.HasPrefix(label, "-") || strings.HasSuffix(label, "-"):
+			return "a label starts or ends with a hyphen"
+		}
+	}
+	return "it is not a name"
 }
 
 func IsNeverDomain(name string, never map[string]struct{}) bool {
@@ -820,6 +854,9 @@ func skipHint(token, kind string) string {
 	case !ok && ipKind && kind != "block_domains":
 		return " (a name is not accepted: list the host's address)"
 	case !ok:
+		if why := DomainProblem(token); why != "" {
+			return " (" + why + ")"
+		}
 		return ""
 	case !ipKind:
 		return " (an address range is not a name)"

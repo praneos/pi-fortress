@@ -73,6 +73,22 @@ func TestNoLineDropsSilently(t *testing.T) {
 		{"generated/blacklist.domains", "github.io", map[string]string{SharedParentsFile: "github.io"}, []string{"github.io", "at a shared parent"}},
 		{"generated/blacklist.ips", "2.0.0.0/8", nil, []string{"2.0.0.0/8", "wider than /12"}},
 	}
+	// A name that the DNS refuses: an empty label, a label over 63 bytes, a
+	// name over 253 bytes. Each name list refuses it, and each one tells why.
+	// The lists that ParseDomain reads also refuse a hyphen at the end of a
+	// label. The broker takes such a Host, so core.hosts and allow.domains
+	// keep it.
+	long := strings.Repeat("a", 64) + ".example"
+	huge := strings.Repeat("abcdefghi.", 26) + "example"
+	for _, file := range []string{"blacklist.domains", "never_block.domains", "house.domains", "house_never_block.domains", "house_private_dns.domains", "doh.domains.local", "allow.domains", "core.hosts"} {
+		bads := [][2]string{{"..x.example", "empty label"}, {long, "63 bytes"}, {huge, "253 bytes"}}
+		if file != "allow.domains" && file != "core.hosts" {
+			bads = append(bads, [2]string{"-bad-.example", "hyphen"}, [2]string{"a+b.example", "character"})
+		}
+		for _, bad := range bads {
+			rows = append(rows, row{file, bad[0], nil, []string{file + " line 1: ", `"` + bad[0] + `"`, bad[1]}})
+		}
+	}
 	lists := operatorLists()
 	for _, file := range lists {
 		if !slices.ContainsFunc(rows, func(r row) bool { return r.file == file }) {
