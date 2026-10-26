@@ -346,8 +346,10 @@ func rowHost(ctx fence.Ctx, p *preamble.Preamble, req *httpwire.Request, host st
 // field of req. The broker runs it before its own rules on the Host.
 func liveInHost(ctx fence.Ctx, req *httpwire.Request, slots map[string]secrets.Slot) []fence.Refusal {
 	var rs []fence.Refusal
-	for _, v := range req.Values("Host") {
-		rs = append(rs, fence.LiveIn(ctx, v, slots, fence.CauseLiveInHost, "header:Host")...)
+	for _, f := range req.Fields {
+		if strings.EqualFold(f.Name, "host") {
+			rs = append(rs, fence.LiveIn(ctx, f.Value, slots, fence.CauseLiveInHost, "header:"+f.Name)...)
+		}
 	}
 	return rs
 }
@@ -357,9 +359,9 @@ func liveInHost(ctx fence.Ctx, req *httpwire.Request, slots map[string]secrets.S
 // agent gets the same 501 in all cases.
 func (b *Broker) logLiveConn(c *call) {
 	var rs []fence.Refusal
-	for _, name := range []string{"Connection", "Upgrade"} {
-		for _, v := range c.req.Values(name) {
-			rs = append(rs, fence.LiveIn(b.hostCtx(), v, c.slots, fence.CauseLiveInConnection, "header:"+name)...)
+	for _, f := range c.req.Fields {
+		if strings.EqualFold(f.Name, "connection") || strings.EqualFold(f.Name, "upgrade") {
+			rs = append(rs, fence.LiveIn(b.hostCtx(), f.Value, c.slots, fence.CauseLiveInConnection, "header:"+f.Name)...)
 		}
 	}
 	b.logRefusals(c, rs)

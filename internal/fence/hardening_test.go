@@ -135,12 +135,12 @@ func TestLiveValueInConnectionRefused(t *testing.T) {
 		{"core, injected kind", "pf-core-echo.test", "Connection", "lab_fence_github", "a1b2c3d4e5f67890", "GITHUB_TOKEN", "header:Connection"},
 		{"core, after upgrade", "pf-core-echo.test", "Connection", "Upgrade, lab_fence_github", "a1b2c3d4e5f67890", "GITHUB_TOKEN", "header:Connection"},
 		{"core, other slot", "pf-core-echo.test", "Connection", "close, " + oat, "b0b1b2b3b4b5b6b7", "CLAUDE_OAT", "header:Connection"},
-		{"lowercase name", "pf-core-echo.test", "connection", "Upgrade, lab_fence_github", "a1b2c3d4e5f67890", "GITHUB_TOKEN", "header:Connection"},
+		{"lowercase name", "pf-core-echo.test", "connection", "Upgrade, lab_fence_github", "a1b2c3d4e5f67890", "GITHUB_TOKEN", "header:connection"},
 		{"foreign", "evil.example", "Connection", "Upgrade, lab_fence_github", "a1b2c3d4e5f67890", "GITHUB_TOKEN", "header:Connection"},
 		{"token prefix", "evil.example", "Connection", "keep-alive, " + ghp, "", "", "header:Connection"},
 		{"upgrade, core", "pf-core-echo.test", "Upgrade", "lab_fence_github", "a1b2c3d4e5f67890", "GITHUB_TOKEN", "header:Upgrade"},
 		{"upgrade, foreign", "evil.example", "Upgrade", "websocket, " + oat, "b0b1b2b3b4b5b6b7", "CLAUDE_OAT", "header:Upgrade"},
-		{"upgrade, token prefix", "pf-core-echo.test", "upgrade", ghp, "", "", "header:Upgrade"},
+		{"upgrade, token prefix", "pf-core-echo.test", "upgrade", ghp, "", "", "header:upgrade"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			raw := "GET / HTTP/1.1\r\nHost: " + tc.sni + "\r\n" + tc.field + ": " + tc.value + "\r\n" + auth + "\r\n"
@@ -396,6 +396,41 @@ func TestLiveValueInJudgedFieldAnyCase(t *testing.T) {
 			rs := LiveIn(Ctx{TokenRE: re}, v, slots, CauseLiveInHost, "header:Host")
 			if len(rs) == 0 || rs[0].Slot != l.slot {
 				t.Errorf("%s %s: LiveIn %+v", l.kind, cname, rs)
+			}
+		}
+	}
+}
+
+// Each row about one field names it as the agent wrote it, as the
+// placeholder_outside_header row does. Thus a placeholder and a live value
+// in the same field give one spelling in the log.
+func TestJudgedFieldWhereKeepsTheSpelling(t *testing.T) {
+	re, pol := testPolicy(t)
+	for _, name := range []string{"Host", "host", "HOST"} {
+		raw := "GET / HTTP/1.1\r\n" + name + ": api.github.com:pf_a1b2c3d4e5f67890_GITHUB_TOKEN-lab_fence_github\r\n\r\n"
+		_, err := Decide(Ctx{SNI: "api.github.com", TokenRE: re}, parseReq(t, raw), pol, labSlots())
+		rs := refusalsOf(t, err)
+		causes := map[RefusalCause]bool{}
+		for _, r := range rs {
+			causes[r.Cause] = true
+			if r.Where != "header:"+name {
+				t.Errorf("%s: row %+v, want where %q", name, r, "header:"+name)
+			}
+		}
+		if !causes[CauseOutsideHeader] || !causes[CauseLiveInHost] {
+			t.Errorf("%s: refusals %+v", name, rs)
+		}
+	}
+	for _, name := range []string{"Connection", "connection", "Upgrade", "upgrade"} {
+		raw := "GET / HTTP/1.1\r\nHost: api.github.com\r\n" + name + ": pf_a1b2c3d4e5f67890_GITHUB_TOKEN, lab_fence_github\r\n\r\n"
+		_, err := Decide(Ctx{SNI: "api.github.com", TokenRE: re}, parseReq(t, raw), pol, labSlots())
+		rs := refusalsOf(t, err)
+		if len(rs) != 2 {
+			t.Errorf("%s: refusals %+v", name, rs)
+		}
+		for _, r := range rs {
+			if r.Where != "header:"+name {
+				t.Errorf("%s: row %+v, want where %q", name, r, "header:"+name)
 			}
 		}
 	}

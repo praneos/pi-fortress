@@ -268,19 +268,16 @@ func (s *scanner) noteMethod(method string) {
 
 // noteHost refuses the request when the Host holds a live value or a
 // token-prefix match. It checks every live value, also one of a kind that
-// this host injects, and every token rule, as noteNames does.
-func (s *scanner) noteHost(host string) {
-	s.noteLive(host, CauseLiveInHost, "header:Host")
+// this host injects, and every token rule, as noteNames does. The row
+// names the field as the agent wrote it, as each other header row does.
+func (s *scanner) noteHost(name, host string) {
+	s.noteLive(host, CauseLiveInHost, "header:"+name)
 }
 
 // noteConn refuses the request when a Connection or an Upgrade field holds
 // a live value or a token-prefix match, as noteHost does for the Host.
 func (s *scanner) noteConn(name, v string) {
-	where := "header:Connection"
-	if strings.EqualFold(name, "upgrade") {
-		where = "header:Upgrade"
-	}
-	s.noteLive(v, CauseLiveInConnection, where)
+	s.noteLive(v, CauseLiveInConnection, "header:"+name)
 }
 
 // noteLive refuses the request with cause when v holds a live value or a

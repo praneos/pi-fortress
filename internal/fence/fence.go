@@ -683,7 +683,7 @@ func plan(s *scanner, req *httpwire.Request) PlanResult {
 			// A placeholder refuses as in all other non-credential headers.
 			// A live value refuses also.
 			sc.noteAll([]byte(f.Value), "header")
-			s.noteHost(f.Value)
+			s.noteHost(f.Name, f.Value)
 			continue
 		}
 		if connHeader(f.Name) {
