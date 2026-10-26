@@ -78,3 +78,25 @@ func TestShieldsKeepAnAddressOnADomainList(t *testing.T) {
 		})
 	}
 }
+
+// An IPv4 range on a domain block list blocks as a range, as on
+// blacklist.ips. An address or range that blacklist.ips refuses compiles to
+// nothing, and the warning names the file, the line and the reason.
+func TestDomainListAddressOrRangeNeverDropsSilently(t *testing.T) {
+	sum, out := compileAll(t, map[string]string{
+		"blacklist.domains": "192.0.2.0/24\n10.79.0.5\n0.0.0.0\n203.0.113.0/24\n2.0.0.0/7\n",
+	})
+	if nft := readOut(t, out.NFT); !strings.Contains(nft, "192.0.2.0/24") {
+		t.Errorf("the range did not compile:\n%s", nft)
+	}
+	for _, w := range [][]string{
+		{`blacklist.domains line 2: "10.79.0.5"`, "private or reserved"},
+		{`blacklist.domains line 3: "0.0.0.0"`, "private or reserved"},
+		{`blacklist.domains line 4: "203.0.113.0/24"`, "private or reserved"},
+		{`blacklist.domains line 5: "2.0.0.0/7"`, "wider than /8"},
+	} {
+		if !hasWarning(sum.Warnings, w...) {
+			t.Errorf("no warning has %q: %q", w, sum.Warnings)
+		}
+	}
+}
