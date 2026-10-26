@@ -927,6 +927,11 @@ if [[ -f "${POLICY}/doh.domains" && ! "${POLICY}/doh.domains" -ef /etc/pi-fortre
 fi
 
 install -d -m 0755 /var/log/pi-fortress /var/lib/pi-fortress
+# Make the www directory before the first daemon starts. Each daemon unit
+# except www lists it in InaccessiblePaths with "-". systemd skips such a
+# path when it is missing at the start. Then a daemon that starts in the
+# first apply could read the claim codes until its next restart.
+install -d -m 0755 /var/lib/pi-fortress/www
 # The number of hand-kept list lines that pf compile skipped in this run.
 # status.sh shows it. The closing line repeats it so that it is not lost above.
 COMPILE_WARNINGS="$(grep -c '^compile: warning:' "${WORKDIR}/compile.out" 2>/dev/null || true)"

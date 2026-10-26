@@ -3267,6 +3267,24 @@ grep -qF 'install -d -m 2770 -o root -g pf-fortress "${WWW}/claims-redeemed"' "$
 [[ "$(grep '^ReadWritePaths=' "${here}/www.service")" == "ReadWritePaths=/var/lib/pi-fortress/www/claims-redeemed" ]] ||
   fail "www.service must have claims-redeemed as its only writable path"
 
+# The claims directories are in pf-fortress, and all daemons are in that
+# group. claims/ and the ledger have the live codes. Thus each unit that
+# runs as a daemon account, except www, gets no path to the www directory.
+grep -qE '^InaccessiblePaths=(.* )?-/var/lib/pi-fortress/www( |$)' "${here}/pf-engine.service" ||
+  fail "pf-engine.service can read the claim codes in /var/lib/pi-fortress/www"
+for _u in "${here}"/*.service; do
+  [[ "$(basename "${_u}")" == www.service ]] && continue
+  grep -qE '^(User=|DynamicUser=yes)' "${_u}" || continue
+  grep -qE '^InaccessiblePaths=(.* )?-/var/lib/pi-fortress/www( |$)' "${_u}" ||
+    fail "$(basename "${_u}") can read the claim codes in /var/lib/pi-fortress/www"
+done
+# systemd skips a "-" path that is missing when the unit starts. Thus apply
+# makes the www directory before it starts the first unit.
+_mk="$(grep -nxF 'install -d -m 0755 /var/lib/pi-fortress/www' "${apply}" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nE 'systemctl (restart|start|enable --now) ' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "apply does not make /var/lib/pi-fortress/www before the first unit starts"
+
 # observe and alert write only their own state. Neither can write
 # claims-redeemed/ or any other state under /var/lib/pi-fortress.
 [[ "$(grep '^ReadWritePaths=' "${here}/observe.service")" == "ReadWritePaths=/var/lib/pi-fortress/observe /var/log/pi-fortress" ]] ||
