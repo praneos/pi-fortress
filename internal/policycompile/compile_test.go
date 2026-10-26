@@ -627,8 +627,8 @@ func TestShieldedBlacklistLineWarns(t *testing.T) {
 
 // A "*.name" line in allow.domains allows name and all names below it, as
 // "name" does (corepolicy.AllowEntry). The compile tells the operator to
-// write "name". A "*." line that allows nothing gets no such warning (a
-// one-label one gets its own). The
+// write "name". A "*." line that allows nothing gets its own warning: one
+// for a one-label line, and one for each other line. The
 // block lists already read "*.name" as "name" (ParseDomain) and do not warn.
 func TestAllowStarLineWarns(t *testing.T) {
 	dir := t.TempDir()
@@ -647,6 +647,7 @@ func TestAllowStarLineWarns(t *testing.T) {
 	}
 	want := []string{
 		`allow.domains line 2: "*.Example.com" means example.com and every name below it; write example.com`,
+		`allow.domains line 3: "*.*.x.example" allows no name; skipped`,
 		`allow.domains line 4: "*.com" is one label; it would allow every name below it; write the full name`,
 	}
 	if !slices.Equal(sum.Warnings, want) {
@@ -658,7 +659,8 @@ func TestAllowStarLineWarns(t *testing.T) {
 }
 
 // A one-label line of allow.domains allows nothing (corepolicy.AllowEntry).
-// The compile tells the operator why, for "com" and for "*.com".
+// The compile tells the operator why, for "com" and for "*.com". A bare "*"
+// also allows nothing, and it gets a warning too.
 func TestAllowOneLabelLineWarns(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "allow.domains"), []byte("github.com\nCom\n*.org\n*\n"), 0644); err != nil {
@@ -672,6 +674,7 @@ func TestAllowOneLabelLineWarns(t *testing.T) {
 	want := []string{
 		`allow.domains line 2: "Com" is one label; it would allow every name below it; write the full name`,
 		`allow.domains line 3: "*.org" is one label; it would allow every name below it; write the full name`,
+		`allow.domains line 4: "*" allows no name; skipped`,
 	}
 	if !slices.Equal(sum.Warnings, want) {
 		t.Fatalf("warnings %q, want %q", sum.Warnings, want)

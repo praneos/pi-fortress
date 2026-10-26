@@ -151,7 +151,8 @@ func TestFeedMapsLabelOperatorEntriesLocal(t *testing.T) {
 // operator, goes to the IP list: nft drops it. It is not a name in the
 // sinkhole. The IP map keeps its feed, or "local" for an operator line.
 // never_block.ips still applies to it, and an address that the IP list
-// refuses (private, reserved) compiles to nothing.
+// refuses (private, reserved) compiles to nothing. For a line of the
+// operator, the compile gives a warning.
 func TestAddressOnDomainListBlocksAsAddress(t *testing.T) {
 	pol := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(pol, "generated"), 0755); err != nil {
