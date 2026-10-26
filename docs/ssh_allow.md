@@ -19,8 +19,9 @@ default. An empty list gives the ruleset of today, byte for byte.
   drops.
 
 The same list gives the SSH destinations of every plain segment (the
-desk; see [Plain segments](#plain-segments)). Nothing else changes: not
-the resolver gate, not the fence, not the house.
+desk; see [Plain segments](#plain-segments)). The resolver gate of a
+plain segment gets one accept for TCP 22 to the list. Nothing else
+changes: not the fence, not the house.
 
 ## Read first: SSH bypasses the fence
 
@@ -160,13 +161,12 @@ iifname "<seg IF>" tcp dport 22 ip daddr @ssh_allow_v4 ct state new counter acce
   Thus this accept is the only way for SSH to leave the segment, unless
   `ALLOW_PORTS` names `tcp:22`. `EGRESS=audit` and `open` let 22 out to
   any address that the segment can reach.
-- The resolved-address gate of the segment still runs first. One of
-  these must be true:
-  - The own resolver of the segment gave the listed address
-    (`ssh git@github.com` resolves through the Pi, so this is true).
-  - `BLOCK_DIRECT_IP=off` is set.
-
-  A plain segment has no fake-IP. Thus names work.
+- The resolved-address gate of the segment lets TCP 22 to a listed
+  address through, before its drops. Thus SSH to a listed address works
+  also when the resolver of the segment did not give that address, and
+  `BLOCK_DIRECT_IP=off` is not necessary. Other ports to a listed
+  address still meet the gate. The blacklist and the `@reserved_v4`
+  drop still apply. A plain segment has no fake-IP. Thus names work.
 - The rule has no rate limit or log line of its own. The connection
   budget of the segment applies.
 - `SSH_TO` (out to the agents) and `SSH_FROM` (one address in) are
