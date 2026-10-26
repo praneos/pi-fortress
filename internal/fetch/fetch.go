@@ -168,14 +168,11 @@ func hostsSeq(body string) iter.Seq[string] {
 }
 
 // sinkAddr says if a token is an address that a hosts file sends a blocked
-// name to. A line with a different address maps a name; it does not block
-// it.
+// name to: the unspecified address or a loopback address (127.0.0.0/8,
+// ::1). A line with a different address maps a name; it does not block it.
 func sinkAddr(tok string) bool {
-	switch tok {
-	case "0.0.0.0", "127.0.0.1", "::", "::1":
-		return true
-	}
-	return false
+	a, err := netip.ParseAddr(tok)
+	return err == nil && (a.IsUnspecified() || a.IsLoopback())
 }
 
 // hostName parses one name of a hosts line.
@@ -420,8 +417,9 @@ func parseToken(token, kind string) (string, bool) {
 // in place of its names. So a line that starts with a sink address and has
 // a name after it gives the name, and an address is not a name, as in
 // ParseHosts. All other lines give the first field. A line that is only an
-// address stays an entry. A line keeps one entry: a hosts feed with aliases
-// needs format hosts.
+// address stays an entry if pf compile can block it: it refuses a private
+// or reserved address, as in an IP feed. A line keeps one entry: a hosts
+// feed with aliases needs format hosts.
 func ParsePlain(body, kind string) []string { return slices.Collect(plainSeq(body, kind)) }
 
 func plainSeq(body, kind string) iter.Seq[string] {
@@ -437,6 +435,9 @@ func plainSeq(body, kind string) iter.Seq[string] {
 				parsed, ok = hostName(f[1])
 			} else {
 				parsed, ok = parseToken(f[0], kind)
+			}
+			if _, err := netip.ParseAddr(parsed); ok && kind == "domains" && err == nil {
+				_, ok = policycompile.ParseIPv4(parsed)
 			}
 			if ok && !yield(parsed) {
 				return

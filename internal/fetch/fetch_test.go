@@ -825,3 +825,16 @@ func TestNeverBlockDomainsAddressShieldsAnIPFeed(t *testing.T) {
 		t.Fatalf("ips %d:\n%s", nIPs, ips)
 	}
 }
+
+// A hosts line can send a blocked name to any loopback address, not only
+// to 127.0.0.1. The name is the entry, in both formats. A lone address that
+// pf compile refuses (private or reserved, such as 0.0.0.0) is not an
+// entry: the report counts only what can compile.
+func TestFeedLineWithALoopbackAddressGivesTheName(t *testing.T) {
+	if got := ParsePlain("127.0.0.2 ads.example\n0.0.0.0\n10.0.0.1\n192.0.2.1\n", "domains"); strings.Join(got, ",") != "ads.example,192.0.2.1" {
+		t.Errorf("plain: got %q", got)
+	}
+	if got := ParseHosts("127.0.0.2 ads.example\n192.0.2.1 mapped.example\n"); strings.Join(got, ",") != "ads.example" {
+		t.Errorf("hosts: got %q", got)
+	}
+}
