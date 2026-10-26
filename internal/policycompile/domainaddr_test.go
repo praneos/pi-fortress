@@ -11,6 +11,16 @@ import (
 // and gives the summary and the outputs.
 func compileAll(t *testing.T, files map[string]string) (Summary, Out) {
 	t.Helper()
+	sum, out, err := compileAllErr(t, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sum, out
+}
+
+// compileAllErr is compileAll that gives the error of Compile.
+func compileAllErr(t *testing.T, files map[string]string) (Summary, Out, error) {
+	t.Helper()
 	dir, tmp := t.TempDir(), t.TempDir()
 	for name, body := range files {
 		path := filepath.Join(dir, name)
@@ -32,10 +42,7 @@ func compileAll(t *testing.T, files map[string]string) (Summary, Out) {
 		*p = filepath.Join(tmp, name)
 	}
 	sum, err := Compile(dir, out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return sum, out
+	return sum, out, err
 }
 
 // hasWarning says if one warning holds each of the parts.
