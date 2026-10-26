@@ -101,11 +101,16 @@ headers, and it never changes them. The authority decision, the blocklist and
 paranoid mode read the `Host`, and the origin server routes the request by
 it. Thus a live value or a token-prefix match in `Host` refuses the request
 (`live_in_host`, an alert), also a live value of a kind that the host
-injects. The broker reads `Connection` and `Upgrade` to decide on a WebSocket
+injects. The broker does this check before its own rules on the `Host`
+(the target rules, the blocklist, paranoid mode, git push). Thus a live
+value always gives `live_in_host`, also when it makes a label longer than
+63 bytes. The broker reads `Connection` and `Upgrade` to decide on a WebSocket
 (§5.3c) before the fence runs, and the origin server switches the protocol by
 them. Thus a live value or a token-prefix match in `Connection` or `Upgrade`
 refuses the request (`live_in_connection`, an alert), also a live value of a
-kind that the host injects.
+kind that the host injects. The origin server reads these three headers and
+each field name without letter case. Thus the fence finds a live value there
+in any letter case. The row names the header as the agent wrote it.
 
 The fence writes a credential into one body only: the body of the refresh
 token, `CLAUDE_ORT` on `/v1/oauth/token` or `/oauth/token`. This body is
@@ -283,15 +288,20 @@ each list item. Thus a request that is not a refresh can repeat it.
 
 The broker acquires that slot **before** the write to the origin server. It
 holds the slot until it has stored the rewritten response. A second refresh
-of the same slot in that window gets `429 refresh_busy`, not a race. The
-response must be JSON. The broker reads a 200 strictly: one top-level
+of the same slot in that window gets `429 refresh_busy`, not a race. A
+200 must be JSON. The broker reads a 200 strictly: one top-level
 object, `access_token` and `refresh_token` each spelled exactly once and in
 no other case, each value a string with no escape. A 200 must have a valid
 `access_token`. It may omit `refresh_token`, but a `refresh_token` that is
 present must be valid. For all other 200s, the agent gets a 502. After the
 scrub, the broker scans the token response (status reason, field names and
 values, body) with `key_prefixes.rules`. A match is a 502 for every status.
-The broker does not forward a live pair unread. Harvest refreshes
+The broker stores no token from a status other than 200. Such an answer
+gets a 502 when its body has an `access_token` or a `refresh_token` key
+(at any depth, in any letter case) or, in a body that is not JSON, one of
+these names. Thus the broker does not forward a pair that it did not store
+and cannot scrub. An error answer with no such key goes to the agent.
+Harvest refreshes
 only the rows of a slot that already exists (`upsert` never mints). If any
 other origin server returns `access_token`, it is data.
 
@@ -324,7 +334,8 @@ fence, the blocklist, and paranoid mode decide on the name only, and an
 origin server can route by the port. A `Host` with no port goes out. The
 result is `400`, and a strip row with `where=target` and the rule
 `request_target`, `connect`, `no_host`, `bad_host`, or
-`host_port_mismatch`.
+`host_port_mismatch`. A `Host` that holds a live value or a token-prefix
+match gets `live_in_host` before these rules.
 
 The broker skips every 1xx response, up to a bounded number. A 101 is an
 error, because nothing asked to upgrade. Thus a `103 Early Hints` cannot be
@@ -358,8 +369,11 @@ with a bad shape, or a control byte in a chunk extension, ends the request.
 No trailer field and no chunk extension goes to the origin server or to the
 agent. The broker also drops the `Trailer` header, which announces trailer
 fields, in the request and in the response. Thus a placeholder or a live
-value in a trailer or a chunk extension does not leave the Pi, and it
-writes no refusal and no strip row.
+value in a trailer field or a chunk extension does not leave the Pi, and it
+writes no refusal and no strip row. The `Trailer` header itself is a
+request header: the fence reads it before the broker drops it. A
+placeholder there refuses the request, as in any other non-credential
+header.
 
 The broker also base64-decodes an `Authorization` value with the scheme
 `Basic` (any case, with spaces or tabs before the token), padded or not. The
@@ -710,9 +724,12 @@ catching a credential aimed where it may not go. This is the signature of a comp
 agent. A `live_in_host` row has the SNI as its `host`, so the live value goes
 to no log and no webhook. The broker writes some rows before the fence runs:
 the target rules, the blocklist, the paranoid deny and a refused git push.
-When the `Host` holds a live value or a token-prefix match, each of these
-rows also has the SNI as its `host`. A refresh response that the broker refuses (the
-harvest cannot read the new pair, or a token shape stays after the scrub)
+A `Host` that holds a live value or a token-prefix match refuses as
+`live_in_host` before each of these. When only the lowercase form of the
+`Host` matches a token rule, each of these rows also has the SNI as its
+`host`. A refresh response that the broker refuses (the
+harvest cannot read the new pair, an answer other than a 200 has a token
+field, or a token shape stays after the scrub)
 writes `harvest_leftover` with the slot. It is always marked `alert`.
 
 The broker does not read a streamed body (over 1 MiB, or chunked) before the
