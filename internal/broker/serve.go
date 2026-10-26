@@ -95,7 +95,10 @@ type call struct {
 	// reachable from a shipped box. It must never get a credential to reflect.
 	echoRole string
 	ws       bool
+	// slots is the one slot snapshot of the request (snapshot). slotsErr is
+	// the error of that snapshot. prepare answers it.
 	slots    map[string]secrets.Slot
+	slotsErr error
 	// refresh is harvestAllowed for this request. jsonBody says that its
 	// Content-Type is application/json, and is set only with refresh.
 	// prepare sets both.
@@ -323,8 +326,19 @@ func (b *Broker) serve(ctx context.Context, client net.Conn, br *bufio.Reader, p
 // done says that admit answered the request. A refusal that wrote without
 // error returns done with errRefused, so the caller tests done, not err.
 func (b *Broker) admit(c *call) (done bool, err error) {
+	b.snapshot(c)
 	c.authority = prettyHost(c.req, c.p.SNI)
-	c.host = b.rowHost(c.p, c.req, c.authority)
+	c.host = rowHost(b.hostCtx(), c.p, c.req, c.authority, c.slots)
+	// A live value in the Host is a credential aimed at the name that the
+	// origin routes by. This check is before every other refusal. Thus the
+	// row always has the cause live_in_host, with the slot and the kind of
+	// a stored value, and the alert goes. This is also true for a Host that
+	// a later rule refuses: a label longer than 63 bytes, a wrong port, or
+	// a git push that the list does not allow.
+	if rs := liveInHost(b.hostCtx(), c.req, c.slots); len(rs) > 0 {
+		b.logRefusals(c, rs)
+		return true, b.refuseSubstitution(c)
+	}
 	if rule := targetRefusal(c.req, c.p.OrigDst.Port()); rule != "" {
 		_ = b.logStrip(&c.strips, clientIP(c.p), c.host, "target", rule)
 		return true, b.refuse(c.client, c.req, c.expect, 400, "400 Bad Request", "request\n")
@@ -495,21 +509,28 @@ func (b *Broker) gitPushRefuse(c *call) (done bool, err error) {
 	return true, b.refuseSubstitution(c)
 }
 
-// prepare snapshots the slots, releases a held-back body with 100
+// snapshot takes the slot snapshot that all stages of the request use.
+// admit reads it for the Host, and the fence decides against it. A second
+// snapshot could disagree with the first.
+func (b *Broker) snapshot(c *call) {
+	if b.Store == nil {
+		return
+	}
+	c.stopsSeen = b.budget.stopsLanded()
+	c.slots, c.slotsErr = b.Store.Snapshot()
+}
+
+// prepare answers a failed slot snapshot, releases a held-back body with 100
 // Continue, and runs the fence over the request. done says that prepare
 // answered the request (an echo answered locally, or a refusal). Then the
 // caller returns err as it is, nil or not.
 func (b *Broker) prepare(c *call) (strips []fence.StripEvent, stream *fence.StreamStrips, done bool, err error) {
-	if b.Store != nil {
-		c.stopsSeen = b.budget.stopsLanded()
-		c.slots, err = b.Store.Snapshot()
-		if err != nil {
-			if c.echo {
-				return nil, nil, true, b.echo(c.client, c.p, c.req, map[string]secrets.Slot{}, "")
-			}
-			_ = b.refuse(c.client, c.req, c.expect, 500, "500 Internal Server Error", "secrets\n")
-			return nil, nil, true, err
+	if c.slotsErr != nil {
+		if c.echo {
+			return nil, nil, true, b.echo(c.client, c.p, c.req, map[string]secrets.Slot{}, "")
 		}
+		_ = b.refuse(c.client, c.req, c.expect, 500, "500 Internal Server Error", "secrets\n")
+		return nil, nil, true, c.slotsErr
 	}
 	if c.slots == nil {
 		c.slots = map[string]secrets.Slot{}

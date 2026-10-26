@@ -2,6 +2,7 @@ package broker
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"strings"
 
@@ -80,9 +81,14 @@ func (b *Broker) harvest(slotID string, resp *httpwire.Response) ([]secrets.Slot
 		return nil, nil
 	}
 	// Only a 200 is the new pair. The broker does not store a token from
-	// any other status: an error answer must not replace the live pair. The
-	// residue scan stops a token shape in such an answer.
+	// any other status: an error answer must not replace the live pair. A
+	// value that the broker did not store is a value that it does not
+	// scrub, and the residue scan knows only the token rules. Thus such an
+	// answer with a token field never reaches the agent.
 	if resp.Code != 200 {
+		if tokenField(resp.Body) {
+			return nil, ErrHarvest
+		}
 		return nil, nil
 	}
 	if !jsonContentType(resp.Get("Content-Type")) {
@@ -115,6 +121,37 @@ func (b *Broker) harvest(slotID string, resp *httpwire.Response) ([]secrets.Slot
 		return nil, err
 	}
 	return minted, nil
+}
+
+// tokenField reports a token answer body that could carry a pair: a JSON
+// key access_token or refresh_token at any depth, in any letter case. In a
+// body that is not JSON, each of these names in any letter case counts.
+func tokenField(body []byte) bool {
+	var v any
+	if json.Unmarshal(body, &v) == nil {
+		return tokenKey(v)
+	}
+	lb := bytes.ToLower(body)
+	return bytes.Contains(lb, []byte("access_token")) || bytes.Contains(lb, []byte("refresh_token"))
+}
+
+// tokenKey reports a key access_token or refresh_token in v, at any depth.
+func tokenKey(v any) bool {
+	switch v := v.(type) {
+	case map[string]any:
+		for k, e := range v {
+			if strings.EqualFold(k, "access_token") || strings.EqualFold(k, "refresh_token") || tokenKey(e) {
+				return true
+			}
+		}
+	case []any:
+		for _, e := range v {
+			if tokenKey(e) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // residue reports a token shape (key_prefixes.rules) anywhere in a token

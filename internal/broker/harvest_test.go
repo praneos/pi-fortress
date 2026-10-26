@@ -422,3 +422,54 @@ func TestRefreshResponseNot200StoresNothing(t *testing.T) {
 		})
 	}
 }
+
+// A refresh answer other than a 200 stores nothing. When its body has a
+// token field, it could carry a pair of a shape that no token rule knows.
+// The broker does not forward such a body: the agent gets the harvest
+// refusal, and the operator gets the alert row. An error answer with no
+// token field goes to the agent as the origin sent it.
+func TestRefreshResponseNot200WithTokenFieldRefused(t *testing.T) {
+	one, two := "opaque-value-one", "opaque-value-two"
+	for _, tc := range []struct {
+		name, ct, body string
+		code           int
+		refused        bool
+	}{
+		{"pair", "application/json", `{"error":"x","access_token":"` + one + `","refresh_token":"` + two + `"}`, 400, true},
+		{"nested", "application/json", `{"error":{"type":"x"},"data":{"Refresh_Token":"` + two + `"}}`, 401, true},
+		{"escaped key", "application/json", `{"access\u005ftoken":"` + one + `"}`, 400, true},
+		{"in a list", "application/json", `[{"access_token":"` + one + `"}]`, 500, true},
+		{"form", "application/x-www-form-urlencoded", "access_token=" + one + "&refresh_token=" + two, 400, true},
+		{"not json", "text/plain", "{ACCESS_TOKEN: " + one, 400, true},
+		{"created", "application/json", `{"access_token":"` + one + `"}`, 201, true},
+		{"error", "application/json", `{"error":"invalid_grant","error_description":"refresh_token is not valid"}`, 400, false},
+		{"html", "text/html", "<html><body>busy</body></html>", 503, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, path := testBroker(t)
+			b.Logs = &jsonl.Writer{StripPath: filepath.Join(t.TempDir(), "strip.jsonl")}
+			before, _ := os.ReadFile(path)
+			fakeUpstream(t, b, func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", tc.ct)
+				w.WriteHeader(tc.code)
+				_, _ = w.Write([]byte(tc.body))
+			})
+			p := preamble.Preamble{SNI: "api.anthropic.com", OrigDst: netip.MustParseAddrPort("8.8.8.8:443")}
+			reqBody := `{"grant_type":"refresh_token","refresh_token":"pf_b0b1b2b3b4b5b6b7_CLAUDE_ORT"}`
+			raw := "POST /v1/oauth/token HTTP/1.1\r\nHost: api.anthropic.com\r\n" +
+				"Content-Type: application/json\r\nContent-Length: " + strconv.Itoa(len(reqBody)) + "\r\n\r\n" + reqBody
+			resp, body := roundtripStream(t, b, p, raw)
+			rows := stripRows(t, b.Logs.StripPath)
+			if tc.refused {
+				if resp.Code != 502 || string(body) != "harvest\n" || !strings.Contains(rows, `"cause":"harvest_leftover"`) {
+					t.Fatalf("code %d body %q rows %s", resp.Code, body, rows)
+				}
+			} else if resp.Code != tc.code || string(body) != tc.body {
+				t.Fatalf("code %d body %q", resp.Code, body)
+			}
+			if after, _ := os.ReadFile(path); string(after) != string(before) {
+				t.Fatalf("the store changed:\n%s", after)
+			}
+		})
+	}
+}

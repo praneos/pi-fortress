@@ -345,11 +345,6 @@ func BasicCredentials(name, value string) (dec []byte, at int, ok bool) {
 
 type scanner struct {
 	inject bool
-	// quiet stops refusal records. The no-inject scanner sets it: a
-	// WebSocket frame has no field that the fence injects into. Thus a
-	// placeholder there was never a substitution that the fence could
-	// refuse.
-	quiet  bool
 	kinds  []string
 	idx    *secrets.Index
 	tokens *tokenSet
@@ -462,7 +457,7 @@ func (s *scanner) keeps(sl secrets.Slot) bool {
 // strips and no placeholder injects.
 func (s *scanner) noInject() *scanner {
 	c := *s
-	c.inject, c.kinds, c.tokens, c.quiet = false, nil, c.all, true
+	c.inject, c.kinds, c.tokens = false, nil, c.all
 	return &c
 }
 
@@ -683,7 +678,7 @@ func plan(s *scanner, req *httpwire.Request) PlanResult {
 			// A placeholder refuses as in all other non-credential headers.
 			// A live value refuses also.
 			sc.noteAll([]byte(f.Value), "header")
-			s.noteHost(f.Value)
+			s.noteHost(f.Name, f.Value)
 			continue
 		}
 		if connHeader(f.Name) {
