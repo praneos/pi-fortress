@@ -124,9 +124,12 @@ type Broker struct {
 	useMu     sync.Mutex
 	lastUse   map[string]time.Time
 	saidCause map[fence.RefusalCause]bool
-	budget    budget
-	mem       memBudget
-	expiry    expiryState
+	// engineSaid is the time at which Handle last reported each kind of
+	// engine refusal that it did not write (engineErr).
+	engineSaid map[string]time.Time
+	budget     budget
+	mem        memBudget
+	expiry     expiryState
 }
 
 func (b *Broker) now() time.Time {
