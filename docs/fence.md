@@ -410,8 +410,12 @@ line.
 Each domain list (for example `blacklist.domains`, `never_block.domains`,
 `allow.domains` and the house lists) refuses a non-ASCII name. `pf compile`
 and `pf apply` print a warning, skip that line, and give the `xn--` form to
-write. An IPv4 address on a domain list of the agent blocks that address
-(an nft `/32`), not a name.
+write. An IPv4 address or range on a domain block list of the agent blocks
+as it does on `blacklist.ips` (an nft `/32` or the range), not as a name. A
+private or reserved address, or a range wider than `/8`, does not compile.
+Each line of an operator list that does not compile, or that a shield
+removes, gets a warning from `pf compile` and `pf apply`. The warning gives
+the file and the reason.
 
 **A blocked name resolves to `0.0.0.0`.** The resolver answers a listed
 name with `NOERROR` and one A record, `0.0.0.0`, with a TTL of 0. It does
@@ -468,7 +472,9 @@ parent that the list does not name still blocks its subtree.
 
 The guard is curation: `blacklist.domains` is Pi-owned, and `make pi-ship`
 never overwrites it. The escape hatch is `never_block.domains`. It drops
-every compiled entry at or under a name that it lists. The escape hatch is as
+every compiled entry at or under a name that it lists. An IPv4 address on
+it shields as on `never_block.ips`: it drops each address or range entry
+that holds the address. The escape hatch is as
 coarse as the hazard. To open `myapp.herokuapp.com` again under a listed
 `herokuapp.com`, the shield must name `herokuapp.com` itself. Reason: a
 shield below a listed parent leaves the entry of the parent in place. A
@@ -480,7 +486,8 @@ would block a host that `core.hosts` or `core.hosts.local` binds
 credentials to does not compile: the host itself, a parent of it, or a name
 under a `*.` entry. A feed line for `anthropic.com` must not cut the agent
 off from the service that holds its credentials. An entry under an exact
-core host stays, because it does not block the host.
+core host stays, because it does not block the host. A core host that is
+an IPv4 address drops each address or range entry that holds it.
 
 **An IP feed adds no prefix wider than `/12`.** One feed line with a `/8`
 would drop 16M addresses. `pf compile` drops a feed prefix that is wider
