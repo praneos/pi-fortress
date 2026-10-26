@@ -10,14 +10,29 @@ import (
 	"pi-fortress/internal/secrets"
 )
 
+// wwwDir is a www directory that serves a setup.sh and a ca.pem, with an
+// empty claims directory. Without the two files, no claim is issued.
+func wwwDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	for name, body := range map[string]string{"setup.sh": "#!/bin/sh\n", "ca.pem": "-----BEGIN CERTIFICATE-----\n"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "claims"), 0770); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 // At the default 80x24 terminal, the operator copies the claim command from
 // the screen as shown. Thus the full 64-digit hash and all of each command
 // line must be on the screen. One digit less is a checksum that never
 // matches. A lost && is a shell that runs half a command.
 func TestClaimOverlayUnclippedAt80Columns(t *testing.T) {
 	c, _ := testConfig(t)
-	c.WWWDir = t.TempDir()
-	_ = os.MkdirAll(filepath.Join(c.WWWDir, "claims"), 0770)
+	c.WWWDir = wwwDir(t)
 	c.Net = map[string]string{"AGENT_IP": "10.77.0.10", "PI_IP": "255.255.255.255"}
 	if _, err := secrets.Open(c.SecretsPath).MintKinds([]string{"OPENAI_API_KEY"}, map[string]string{"OPENAI_API_KEY": "sk-live"}); err != nil {
 		t.Fatal(err)
@@ -50,8 +65,7 @@ func TestClaimOverlayUnclippedAt80Columns(t *testing.T) {
 // with the line that closes it still on the screen.
 func TestClaimOverlaySaysTheCodeIsSecret(t *testing.T) {
 	c, _ := testConfig(t)
-	c.WWWDir = t.TempDir()
-	_ = os.MkdirAll(filepath.Join(c.WWWDir, "claims"), 0770)
+	c.WWWDir = wwwDir(t)
 	if _, err := secrets.Open(c.SecretsPath).MintKinds([]string{"OPENAI_API_KEY"}, map[string]string{"OPENAI_API_KEY": "sk-live"}); err != nil {
 		t.Fatal(err)
 	}

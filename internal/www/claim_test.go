@@ -216,7 +216,11 @@ func TestClaimGitUnderSh(t *testing.T) {
 // a claim file must go in that group. www cannot read a root:root file, and
 // then the full enrolment path gives 404.
 func TestClaimFileCarriesTheDirectoryGroup(t *testing.T) {
-	dir := t.TempDir()
+	s, _ := testServer(t)
+	dir := ClaimsDir(s.Dir)
+	if err := os.MkdirAll(dir, 0770); err != nil {
+		t.Fatal(err)
+	}
 	var dst syscall.Stat_t
 	if err := syscall.Stat(dir, &dst); err != nil {
 		t.Fatal(err)

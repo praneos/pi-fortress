@@ -257,8 +257,7 @@ func TestSettingsHouseWebTogglesAndAgentSection(t *testing.T) {
 
 func TestSecretsClaimAndQuarantine(t *testing.T) {
 	c, _ := testConfig(t)
-	c.WWWDir = t.TempDir()
-	_ = os.MkdirAll(filepath.Join(c.WWWDir, "claims"), 0770)
+	c.WWWDir = wwwDir(t)
 	slot, err := secrets.Open(c.SecretsPath).MintKinds([]string{"GITHUB_TOKEN"}, map[string]string{"GITHUB_TOKEN": "ghp_live"})
 	if err != nil {
 		t.Fatal(err)

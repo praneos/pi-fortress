@@ -60,8 +60,9 @@ type Claim struct {
 	GitHosts []string `json:"git_hosts,omitempty"`
 	// SetupSHA256 is the hex sha256 of the setup.sh that www served at claim
 	// issue. The claim script refuses a download that does not match it
-	// (ClaimScript). It is empty when there was no setup.sh. Then the claim
-	// script refuses to run at all.
+	// (ClaimScript). IssueClaim refuses to issue a claim when there is no
+	// setup.sh. If a claim file has no hash, the claim script refuses to run
+	// at all.
 	SetupSHA256 string `json:"setup_sha256,omitempty"`
 	// CASHA256 is the same for ca.pem. setup.sh also fetches ca.pem over plain
 	// HTTP, and then trusts it for each TLS connection that the agent makes.
@@ -185,6 +186,12 @@ func IssueClaim(dir, slot string, kinds []string, gitHosts ...string) (Claim, er
 		SetupSHA256: fileSHA256(setupPath(filepath.Dir(dir))), CASHA256: fileSHA256(caPath(filepath.Dir(dir)))}
 	if !scriptFields(c) {
 		return Claim{}, errors.New("claim: invalid slot or kind")
+	}
+	// Without setup.sh and ca.pem, the claim script can enrol nothing. The
+	// operator gets this error now, not a code that a redeem spends for no
+	// result.
+	if c.SetupSHA256 == "" || c.CASHA256 == "" {
+		return Claim{}, errors.New("claim: no setup.sh or ca.pem to serve; run pf apply first")
 	}
 	raw, err := json.Marshal(c)
 	if err != nil {
