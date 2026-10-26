@@ -678,6 +678,31 @@ func TestAllowOneLabelLineWarns(t *testing.T) {
 	}
 }
 
+// A line of allow.domains with an empty label (a leading dot) or over the
+// DNS length limits allows nothing (corepolicy.AllowEntry). The compile
+// names the line and tells why.
+func TestAllowEmptyLabelOrLongLineWarns(t *testing.T) {
+	dir := t.TempDir()
+	body := "github.com\n.example.com\nx..example.org\n" + strings.Repeat("a", 64) + ".example.net\n"
+	if err := os.WriteFile(filepath.Join(dir, "allow.domains"), []byte(body), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out := t.TempDir()
+	sum, err := Compile(dir, Out{NFT: filepath.Join(out, "e.nft"), DNS: filepath.Join(out, "d.conf")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`allow.domains line 2: ".example.com" allows nothing`, `allow.domains line 3: "x..example.org" allows nothing`, `allow.domains line 4: "aaaa`}
+	if len(sum.Warnings) != len(want) {
+		t.Fatalf("warnings %q, want %d", sum.Warnings, len(want))
+	}
+	for i, w := range want {
+		if !strings.HasPrefix(sum.Warnings[i], w) {
+			t.Errorf("warning %d %q, want %q", i, sum.Warnings[i], w)
+		}
+	}
+}
+
 // A name that is not ASCII never matches: a query, an SNI and a feed carry
 // the xn-- form. A line of the operator with such a name is skipped with a
 // warning that gives the xn-- form to write. This applies to each editable

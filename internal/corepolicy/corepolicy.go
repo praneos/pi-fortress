@@ -335,7 +335,9 @@ func LoadDomains(path string) (map[string]struct{}, error) {
 // One "*." goes, and only before a name with a dot. If a "*" is left
 // ("*.*.name"), it gives "": the line allows nothing. A line with no dot
 // ("com", or "*.com" after the "*." goes) also gives "". It would allow
-// all names below it, all of .com. core.hosts refuses such a host too.
+// all names below it, all of .com. core.hosts refuses such a host too. A
+// line with an empty label, as ".name", or over the DNS length limits
+// gives "" (AllowProblem): no query can match it.
 func AllowEntry(tok string) (name string, star, oneLabel bool) {
 	host := normHost(tok)
 	if star = strings.HasPrefix(host, "*."); star {
@@ -347,7 +349,22 @@ func AllowEntry(tok string) (name string, star, oneLabel bool) {
 	if !strings.Contains(host, ".") {
 		return "", false, isLabel(host)
 	}
+	if lengthProblem(host) != "" {
+		return "", false, false
+	}
 	return host, false, false
+}
+
+// AllowProblem says why the allow list token tok allows nothing for its
+// DNS form: an empty label (".name", "a..name"), a label over 63 bytes, or
+// a name over 253 bytes. Else it gives "". A line that is not ASCII gets
+// its own warning (ASCIIHint), so it gives "" for it.
+func AllowProblem(tok string) string {
+	host := strings.TrimPrefix(normHost(tok), "*.")
+	if !IsASCII(host) || !strings.Contains(host, ".") {
+		return ""
+	}
+	return lengthProblem(host)
 }
 
 // isLabel says if s is one label that a name can hold: s and a dot and a
