@@ -124,10 +124,8 @@ func checkSegHosts(s Segment) error {
 			return fmt.Errorf("%s is not inside NET=%s. Nothing was changed.", at, s.Net)
 		case h.IP == s.IP:
 			return fmt.Errorf("%s is IP, the address the Pi answers on. Nothing was changed.", at)
-		case a == p.Addr():
-			return fmt.Errorf("%s is the network address of NET=%s, which no device can hold. Nothing was changed.", at, s.Net)
-		case a == lastAddr(p):
-			return fmt.Errorf("%s is the broadcast address of NET=%s, which no device can hold. Nothing was changed.", at, s.Net)
+		case notHostAddr(s.Net, h.IP) != "":
+			return fmt.Errorf("%s is the %s address of NET=%s, which no device can hold. Nothing was changed.", at, notHostAddr(s.Net, h.IP), s.Net)
 		}
 	}
 	return nil

@@ -162,3 +162,42 @@ func TestBareOrRepeatedWildcardHostIsRefused(t *testing.T) {
 		t.Fatal("the forward set keeps a repeated wildcard")
 	}
 }
+
+// A host with an empty label, a label over 63 bytes or a name over 253
+// bytes can never get a credential: the fence reads such a Host as not a
+// name. The load skips the line with a warning. Before, the host was
+// listed and bound nothing. "..example.com" also shielded example.com
+// from the block list.
+func TestEmptyLabelOrLongHostIsRefused(t *testing.T) {
+	long := strings.Repeat(strings.Repeat("a", 63)+".", 4) + "test"
+	path := filepath.Join(t.TempDir(), "core.hosts.local")
+	body := "..example.com GITHUB_TOKEN\n" + strings.Repeat("a", 64) + ".example.com GITHUB_TOKEN\n" + long + " GITHUB_TOKEN\napi.example.com GITHUB_TOKEN\n"
+	if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+		t.Fatal(err)
+	}
+	p, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(p.HostsWithKind("GITHUB_TOKEN"), []string{"api.example.com"}) {
+		t.Fatalf("hosts %v", p.HostsWithKind("GITHUB_TOKEN"))
+	}
+	want := [][]string{
+		{`core.hosts.local line 1: "..example.com"`, "empty label"},
+		{`core.hosts.local line 2: "aaaa`, "63"},
+		{`core.hosts.local line 3: "aaaa`, "253"},
+	}
+	if len(p.Warnings) != len(want) {
+		t.Fatalf("warnings %q, want %d", p.Warnings, len(want))
+	}
+	for i, w := range want {
+		for _, s := range w {
+			if !strings.Contains(p.Warnings[i], s) {
+				t.Errorf("warning %d %q lacks %q", i, p.Warnings[i], s)
+			}
+		}
+	}
+	if f := testForward(t, "", body); f.Allowed("x.example.com", false) || !f.Allowed("api.example.com", false) {
+		t.Fatal("the forward set keeps a refused line")
+	}
+}

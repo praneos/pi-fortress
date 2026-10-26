@@ -134,7 +134,8 @@ func TestDNSTypesLineCanonical(t *testing.T) {
 // dns_types.allow is an agent list like allow.domains. The same verb adds
 // lines, and a refusal gives the reason. A hand-written line can be one
 // that the check canonicalises differently, or one that the check refuses.
-// The code deletes such a line by the text that the screen shows.
+// The screen shows the first in its normal form and the second as it is
+// written. The code deletes each line by the text that the screen shows.
 func TestDNSTypesListAddRemove(t *testing.T) {
 	c := testConfig(t)
 	p := filepath.Join(c.PolicyDir, DNSTypesList)
@@ -153,10 +154,10 @@ func TestDNSTypesListAddRemove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"Example.org  txt", "bad.example TXET", "*.example.com MX SRV"}; strings.Join(items, "|") != strings.Join(want, "|") {
+	if want := []string{"example.org TXT", "bad.example TXET", "*.example.com MX SRV"}; strings.Join(items, "|") != strings.Join(want, "|") {
 		t.Fatalf("items %q, want %q", items, want)
 	}
-	for _, it := range []string{"Example.org  txt", "bad.example TXET"} {
+	for _, it := range []string{"example.org TXT", "bad.example TXET"} {
 		if _, err := c.Call(RoleAdmin, "agent.del", Args{List: DNSTypesList, Value: it}); err != nil {
 			t.Fatalf("del %q: %v", it, err)
 		}

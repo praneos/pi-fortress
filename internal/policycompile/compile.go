@@ -507,8 +507,9 @@ func asciiWarnings(policyDir string) ([]string, error) {
 // The line allows name and all names below it (corepolicy.AllowEntry),
 // the same as the line "name". The warning tells the operator to write
 // that. It also gives one warning for each one-label line ("com",
-// "*.com"), and for each other line that allows nothing ("*.*.name"). It
-// reads the line as LoadDomains does:
+// "*.com"), for each line with an empty label or over the DNS length
+// limits (corepolicy.AllowProblem), and for each other line that allows
+// nothing ("*.*.name"). It reads the line as LoadDomains does:
 // the first token before a "#". The block lists need no "*." warning:
 // ParseDomain reads "*.name" there as "name", and a sinkhole line also
 // covers the names below it.
@@ -533,6 +534,8 @@ func allowWarnings(path string) ([]string, error) {
 			warn = append(warn, fmt.Sprintf("%s line %d: %q is one label; it would allow every name below it; write the full name", filepath.Base(path), i+1, bits[0]))
 		case star && name != "":
 			warn = append(warn, fmt.Sprintf("%s line %d: %q means %s and every name below it; write %s", filepath.Base(path), i+1, bits[0], name, name))
+		case name == "" && corepolicy.AllowProblem(bits[0]) != "":
+			warn = append(warn, fmt.Sprintf("%s line %d: %q allows nothing (%s)", filepath.Base(path), i+1, bits[0], corepolicy.AllowProblem(bits[0])))
 		case name == "" && corepolicy.IsASCII(bits[0]):
 			warn = append(warn, fmt.Sprintf("%s line %d: %q allows no name; skipped", filepath.Base(path), i+1, bits[0]))
 		}
