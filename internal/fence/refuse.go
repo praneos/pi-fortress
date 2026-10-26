@@ -162,9 +162,6 @@ func (e *RefusedError) Error() string { return "fence: substitution refused" }
 // A placeholder that is not exact (secrets.PlaceholderExact) has no slot:
 // the fence never substitutes it, and refuses it as slot_unknown.
 func (s *scanner) note(b []byte, span [2]int, where string) {
-	if s.quiet {
-		return
-	}
 	slot, kind := secrets.PlaceholderParts(b, span)
 	sl, ok := s.idx.ByDummy[secrets.Placeholder(slot, kind)]
 	ok = ok && secrets.PlaceholderExact(b, span)
