@@ -115,7 +115,10 @@ func ValidateToken(list, value string) (string, error) {
 
 func (c *Config) listPath(name string) string { return filepath.Join(c.PolicyDir, name) }
 
-// List returns the tokens of one overlay. It drops comments and blank lines.
+// List returns the rows of one overlay. It drops comments and blank lines.
+// Each row is the line in the form that lineKey gives. Thus a row is the
+// value that ListRemove takes back, and two lines with one meaning show as
+// one row. A line that the check refuses shows as it is written.
 func (c *Config) List(name string) ([]string, error) {
 	if !knownList(name) {
 		return nil, errList
@@ -124,9 +127,12 @@ func (c *Config) List(name string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	key := lineKey(name)
 	items := []string{}
+	seen := map[string]bool{}
 	for _, line := range lines {
-		if tok := policycompile.StripLine(line); tok != "" {
+		if tok := key(line); tok != "" && !seen[tok] {
+			seen[tok] = true
 			items = append(items, tok)
 		}
 	}
@@ -137,26 +143,34 @@ func (c *Config) ListAdd(name, value string) error {
 	return c.listEdit(name, value, addToken)
 }
 
+// ListRemove removes each line whose row (List) is value. The check refuses
+// a hand-written line, but the line is still a row on the screen. The
+// operator deletes it to fix it. Thus a value that the check refuses
+// removes, by its text, the lines that the check refuses in the same way.
+// When no line has that text, the refusal of the check is the error.
 func (c *Config) ListRemove(name, value string) error {
-	// The check refuses a hand-edited dns_types.allow line, but the line is
-	// still a row on the screen. The operator deletes it to fix it. Thus this
-	// one list removes, by its text, a line that it would not add.
-	if name == DNSTypesList {
-		if _, err := CheckDNSTypesLine(value); err != nil {
-			tok := policycompile.StripLine(value)
-			if tok == "" {
-				return errToken
-			}
-			return c.withEditLock(func() error {
-				lines, err := readLines(c.listPath(name))
-				if err != nil {
-					return err
-				}
-				return writeLines(c.listPath(name), removeToken(lines, tok, lineKey(name)))
-			})
-		}
+	if !knownList(name) {
+		return errList
 	}
-	return c.listEdit(name, value, removeToken)
+	_, verr := ValidateToken(name, value)
+	if verr == nil {
+		return c.listEdit(name, value, removeToken)
+	}
+	tok := policycompile.StripLine(value)
+	if tok == "" {
+		return verr
+	}
+	return c.withEditLock(func() error {
+		lines, err := readLines(c.listPath(name))
+		if err != nil {
+			return err
+		}
+		kept := removeToken(slices.Clone(lines), tok, lineKey(name))
+		if len(kept) == len(lines) {
+			return verr
+		}
+		return writeLines(c.listPath(name), kept)
+	})
 }
 
 // addToken appends after the last live token, not at the end of the file.
