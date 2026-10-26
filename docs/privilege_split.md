@@ -110,8 +110,9 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   It owns `/var/lib/pi-fortress/observe` (its ledger and checkpoints),
   `observe.jsonl` and `notice.jsonl`. `observe.service` can write only
   these paths and `/var/log/pi-fortress`, and in that directory only the
-  files that it owns. The other state under `/var/lib/pi-fortress`,
-  `www/claims-redeemed` too, is read-only to both. There is no console
+  files that it owns. The other state under `/var/lib/pi-fortress` is
+  read-only to both. `/var/lib/pi-fortress/www` is not visible to them
+  (see the www item below). There is no console
   daemon. For management, use `sudo pf tui`. This is a terminal program. Its only
   privilege is the sudo of the operator.
 - www writes to exactly one directory:
@@ -122,6 +123,12 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   `/var/lib/pi-fortress/www/claims` (`root:pf-fortress 2750`), so it cannot
   create or change a claim. `/etc/pi-fortress/broker` stays in
   `InaccessiblePaths`.
+- The claims and the ledger have the live claim codes. Their group is
+  `pf-fortress`, and all daemons are in it. Thus each other daemon unit
+  (engine, broker, sidecars, observe, DNS, DHCP) lists
+  `/var/lib/pi-fortress/www` in `InaccessiblePaths`. Only root and www can
+  read a code. apply makes the directory before it starts the first unit,
+  because systemd ignores an optional path that is missing at the start.
 - The feed refresh (`fetch.service`, `pf apply --refresh`), the signed ship
   (`ship.service`) and the ship dead-man (`ship-deadman.service`) stay root.
   apply loads nft, sets sysctls, adds the daemon accounts and writes `/etc`.
@@ -144,7 +151,8 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   - `pf broker`: owns `secrets.env` `0600`.
 - There are four groups:
   - `pf-fortress` has all daemons, for the files that they share (logs,
-    state, the claims directories).
+    state, the claims directories). Of the daemons, only www gets a path
+    to the claims directories (`InaccessiblePaths` above).
   - `pf-fence` has the engine and the broker, and nobody else. It exists to
     gate the broker socket.
   - `pf-fakeip` has the broker only. It is the group of the fake-IP journal

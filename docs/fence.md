@@ -1543,7 +1543,9 @@ The sweep never opens a claim. Thus it is a floor on the five-minute
 `expires`, and not the expiry check. The expiry check is in the redeem, on
 every redeem. www gets only `SupplementaryGroups=pf-fortress` and
 `ReadWritePaths` for `claims-redeemed/`. `secrets.env` stays inaccessible to
-www.
+www. All other daemons are in `pf-fortress` too, but their units list
+`/var/lib/pi-fortress/www` in `InaccessiblePaths`. Thus only root and www
+can read a live code.
 
 Ledger: `claims-redeemed/ledger.jsonl` (0660, same group). It has these
 entries:

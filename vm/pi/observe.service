@@ -62,12 +62,12 @@ SystemCallFilter=~@privileged
 # state file keeps the group of the file that it replaces (pf-fortress).
 SystemCallFilter=@chown
 # Its own state directory and the logs, nothing else. The other state
-# under /var/lib/pi-fortress (www/claims-redeemed, dns/, the alert
-# offsets) is read-only here. apply.sh makes the directory, owned by
+# under /var/lib/pi-fortress (dns/, the alert offsets) is read-only here.
+# The www directory, with the claim codes, is not visible here. apply.sh makes the directory, owned by
 # pf-observe, before the unit starts. In /var/log/pi-fortress, the
 # account can write only the files that it owns.
 ReadWritePaths=/var/lib/pi-fortress/observe /var/log/pi-fortress
-InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www
 # Write chunking: first-seen rows, offsets
 # and state stay in memory until one of the two limits. A crash loses that data.
 #Environment=PF_OBSERVE_FLUSH_BYTES=10485760
