@@ -326,6 +326,17 @@ func ParseDomain(token string) (string, bool) {
 	return name, true
 }
 
+// ParseName is ParseDomain for a list of the house. The house blocks names
+// only: it has no IP drop. As a name, an address there matched no query
+// and blocked nothing. Thus ParseName refuses an IPv4 address.
+func ParseName(token string) (string, bool) {
+	name, ok := ParseDomain(token)
+	if _, err := netip.ParseAddr(name); !ok || err == nil {
+		return "", false
+	}
+	return name, true
+}
+
 // domainForm is the name of token that ParseDomain checks: lower case, with
 // no dot at the end, and with one "*." or one dot at the start removed.
 func domainForm(token string) string {
@@ -514,7 +525,7 @@ func asciiWarnings(policyDir string) ([]string, error) {
 	files := []string{"doh.domains.local"}
 	for _, seg := range Segments {
 		for _, l := range seg.Lists() {
-			if l.Kind == "domains" || l.Kind == "endpoints" {
+			if l.Kind != "ips" && !strings.HasSuffix(l.Kind, "_ips") {
 				files = append(files, l.Name)
 			}
 		}
@@ -835,6 +846,7 @@ var (
 		"ssh_ips":       sshWhat,
 		"host_ips":      "a public IPv4 address",
 		"domains":       "a domain name",
+		"names":         "a domain name (the house blocks names only, not addresses)",
 		"endpoints":     "a resolver endpoint (<profile>.dns.<provider>.<tld>)",
 	}
 	kindMin = map[string]int{"ips": minBits, "block_domains": minBits, "allow_ips": allowMinBits, "ssh_ips": sshMinBits, "host_ips": 32}
@@ -858,6 +870,8 @@ func skipHint(token, kind string) string {
 			return " (" + why + ")"
 		}
 		return ""
+	case !ipKind && p.Bits() == 32:
+		return " (an address is not a name)"
 	case !ipKind:
 		return " (an address range is not a name)"
 	}
@@ -931,6 +945,8 @@ func loadTokens(path, kind string) ([]string, []badLine, error) {
 			parsed, ok = ParseEndpoint(token)
 		case "block_domains":
 			parsed, ok = parseBlockDomain(token)
+		case "names":
+			parsed, ok = ParseName(token)
 		default:
 			parsed, ok = ParseDomain(token)
 		}
@@ -1108,7 +1124,7 @@ func compileHouse(policyDir string, house SegmentPolicy, out Out, refuseFeed fun
 	// The shared never_block keeps registries and Google APIs reachable for
 	// agents. On the house side, it would protect ad hosts under google.com.
 	// The house list obeys only its own file.
-	houseNeverList, err := loadOperator(filepath.Join(policyDir, house.File("never_block.domains")), "domains", warn)
+	houseNeverList, err := loadOperator(filepath.Join(policyDir, house.File("never_block.domains")), "names", warn)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -1130,7 +1146,7 @@ func compileHouse(policyDir string, house SegmentPolicy, out Out, refuseFeed fun
 		if f.local {
 			load = func(path, kind string) ([]string, error) { return loadOperator(path, kind, warn) }
 		}
-		got, err := load(filepath.Join(policyDir, f.name), "domains")
+		got, err := load(filepath.Join(policyDir, f.name), "names")
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -1149,7 +1165,7 @@ func compileHouse(policyDir string, house SegmentPolicy, out Out, refuseFeed fun
 	if out.HouseVPNDNS == "" {
 		return houseFinal, nil, houseLocal, nil
 	}
-	got, err := LoadTokens(filepath.Join(policyDir, HouseVPNFile), "domains")
+	got, err := LoadTokens(filepath.Join(policyDir, HouseVPNFile), "names")
 	if err != nil {
 		return nil, nil, nil, err
 	}

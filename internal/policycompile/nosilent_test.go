@@ -61,6 +61,8 @@ func TestNoLineDropsSilently(t *testing.T) {
 		{"allow.domains", "bücher.example", nil, []string{`allow.domains line 1: "bücher.example"`, "xn--bcher-kva.example"}},
 		{"house.domains", "bad!name", nil, []string{`house.domains line 1: "bad!name"`, "is not a domain name"}},
 		{"house.domains", "ads.example.com", map[string]string{"house_never_block.domains": "example.com"}, []string{`house.domains: "ads.example.com"`, "house_never_block.domains shields it"}},
+		{"house.domains", "192.0.2.1", nil, []string{`house.domains line 1: "192.0.2.1"`, "names only"}},
+		{"house_never_block.domains", "192.0.2.1", nil, []string{`house_never_block.domains line 1: "192.0.2.1"`, "names only"}},
 		{"house_never_block.domains", "bad!name", nil, []string{`house_never_block.domains line 1: "bad!name"`, "is not a domain name"}},
 		{"house_private_dns.domains", "dns.example.com", map[string]string{"house_private_dns.ips": "192.0.2.53"}, []string{`house_private_dns.domains: dns.example.com`, "per-profile endpoint"}},
 		{"house_private_dns.ips", "example.com", nil, []string{`house_private_dns.ips line 1: "example.com"`, "a name is not accepted"}},

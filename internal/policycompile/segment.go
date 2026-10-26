@@ -77,8 +77,8 @@ func (s SegmentPolicy) Generated(kind string) string {
 func (s SegmentPolicy) Lists() []ListType {
 	if s.Posture == AllowByDefault {
 		return []ListType{
-			{s.Sinkhole("domains"), "domains"},
-			{s.File("never_block.domains"), "domains"},
+			{s.Sinkhole("domains"), "names"},
+			{s.File("never_block.domains"), "names"},
 			{s.File("private_dns.domains"), "endpoints"},
 			{s.File("private_dns.ips"), "host_ips"},
 			{s.File("direct_ip.allow"), "allow_ips"},

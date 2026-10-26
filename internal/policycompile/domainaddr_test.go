@@ -107,3 +107,18 @@ func TestDomainListAddressOrRangeNeverDropsSilently(t *testing.T) {
 		}
 	}
 }
+
+// The house blocks names only: it has no IP drop. Thus an address on
+// house.domains or house_never_block.domains does nothing. It does not
+// compile as a name, and the warning says why.
+func TestHouseListAddressWarns(t *testing.T) {
+	for _, file := range []string{"house.domains", "house_never_block.domains"} {
+		sum, out := compileAll(t, map[string]string{file: "192.0.2.1\nads.example\n"})
+		if h := readOut(t, out.HouseDNS); strings.Contains(h, "192.0.2.1") {
+			t.Errorf("%s: the address compiled as a name:\n%s", file, h)
+		}
+		if !hasWarning(sum.Warnings, file+` line 1: "192.0.2.1"`, "names only") {
+			t.Errorf("%s: no warning: %q", file, sum.Warnings)
+		}
+	}
+}
