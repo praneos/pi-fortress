@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -679,9 +680,28 @@ func (a *App) confirm(label string, done func()) {
 	}}
 }
 
+// codeLetters are the letters of a confirm code. I, L and O are not in
+// it: they look like 1 and 0.
+const codeLetters = "ABCDEFGHJKMNPQRSTUVWXYZ"
+
+// confirmCode is a new code of 3 letters for one typed confirm.
+func confirmCode() string {
+	b := make([]byte, 3)
+	_, _ = rand.Read(b)
+	for i := range b {
+		b[i] = codeLetters[int(b[i])%len(codeLetters)]
+	}
+	return string(b)
+}
+
+// confirmTyped asks the operator to type a code that the prompt shows. A
+// fixed word such as yes could come in a pasted text, and a console with no
+// paste brackets cannot tell a paste from typed keys. Each prompt has a new
+// code. Thus a text made before the prompt cannot answer it.
 func (a *App) confirmTyped(label string, done func()) {
-	a.ask(label+" (type yes)", func(s string) {
-		if s == "yes" {
+	code := confirmCode()
+	a.ask(label+" (type "+code+")", func(s string) {
+		if strings.EqualFold(s, code) {
 			done()
 		} else {
 			a.msg = "cancelled"

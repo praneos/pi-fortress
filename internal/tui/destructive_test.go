@@ -39,9 +39,9 @@ func TestFeedDisableAsksAndNamesTheFeed(t *testing.T) {
 }
 
 // d removes a slot and its credentials at once, and no apply or restore
-// brings them back. Thus it asks for the typed yes that purge asks for,
+// brings them back. Thus it asks for the typed code that purge asks for,
 // and the question names the slot. One y must not delete it.
-func TestSlotDeleteAsksForTypedYes(t *testing.T) {
+func TestSlotDeleteAsksForTypedCode(t *testing.T) {
 	c, _ := testConfig(t)
 	slot, err := secrets.Open(c.SecretsPath).MintKinds([]string{"GITHUB_TOKEN"}, map[string]string{"GITHUB_TOKEN": "ghp_live"})
 	if err != nil {
@@ -53,16 +53,16 @@ func TestSlotDeleteAsksForTypedYes(t *testing.T) {
 	}
 	// 80 columns: the full question fits, the slot included.
 	f := run(t, c, NewFake(80, 24).Type(keys(netAgent, secKeys)+"d"))
-	if !strings.Contains(f.Last(), "delete slot "+slot+"; its credentials go away at once (type yes)") {
-		t.Fatalf("d does not ask for a typed yes that names the slot:\n%s", f.Last())
+	if !strings.Contains(f.Last(), "delete slot "+slot+"; its credentials go away at once (type ") {
+		t.Fatalf("d does not ask for a typed code that names the slot:\n%s", f.Last())
 	}
 	f = run(t, c, NewFake(130, 24).Type(keys(netAgent, secKeys)+"d").Type("y").Press(KeyEnter))
 	if !has() || !strings.Contains(f.Last(), "cancelled") {
 		t.Fatalf("one y deleted the slot:\n%s", f.Last())
 	}
-	run(t, c, NewFake(130, 24).Type(keys(netAgent, secKeys)+"d").Type("yes").Press(KeyEnter))
+	run(t, c, NewFake(130, 24).Type(keys(netAgent, secKeys)+"d").TypeShownCode().Press(KeyEnter))
 	if has() {
-		t.Fatal("yes did not delete the slot")
+		t.Fatal("the typed code did not delete the slot")
 	}
 }
 
@@ -127,5 +127,61 @@ func TestReservationDeleteReloadsInOneQuestion(t *testing.T) {
 	}
 	if strings.Contains(f.Last(), "[y/N]") || !strings.Contains(f.Last(), "deleted aa:bb:cc:dd:ee:01") {
 		t.Fatalf("a second question follows the delete, or no message:\n%s", f.Last())
+	}
+}
+
+// A typed confirm asks for a code that it shows, not for a fixed word. On a
+// console with no paste brackets, a pasted text could hold a fixed word.
+// Each confirm shows a new code, so the code of an old screen does not
+// answer it.
+func TestTypedConfirmAsksForAShownCode(t *testing.T) {
+	c, _ := testConfig(t)
+	slot, err := secrets.Open(c.SecretsPath).MintKinds([]string{"GITHUB_TOKEN"}, map[string]string{"GITHUB_TOKEN": "ghp_live"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := func() bool {
+		raw, _ := os.ReadFile(c.SecretsPath)
+		return strings.Contains(string(raw), slot)
+	}
+	open := func() *Fake { return NewFake(130, 24).Type(keys(netAgent, secKeys) + "d") }
+	codes := map[string]bool{}
+	for range 20 {
+		m := shownCode.FindStringSubmatch(run(t, c, open()).Last())
+		if m == nil {
+			t.Fatalf("the confirm shows no code to type:\n%s", run(t, c, open()).Last())
+		}
+		if strings.ContainsAny(m[1], "IO") {
+			t.Fatalf("the code %s has a letter that looks like a digit", m[1])
+		}
+		codes[m[1]] = true
+	}
+	if len(codes) < 2 {
+		t.Fatalf("20 confirms showed one code: %v", codes)
+	}
+	if run(t, c, open().Type("yes").Press(KeyEnter)); !has() {
+		t.Fatal("yes answered the confirm")
+	}
+	// The code of the first confirm, typed on a second one.
+	for {
+		old := shownCode.FindStringSubmatch(run(t, c, open()).Last())[1]
+		f := run(t, c, open().Type(strings.ToLower(old)).Press(KeyEnter))
+		var now string
+		for _, fr := range f.Frames {
+			if m := shownCode.FindStringSubmatch(stripANSI(fr)); m != nil {
+				now = m[1]
+			}
+		}
+		if now == old {
+			continue // The two codes are the same by chance: try again.
+		}
+		if !has() {
+			t.Fatal("the code of an old confirm answered a new one")
+		}
+		break
+	}
+	run(t, c, open().TypeShownCode().Press(KeyEnter))
+	if has() {
+		t.Fatal("the shown code did not delete the slot")
 	}
 }
