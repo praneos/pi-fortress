@@ -585,7 +585,8 @@ fixtures, no-dot and bogus-priv, and paranoid. If the query passes, `pf dns`
 answers with an address from `FAKEIP_NET` (default `198.18.0.0/16`). There is
 one name for each address, and the TTL is 60 s. `pf dns` forwards no A
 query: no upstream, no cache, no `resolved_v4` write. A type that
-`dns_types.allow` permits still goes upstream.
+`dns_types.allow` permits still goes upstream. AAAA, HTTPS and SVCB never
+go upstream: an entry for them in `dns_types.allow` has no effect.
 
 Each assignment is a line in `/var/lib/pi-fortress/dns/fakeip.journal`
 (`internal/fakeip`), written before the answer. A name keeps its address
@@ -611,7 +612,8 @@ the broker alone.
 
 What fake-IP closes: DNS as a silent channel in both directions. A lookup no
 longer goes out of the Pi, and nothing but a pool address comes back. The
-exception is a type that the operator permits in `dns_types.allow`.
+exception is a type that the operator permits in `dns_types.allow`. That
+exception is never AAAA, HTTPS or SVCB.
 
 What fake-IP does not close: a TLS connection to a name that the attacker
 selects still makes the Pi resolve that name upstream, one time for each

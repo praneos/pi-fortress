@@ -33,6 +33,23 @@ func TestSegmentExtraTypesForwardOnlyThoseTypes(t *testing.T) {
 	}
 }
 
+// DNS_TYPES cannot widen AAAA, HTTPS or SVCB. These are always answered
+// empty and never forwarded, also when DNS_TYPES lists them.
+func TestSegmentExtraTypesNeverWidenTheAlwaysEmptyTypes(t *testing.T) {
+	h := addrOnlyHarness(t, nil, nil, map[string][4]byte{"desk.example": {1, 2, 3, 4}}, nil, 300)
+	types := []uint16{uint16(dnsmessage.TypeAAAA), typeHTTPS, typeSVCB}
+	h.srv.segs[0].ExtraTypes = types
+	for _, qt := range types {
+		hdr, answers := h.ask(t, "desk.example", dnsmessage.Type(qt))
+		if hdr.RCode != dnsmessage.RCodeSuccess || len(answers) != 0 {
+			t.Fatalf("type %d with DNS_TYPES: rcode %v answers %d, want an empty answer", qt, hdr.RCode, len(answers))
+		}
+	}
+	if n := h.up.asked.Load(); n != 0 {
+		t.Fatalf("DNS_TYPES widened an always-empty type: upstream asked %d times", n)
+	}
+}
+
 func TestNewRefusesExtraTypesWithoutAddressOnly(t *testing.T) {
 	dir := t.TempDir()
 	sink := filepath.Join(dir, "sink.conf")
