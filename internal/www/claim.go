@@ -27,20 +27,8 @@ const (
 	claimLen    = 8
 	sweepAfter  = time.Hour
 	limitPerMin = 10
-	// segmentPerMin is the cap on the claim tries of all sources together.
-	// limitPerMin is per source. The anti-spoof rule admits each address of
-	// AGENT_NET, so a root agent can add an alias for each free address of a
-	// /24. With only the per-source cap, that is approximately 250 x 10
-	// tries a minute. One enrolment is one try: the operator pastes one
-	// command on one agent. 30 a minute is one enrolment each 2 seconds. No
-	// operator does that by hand, and it leaves space for typing errors and
-	// retries. 30 a minute for the 5 minutes of ClaimTTL is 150 tries
-	// against 2^40 codes for each live claim. The cost: an agent that keeps
-	// the cap full stops all claims on the segment while it continues. The
-	// operator sees a 429, not a spent code.
-	segmentPerMin = 30
-	setupWindow   = time.Minute
-	seenMax       = 4096
+	setupWindow = time.Minute
+	seenMax     = 4096
 	// hitsMax bounds the table of the claim limiter, as seenMax bounds the
 	// table for setup. The number and the reason are the same. The endpoint is
 	// different.
@@ -613,42 +601,6 @@ func (l *limiter) allow(ip string) bool {
 		l.sweep(now)
 	}
 	l.hits[ip] = append(keep, now)
-	return true
-}
-
-// giveBack removes the last try of ip that allow accepted. serveClaim calls
-// it when the segment cap refuses that try.
-func (l *limiter) giveBack(ip string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if ts := l.hits[ip]; len(ts) > 0 {
-		l.hits[ip] = ts[:len(ts)-1]
-	}
-}
-
-// window counts the claim tries of all sources in the last minute. It keeps
-// one time for each try that it accepts. So it never holds more than
-// segmentPerMin times, and a flood cannot grow it.
-type window struct {
-	mu sync.Mutex
-	at []time.Time
-}
-
-func (w *window) allow() bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	now := time.Now()
-	keep := w.at[:0]
-	for _, t := range w.at {
-		if now.Sub(t) < time.Minute {
-			keep = append(keep, t)
-		}
-	}
-	w.at = keep
-	if len(keep) >= segmentPerMin {
-		return false
-	}
-	w.at = append(keep, now)
 	return true
 }
 
