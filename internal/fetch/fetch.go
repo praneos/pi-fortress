@@ -737,7 +737,11 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 	agent := policycompile.SegmentFor(policycompile.DenyByDefault)
 	house := policycompile.SegmentFor(policycompile.AllowByDefault)
 	neverNets := neverIPSet(readListFile(filepath.Join(policy, agent.File("never_block.ips")), "ips", &report))
-	neverDoms := toSet(readListFile(filepath.Join(policy, agent.File("never_block.domains")), "domains", &report))
+	neverDomList := readListFile(filepath.Join(policy, agent.File("never_block.domains")), "domains", &report)
+	// An address on never_block.domains also shields the IP feeds, as in
+	// pf compile (policycompile.ipShields).
+	neverNets = append(neverNets, neverIPSet(neverDomList)...)
+	neverDoms := toSet(neverDomList)
 	houseNever := toSet(readListFile(filepath.Join(policy, house.File("never_block.domains")), "domains", &report))
 	// Each list holds the kept items of each feed apart, so capShare can
 	// give each feed its share of the cap.

@@ -7,10 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"iter"
+	"maps"
 	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -419,6 +422,52 @@ func shieldWarnings(seg SegmentPolicy, local []string, never map[string]struct{}
 			continue
 		}
 		warn = append(warn, fmt.Sprintf("%s: %q is not blocked: %s", seg.Sinkhole("domains"), d, why))
+	}
+	return warn
+}
+
+// addrNets gives each IPv4 address in names as a /32. never_block.domains
+// and core.hosts accept "192.0.2.1": four labels of digits obey the grammar
+// of a name. The compiler blocks such an item as an address (splitAddrs).
+// Thus these two shields must also apply to the IP half.
+func addrNets(names iter.Seq[string]) []netip.Prefix {
+	var out []netip.Prefix
+	for name := range names {
+		if a, err := netip.ParseAddr(name); err == nil && a.Is4() {
+			out = append(out, netip.PrefixFrom(a, 32))
+		}
+	}
+	return out
+}
+
+// ipShields are the shields of the IP half: never_block.ips, and the
+// addresses of never_block.domains and core.hosts. Each one removes an
+// entry that overlaps it.
+type ipShields struct {
+	ips, domains, core []netip.Prefix
+}
+
+// why gives the reason that a shield removes item, or "".
+func (s ipShields) why(seg SegmentPolicy, item string) string {
+	switch {
+	case IsNeverIP(item, s.ips):
+		return seg.File("never_block.ips") + " shields it (an address or range there overlaps it)"
+	case IsNeverIP(item, s.domains):
+		return seg.File("never_block.domains") + " shields it (an address there is in it)"
+	case IsNeverIP(item, s.core):
+		return "core.hosts shields it (a credential host there is an address in it)"
+	}
+	return ""
+}
+
+// ipShieldWarnings is shieldWarnings for the lines of the IP half that the
+// operator wrote in file.
+func ipShieldWarnings(seg SegmentPolicy, file string, local []string, s ipShields) []string {
+	var warn []string
+	for _, item := range local {
+		if why := s.why(seg, item); why != "" {
+			warn = append(warn, fmt.Sprintf("%s: %q is not blocked: %s", file, item, why))
+		}
 	}
 	return warn
 }
@@ -1044,11 +1093,13 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	}
 	// An address on a domain list blocks as an address. It keeps its half:
 	// the IP map labels a feed address with its feed and an operator line
-	// "local". never_block.ips applies to it.
+	// "local". never_block.ips, never_block.domains and core.hosts shield it
+	// (ipShields).
 	feedDomains, feedAddrs := splitAddrs(feedDomains)
 	localDomains, localAddrs := splitAddrs(localDomains)
+	listIPs := localIPs
 	feedIPs = append(feedIPs, feedAddrs...)
-	localIPs = append(localIPs, localAddrs...)
+	localIPs = append(slices.Clip(localIPs), localAddrs...)
 	sharedList, err := LoadTokens(filepath.Join(policyDir, SharedParentsFile), "domains")
 	if err != nil {
 		return Summary{}, err
@@ -1076,19 +1127,23 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	// compile to nothing. Their load here makes a header that can never carry
 	// a credential stop the apply, with the file and line, before anything
 	// installs. It does not stop the broker at its start. Its hosts also
-	// shield the domain list (BlocksCoreHost).
+	// shield the domain list (BlocksCoreHost), and a host that is an address
+	// shields the IP half.
 	core, err := corepolicy.LoadFiles(filepath.Join(policyDir, "core.hosts"), filepath.Join(policyDir, "core.hosts.local"))
 	if err != nil {
 		return Summary{}, err
 	}
+	shields := ipShields{ips: neverNets, domains: addrNets(slices.Values(neverDomainsList)), core: addrNets(maps.Keys(core.Hosts))}
 
-	ipKept := keepNew(nil, ips, map[string]struct{}{}, func(ip string) bool { return IsNeverIP(ip, neverNets) })
+	ipKept := keepNew(nil, ips, map[string]struct{}{}, func(ip string) bool { return shields.why(agent, ip) != "" })
 	ipFinal := CoalesceIPv4(ipKept)
 
 	domainFinal := keepNew(nil, domains, map[string]struct{}{}, func(d string) bool {
 		return IsNeverDomain(d, neverDomains) || BlocksCoreHost(d, core)
 	})
 	warnings := shieldWarnings(agent, localDomains, neverDomains, core)
+	warnings = append(warnings, ipShieldWarnings(agent, agent.Sinkhole("domains"), localAddrs, shields)...)
+	warnings = append(warnings, ipShieldWarnings(agent, agent.Sinkhole("ips"), listIPs, shields)...)
 
 	if err := writeFile(out.NFT, nftElements(ipFinal)); err != nil {
 		return Summary{}, err

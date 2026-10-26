@@ -802,3 +802,26 @@ func TestBodyMustHaveAnEnd(t *testing.T) {
 		t.Errorf("a cut body was used: %d domains, %v\n%s", n, err, joined)
 	}
 }
+
+// pf compile reads an address on never_block.domains as a shield of the IP
+// half. pf fetch applies it to an IP feed the same way. Thus the count of
+// the report is what compiles.
+func TestNeverBlockDomainsAddressShieldsAnIPFeed(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "192.0.2.1\n9.9.9.9\n")
+	}))
+	t.Cleanup(ts.Close)
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "never_block.domains"), []byte("192.0.2.1\n"), 0644)
+	spec := fmt.Sprintf(`{"timeout_sec": 2, "feeds": [{"id": "s", "kind": "ips", "format": "plain", "url": %q}]}`, ts.URL)
+	_ = os.WriteFile(filepath.Join(dir, "sources.json"), []byte(spec), 0644)
+	out := filepath.Join(dir, "generated")
+	f := &Fetcher{PolicyDir: dir, OutDir: out, web: lab(ts)}
+	report, nIPs, _, err := f.Run()
+	if err != nil {
+		t.Fatal(err, report)
+	}
+	if ips := testsupport.ReadFile(t, filepath.Join(out, "blacklist.ips")); nIPs != 1 || strings.Contains(ips, "192.0.2.1") {
+		t.Fatalf("ips %d:\n%s", nIPs, ips)
+	}
+}
