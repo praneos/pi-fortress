@@ -191,14 +191,21 @@ func clientIP(r *http.Request) string {
 // used or expired code gets the same 404. Over limitPerMin tries a minute
 // from one address, or over segmentPerMin from all addresses together, gets
 // a 429, before serveClaim touches the directory. A try that the per-source
-// limit refuses does not count against the segment.
+// limit refuses does not count against the segment. A try that the segment
+// limit refuses does not count against its source.
 func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, claims, code string) {
 	if r.Method != http.MethodGet {
 		http.NotFound(w, r)
 		return
 	}
 	ip := clientIP(r)
-	if !s.lim.allow(ip) || !s.seg.allow() {
+	if !s.lim.allow(ip) {
+		http.Error(w, "slow down", http.StatusTooManyRequests)
+		return
+	}
+	if !s.seg.allow() {
+		// The try did not occur, so the source gets it back.
+		s.lim.giveBack(ip)
 		http.Error(w, "slow down", http.StatusTooManyRequests)
 		return
 	}

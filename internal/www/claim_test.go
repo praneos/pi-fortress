@@ -304,3 +304,28 @@ func TestClaimSegmentSharesOneLimit(t *testing.T) {
 		}
 	}
 }
+
+// A try that the segment cap refuses does not spend a try of its source.
+// Before, the source paid for it too. Thus the operator was still refused
+// after the segment had space again.
+func TestSegmentRefusalKeepsTheSourceTries(t *testing.T) {
+	s, _ := testServer(t)
+	_ = os.MkdirAll(ClaimsDir(s.Dir), 0770)
+	for i := range segmentPerMin {
+		if got := tryClaim(s, fmt.Sprintf("10.77.0.%d", 20+i/limitPerMin), "ABCDEFGH"); got != http.StatusNotFound {
+			t.Fatalf("try %d to fill the segment got %d, want 404", i, got)
+		}
+	}
+	for range limitPerMin {
+		if got := tryClaim(s, "10.77.0.50", "ABCDEFGH"); got != http.StatusTooManyRequests {
+			t.Fatalf("try past the segment cap got %d, want 429", got)
+		}
+	}
+	// The minute of the segment ends.
+	s.seg.mu.Lock()
+	s.seg.at = nil
+	s.seg.mu.Unlock()
+	if got := tryClaim(s, "10.77.0.50", "ABCDEFGH"); got != http.StatusNotFound {
+		t.Fatalf("the source lost its tries to the segment cap: got %d, want 404", got)
+	}
+}

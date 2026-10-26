@@ -616,6 +616,16 @@ func (l *limiter) allow(ip string) bool {
 	return true
 }
 
+// giveBack removes the last try of ip that allow accepted. serveClaim calls
+// it when the segment cap refuses that try.
+func (l *limiter) giveBack(ip string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if ts := l.hits[ip]; len(ts) > 0 {
+		l.hits[ip] = ts[:len(ts)-1]
+	}
+}
+
 // window counts the claim tries of all sources in the last minute. It keeps
 // one time for each try that it accepts. So it never holds more than
 // segmentPerMin times, and a flood cannot grow it.
