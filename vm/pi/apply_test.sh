@@ -3280,7 +3280,7 @@ for _u in "${here}"/*.service; do
 done
 # systemd skips a "-" path that is missing when the unit starts. Thus apply
 # makes the www directory before it starts the first unit.
-_mk="$(grep -nxF 'install -d -m 0755 /var/lib/pi-fortress/www' "${apply}" | head -1 | cut -d: -f1 || true)"
+_mk="$(grep -nxF '[[ "${LOCAL_ONLY}" -eq 1 ]] || install -d -m 0755 /var/lib/pi-fortress/www' "${apply}" | head -1 | cut -d: -f1 || true)"
 _start="$(grep -nE 'systemctl (restart|start|enable --now) ' "${apply}" | head -1 | cut -d: -f1 || true)"
 [[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
   fail "apply does not make /var/lib/pi-fortress/www before the first unit starts"
@@ -3437,7 +3437,9 @@ done
 # Those three are inaccessible to fetch. Thus the --local half of apply,
 # which fetch runs, must not use them.
 _local="$(sed -n '1,/^if \[\[ "${LOCAL_ONLY}" -eq 1 \]\]; then$/p' "${apply}")"
-grep -qE 'BROKER_DIR|ENGINE_DIR|/etc/pi-fortress/broker([/"[:space:]]|$)|/var/lib/pi-fortress/(engine|www)|[{]WWW[}]' <<<"${_local}" &&
+# One line may name the www directory: the one that apply --local skips.
+grep -vxF '[[ "${LOCAL_ONLY}" -eq 1 ]] || install -d -m 0755 /var/lib/pi-fortress/www' <<<"${_local}" |
+  grep -qE 'BROKER_DIR|ENGINE_DIR|/etc/pi-fortress/broker([/"[:space:]]|$)|/var/lib/pi-fortress/(engine|www)|[{]WWW[}]' &&
   fail "apply --local uses a path that fetch.service cannot read"
 # The swap renames below /opt. A home is read: harden_ssh counts the login keys.
 for _u in ship ship-deadman; do
