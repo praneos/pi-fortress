@@ -1787,14 +1787,12 @@ func checkSegDHCP(s Segment) error {
 	if covers(netip.MustParseAddr(s.IP)) {
 		return fmt.Errorf("segment %s: %s covers IP=%s, so a device would be leased the address the Pi answers on. Nothing was changed.", s.Name, rng, s.IP)
 	}
+	// A /31 has no network or broadcast address (notHostAddr).
 	p := netip.MustParsePrefix(s.Net).Masked()
-	network := p.Addr()
-	bcast := lastAddr(p)
-	if covers(network) {
-		return fmt.Errorf("segment %s: %s covers %s, the network address of NET=%s, which no device can hold. Nothing was changed.", s.Name, rng, network, s.Net)
-	}
-	if covers(bcast) {
-		return fmt.Errorf("segment %s: %s covers %s, the broadcast address of NET=%s, which no device can hold. Nothing was changed.", s.Name, rng, bcast, s.Net)
+	for _, a := range []netip.Addr{p.Addr(), lastAddr(p)} {
+		if what := notHostAddr(s.Net, a.String()); what != "" && covers(a) {
+			return fmt.Errorf("segment %s: %s covers %s, the %s address of NET=%s, which no device can hold. Nothing was changed.", s.Name, rng, a, what, s.Net)
+		}
 	}
 	return nil
 }

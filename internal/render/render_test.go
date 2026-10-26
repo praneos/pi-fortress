@@ -547,6 +547,30 @@ func TestSegmentIPOnPointToPointNet(t *testing.T) {
 	}
 }
 
+// On a /31 the address that is not IP is a host address too. Thus a DHCP
+// range may lease it, and a reservation may hold it. A range that covers
+// IP is still refused.
+func TestSegmentDHCPOnPointToPointNet(t *testing.T) {
+	for _, tc := range []struct{ seg, want string }{
+		{"NET=10.80.0.0/31\nIP=10.80.0.0\nDHCP=on\nDHCP_START=10.80.0.1\nDHCP_END=10.80.0.1\n", ""},
+		{"NET=10.80.0.0/31\nIP=10.80.0.1\nDHCP=on\nDHCP_START=10.80.0.0\nDHCP_END=10.80.0.0\n", ""},
+		{"NET=10.80.0.0/31\nIP=10.80.0.1\nDHCP=on\nDHCP_START=10.80.0.0\nDHCP_END=10.80.0.1\n", "covers IP"},
+		{"NET=10.80.0.0/30\nIP=10.80.0.1\nDHCP=on\nDHCP_START=10.80.0.2\nDHCP_END=10.80.0.3\n", "broadcast"},
+	} {
+		segs := filepath.Join(t.TempDir(), "segments.d")
+		os.Mkdir(segs, 0755)
+		write(t, segs, "one.env", "IF=eth3\n"+tc.seg)
+		_, err := Load(Options{Net: lab, HouseEnv: "/nonexistent/house.env", SegmentsDir: segs})
+		if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+			t.Errorf("%q: got %v, want %q", tc.seg, err, tc.want)
+		}
+	}
+	p2p := "IF=eth2.30\nNET=10.30.0.0/31\nIP=10.30.0.0\nDHCP=on\nDHCP_START=10.30.0.1\nDHCP_END=10.30.0.1\n"
+	if _, _, err := segHosts(t, p2p, "02:00:00:00:00:0a,10.30.0.1,cam\n"); err != nil {
+		t.Errorf("a reservation of the host address of a /31 is refused: %v", err)
+	}
+}
+
 // TestUntrustedUplink: docs/user_guide/public_wifi.md. The IPv6 drops are
 // first in the two chains in all modes. 1 removes exactly the SSH and ping
 // of the uplink, adds the name-broadcast drop, and does not change the other ways in.
