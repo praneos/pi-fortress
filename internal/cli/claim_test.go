@@ -21,6 +21,12 @@ func TestClaimIssuesOneCode(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(www, "claims"), 0o770); err != nil {
 		t.Fatal(err)
 	}
+	// pf claim issues no code while there is no setup.sh or ca.pem to serve.
+	for name, body := range map[string]string{"setup.sh": "#!/bin/sh\n", "ca.pem": "-----BEGIN CERTIFICATE-----\n"} {
+		if err := os.WriteFile(filepath.Join(www, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 	base := []string{"claim", "-secrets", sec, "-www", www, "-audit", filepath.Join(dir, "audit.jsonl")}
 
 	var out, errb bytes.Buffer
