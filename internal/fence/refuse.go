@@ -218,10 +218,8 @@ func (s *scanner) noteNames(fields httpwire.Fields) {
 		s.refuse(CauseKeyInHeaderName, slot, kind, "header_name")
 	}
 	for _, f := range fields {
-		for _, sl := range s.idx.Lives {
-			if strings.Contains(f.Name, sl.Live) {
-				s.refuse(CauseKeyInHeaderName, sl.ID, sl.Kind, "header_name")
-			}
+		for _, sl := range livesIn(s.idx.Lives, f.Name) {
+			s.refuse(CauseKeyInHeaderName, sl.ID, sl.Kind, "header_name")
 		}
 	}
 	if s.all.match(b) {
@@ -296,11 +294,17 @@ func (s *scanner) noteLive(v string, cause RefusalCause, where string) {
 	}
 }
 
-// livesIn gives the live values that v holds.
+// livesIn gives the live values that v holds, in any letter case.
+//
+// The fence judges the Host, Connection, Upgrade and each field name, and
+// forwards them as the agent sent them. The judgement must read a field as
+// the origin reads it. The origin reads these fields without letter case.
+// Thus the scan here also ignores letter case.
 func livesIn(lives []secrets.Slot, v string) []secrets.Slot {
 	var in []secrets.Slot
+	lv := strings.ToLower(v)
 	for _, sl := range lives {
-		if httpwire.Contains([]byte(v), []byte(sl.Live)) {
+		if strings.Contains(lv, strings.ToLower(sl.Live)) {
 			in = append(in, sl)
 		}
 	}

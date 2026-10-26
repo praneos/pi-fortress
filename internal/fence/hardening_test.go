@@ -324,3 +324,79 @@ func TestRefusalsBounded(t *testing.T) {
 		t.Fatal("the cause must still reach the operator")
 	}
 }
+
+// swapCase turns each ASCII letter of s to the other letter case.
+func swapCase(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		switch {
+		case c >= 'a' && c <= 'z':
+			b[i] = c - 'a' + 'A'
+		case c >= 'A' && c <= 'Z':
+			b[i] = c - 'A' + 'a'
+		}
+	}
+	return string(b)
+}
+
+// The fence judges Host, Connection, Upgrade and the field names, and
+// forwards them unchanged. The origin reads these without letter case. So a
+// live value in any letter case refuses the request, in each of these
+// fields, with the slot and the kind of the value.
+func TestLiveValueInJudgedFieldAnyCase(t *testing.T) {
+	re, pol := testPolicy(t)
+	slots := labSlots()
+	auth := "Authorization: Bearer pf_a1b2c3d4e5f67890_GITHUB_TOKEN\r\n"
+	lives := []struct{ live, slot, kind string }{
+		{"lab_fence_github", "a1b2c3d4e5f67890", "GITHUB_TOKEN"},
+		{"sk-ant-oat01-" + strings.Repeat("A", 64), "b0b1b2b3b4b5b6b7", "CLAUDE_OAT"},
+	}
+	fields := []struct {
+		name  string
+		line  func(v string) string
+		cause RefusalCause
+		where string
+	}{
+		{"Host", func(v string) string { return "Host: " + v + ".pf-core-echo.test\r\n" }, CauseLiveInHost, "header:Host"},
+		{"Connection", func(v string) string { return "Host: pf-core-echo.test\r\nConnection: close, " + v + "\r\n" }, CauseLiveInConnection, "header:Connection"},
+		{"Upgrade", func(v string) string { return "Host: pf-core-echo.test\r\nUpgrade: " + v + "\r\n" }, CauseLiveInConnection, "header:Upgrade"},
+		{"field name", func(v string) string { return "Host: pf-core-echo.test\r\nX-" + v + ": 1\r\n" }, CauseKeyInHeaderName, "header_name"},
+	}
+	cases := map[string]func(string) string{
+		"as stored": func(s string) string { return s },
+		"upper":     strings.ToUpper,
+		"lower":     strings.ToLower,
+		"swapped":   swapCase,
+	}
+	for _, f := range fields {
+		for _, l := range lives {
+			for cname, fold := range cases {
+				t.Run(f.name+"/"+l.kind+"/"+cname, func(t *testing.T) {
+					req := parseReq(t, "GET / HTTP/1.1\r\n"+f.line(fold(l.live))+auth+"\r\n")
+					_, err := Decide(Ctx{SNI: "pf-core-echo.test", TokenRE: re}, req, pol, slots)
+					want := Refusal{Cause: f.cause, Slot: l.slot, Kind: l.kind, Where: f.where}
+					found := false
+					for _, r := range refusalsOf(t, err) {
+						found = found || r == want
+					}
+					if !found {
+						t.Fatalf("refusals %+v, want %+v", refusalsOf(t, err), want)
+					}
+				})
+			}
+		}
+	}
+	// The broker reads the same fields before the fence runs.
+	for _, l := range lives {
+		for cname, fold := range cases {
+			v := fold(l.live) + ".pf-core-echo.test"
+			if !SecretInHost(Ctx{TokenRE: re}, v, slots) {
+				t.Errorf("%s %s: SecretInHost is false", l.kind, cname)
+			}
+			rs := LiveIn(Ctx{TokenRE: re}, v, slots, CauseLiveInHost, "header:Host")
+			if len(rs) == 0 || rs[0].Slot != l.slot {
+				t.Errorf("%s %s: LiveIn %+v", l.kind, cname, rs)
+			}
+		}
+	}
+}
