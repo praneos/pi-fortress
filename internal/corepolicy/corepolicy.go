@@ -337,7 +337,8 @@ func LoadDomains(path string) (map[string]struct{}, error) {
 // ("com", or "*.com" after the "*." goes) also gives "". It would allow
 // all names below it, all of .com. core.hosts refuses such a host too. A
 // line with an empty label, as ".name", or over the DNS length limits
-// gives "" (AllowProblem): no query can match it.
+// gives "" (AllowProblem): no query can match it. So does each other line
+// that is not a name (validName): the resolver conf does not carry it.
 func AllowEntry(tok string) (name string, star, oneLabel bool) {
 	host := normHost(tok)
 	if star = strings.HasPrefix(host, "*."); star {
@@ -349,7 +350,7 @@ func AllowEntry(tok string) (name string, star, oneLabel bool) {
 	if !strings.Contains(host, ".") {
 		return "", false, isLabel(host)
 	}
-	if lengthProblem(host) != "" {
+	if !validName(host) {
 		return "", false, false
 	}
 	return host, false, false

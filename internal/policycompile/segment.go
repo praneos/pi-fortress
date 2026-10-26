@@ -85,13 +85,13 @@ func (s SegmentPolicy) Lists() []ListType {
 		}
 	}
 	return []ListType{
-		{s.Sinkhole("domains"), "domains"},
+		{s.Sinkhole("domains"), "block_domains"},
 		{s.Sinkhole("ips"), "ips"},
 		{s.File("never_block.domains"), "domains"},
 		{s.File("never_block.ips"), "ips"},
 		{s.File("direct_ip.allow"), "allow_ips"},
 		{s.File("ssh_allow.ips"), "ssh_ips"},
-		{s.File("allow.domains"), "domains"},
+		{s.File("allow.domains"), "allow"},
 	}
 }
 

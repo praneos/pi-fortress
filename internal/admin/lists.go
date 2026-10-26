@@ -22,10 +22,6 @@ var (
 	HouseLists = listNames(policycompile.SegmentFor(policycompile.AllowByDefault))
 	errList    = errors.New("unknown list")
 	errToken   = errors.New("invalid token")
-	// forwardAllowList is the forward set of the agent under PARANOID=1.
-	// corepolicy.LoadDomains reads each name in it as the name and all names
-	// below it.
-	forwardAllowList = policycompile.SegmentFor(policycompile.DenyByDefault).File("allow.domains")
 )
 
 // kindDNSTypes is the token kind of dns_types.allow: a full "name TYPE..."
@@ -71,44 +67,25 @@ func ValidateToken(list, value string) (string, error) {
 			kind = "ips"
 		}
 	}
-	// A query and a feed carry a name that is not ASCII in its xn-- form.
-	// Thus the seat refuses such a name in a name list, and gives that form.
-	if (kind == "domains" || kind == "endpoints") && !corepolicy.IsASCII(value) {
-		return "", fmt.Errorf("%w: %s", errToken, corepolicy.ASCIIHint(strings.TrimSpace(value)))
-	}
-	var got string
-	var ok bool
-	switch kind {
 	// A full line, and the one kind that gives the reason for a refusal. A type
 	// with a spelling error is the typo that this list on the seat must catch.
-	case kindDNSTypes:
+	if kind == kindDNSTypes {
 		got, err := CheckDNSTypesLine(value)
 		if err != nil {
 			return "", fmt.Errorf("%w: %v", errToken, err)
 		}
 		return got, nil
-	// An allow list undoes a drop, so it takes /24 at widest.
-	case "allow_ips":
-		got, ok = policycompile.ParseAllowIPv4(value)
-	case "ssh_ips":
-		got, ok = policycompile.ParseSSHIPv4(value)
-	case "host_ips":
-		got, ok = policycompile.ParseHostIPv4(value)
-	case "endpoints":
-		got, ok = policycompile.ParseEndpoint(value)
-	case "ips":
-		got, ok = policycompile.ParseIPv4(value)
-	default:
-		// ParseDomain reads ".name" as "name". In the forward set, "name" also
-		// allows all names below it. Thus the seat does not change a dotted
-		// entry into a wider one. The operator writes the bare name.
-		if list == forwardAllowList && strings.HasPrefix(strings.TrimSpace(value), ".") {
-			return "", fmt.Errorf("%w: %s takes no leading dot; a name here also allows all names below it", errToken, list)
-		}
-		got, ok = policycompile.ParseDomain(value)
 	}
+	// A query and a feed carry a name that is not ASCII in its xn-- form.
+	// Thus the seat refuses such a name in a name list, and gives that form.
+	if policycompile.IsNameKind(kind) && !corepolicy.IsASCII(value) {
+		return "", fmt.Errorf("%w: %s", errToken, corepolicy.ASCIIHint(strings.TrimSpace(value)))
+	}
+	// The rule of pf compile, so that a value that the seat adds compiles
+	// with no warning. An allow list undoes a drop, so it takes /24 at widest.
+	got, ok := policycompile.ParseToken(kind, value)
 	if !ok {
-		return "", errToken
+		return "", fmt.Errorf("%w: %s", errToken, policycompile.TokenProblem(kind, strings.TrimSpace(value)))
 	}
 	return got, nil
 }

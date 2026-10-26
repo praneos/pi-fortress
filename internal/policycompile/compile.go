@@ -525,7 +525,7 @@ func asciiWarnings(policyDir string) ([]string, error) {
 	files := []string{"doh.domains.local"}
 	for _, seg := range Segments {
 		for _, l := range seg.Lists() {
-			if l.Kind != "ips" && !strings.HasSuffix(l.Kind, "_ips") {
+			if IsNameKind(l.Kind) {
 				files = append(files, l.Name)
 			}
 		}
@@ -904,13 +904,64 @@ func loadOperator(path, kind string, warn *[]string) ([]string, error) {
 func skipWarnings(path, kind string, bad []badLine) []string {
 	var warn []string
 	for _, b := range bad {
-		if !corepolicy.IsASCII(b.token) {
+		if IsNameKind(kind) && !corepolicy.IsASCII(b.token) {
 			continue
 		}
 		warn = append(warn, fmt.Sprintf("%s line %d: %q is not %s; skipped%s",
 			filepath.Base(path), b.n, b.token, kindWhat[kind], skipHint(b.token, kind)))
 	}
 	return warn
+}
+
+// ParseToken parses one line of a list of the kind (ListType.Kind). It is
+// the one rule for a line: pf compile reads each list with it, and the
+// seat (internal/admin) adds a value with it. Thus a value that the seat
+// adds compiles, and a line that compiles can be added at the seat.
+func ParseToken(kind, token string) (string, bool) {
+	switch kind {
+	case "ips":
+		return ParseIPv4(token)
+	case "allow_ips":
+		return ParseAllowIPv4(token)
+	case "ssh_ips":
+		return ParseSSHIPv4(token)
+	case "host_ips":
+		return ParseHostIPv4(token)
+	case "endpoints":
+		return ParseEndpoint(token)
+	case "block_domains":
+		return parseBlockDomain(token)
+	case "names":
+		return ParseName(token)
+	case "allow":
+		// allow.domains: corepolicy.LoadDomains reads it, and allowWarnings
+		// tells why a line allows nothing.
+		name, _, _ := corepolicy.AllowEntry(token)
+		return name, name != ""
+	}
+	return ParseDomain(token)
+}
+
+// TokenProblem says why ParseToken refuses token for the kind, in the words
+// of the warning of pf compile. The seat gives it with its refusal.
+func TokenProblem(kind, token string) string {
+	if kind != "allow" {
+		return "it is not " + kindWhat[kind] + skipHint(token, kind)
+	}
+	_, _, oneLabel := corepolicy.AllowEntry(token)
+	switch {
+	case oneLabel:
+		return "it is one label; it would allow every name below it"
+	case corepolicy.AllowProblem(token) != "":
+		return corepolicy.AllowProblem(token)
+	}
+	return "it allows no name"
+}
+
+// IsNameKind says if a list of the kind holds names, not addresses. A name
+// that is not ASCII gets its own warning there (asciiWarnings).
+func IsNameKind(kind string) bool {
+	return kind != "ips" && !strings.HasSuffix(kind, "_ips")
 }
 
 func loadTokens(path, kind string) ([]string, []badLine, error) {
@@ -930,27 +981,7 @@ func loadTokens(path, kind string) ([]string, []badLine, error) {
 		if token == "" {
 			continue
 		}
-		var parsed string
-		var ok bool
-		switch kind {
-		case "ips":
-			parsed, ok = ParseIPv4(token)
-		case "allow_ips":
-			parsed, ok = ParseAllowIPv4(token)
-		case "ssh_ips":
-			parsed, ok = ParseSSHIPv4(token)
-		case "host_ips":
-			parsed, ok = ParseHostIPv4(token)
-		case "endpoints":
-			parsed, ok = ParseEndpoint(token)
-		case "block_domains":
-			parsed, ok = parseBlockDomain(token)
-		case "names":
-			parsed, ok = ParseName(token)
-		default:
-			parsed, ok = ParseDomain(token)
-		}
-		if ok {
+		if parsed, ok := ParseToken(kind, token); ok {
 			out = append(out, parsed)
 		} else {
 			bad = append(bad, badLine{n: n, token: token})
