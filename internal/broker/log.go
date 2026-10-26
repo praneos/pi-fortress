@@ -317,45 +317,49 @@ func (b *Broker) logUnknown(p *preamble.Preamble, req *httpwire.Request, host st
 	})
 }
 
+// hostCtx is the part of the fence context that the checks before the
+// fence read: the token rules.
+func (b *Broker) hostCtx() fence.Ctx {
+	return fence.Ctx{TokenRE: b.TokenRE, Rules: b.Rules}
+}
+
 // rowHost is the host that the rows of a request name. Usually it is host,
 // the prettyHost of the request. A Host that holds a live value or a
-// token-prefix match makes the fence refuse the request (live_in_host).
-// But the broker writes some rows before the fence runs: the target
-// rules, the blocklist, the paranoid deny and a refused git push. The
-// alerter posts the host of a strip row to the webhook. So for such a
+// token-prefix match makes the broker refuse the request (live_in_host).
+// The alerter posts the host of a strip row to the webhook. So for such a
 // Host, each row names the SNI. The test reads the Host as sent and as
-// the row writes it (lowercase), because a live value can be in either
-// form. A sealed store gives no live values; then only the token rules
-// apply.
-func (b *Broker) rowHost(p *preamble.Preamble, req *httpwire.Request, host string) string {
+// the row writes it (lowercase), because a token rule can match only one
+// of the two forms. A sealed store gives no live values; then only the
+// token rules apply.
+func rowHost(ctx fence.Ctx, p *preamble.Preamble, req *httpwire.Request, host string, slots map[string]secrets.Slot) string {
 	sni := strings.ToLower(strings.TrimSuffix(p.SNI, "."))
 	if host == sni {
 		return host
 	}
-	var slots map[string]secrets.Slot
-	if b.Store != nil {
-		slots, _ = b.Store.Snapshot()
-	}
-	ctx := fence.Ctx{TokenRE: b.TokenRE, Rules: b.Rules}
 	if fence.SecretInHost(ctx, req.Get("Host"), slots) || fence.SecretInHost(ctx, host, slots) {
 		return sni
 	}
 	return host
 }
 
+// liveInHost gives the live_in_host refusals of the fence for each Host
+// field of req. The broker runs it before its own rules on the Host.
+func liveInHost(ctx fence.Ctx, req *httpwire.Request, slots map[string]secrets.Slot) []fence.Refusal {
+	var rs []fence.Refusal
+	for _, v := range req.Values("Host") {
+		rs = append(rs, fence.LiveIn(ctx, v, slots, fence.CauseLiveInHost, "header:Host")...)
+	}
+	return rs
+}
+
 // logLiveConn writes the live_in_connection rows of the fence for a
 // protocol switch that the broker refuses before the fence runs. The
 // agent gets the same 501 in all cases.
 func (b *Broker) logLiveConn(c *call) {
-	var slots map[string]secrets.Slot
-	if b.Store != nil {
-		slots, _ = b.Store.Snapshot()
-	}
-	ctx := fence.Ctx{TokenRE: b.TokenRE, Rules: b.Rules}
 	var rs []fence.Refusal
 	for _, name := range []string{"Connection", "Upgrade"} {
 		for _, v := range c.req.Values(name) {
-			rs = append(rs, fence.LiveIn(ctx, v, slots, fence.CauseLiveInConnection, "header:"+name)...)
+			rs = append(rs, fence.LiveIn(b.hostCtx(), v, c.slots, fence.CauseLiveInConnection, "header:"+name)...)
 		}
 	}
 	b.logRefusals(c, rs)
