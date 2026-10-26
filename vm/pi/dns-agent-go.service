@@ -54,10 +54,12 @@ ProtectHostname=yes
 ProtectProc=invisible
 # AF_INET: the listeners are udp4/tcp4 by name (internal/dnsd/serve.go),
 # and a segment address that is not v4 is refused. Thus there is no v6
-# socket to allow. AF_UNIX is stderr to the journal. AF_NETLINK is not
-# for this process -- it holds no netlink socket. It is for the nft that
-# it forks to add an answer to resolved_v4. That nft speaks nfnetlink
-# under this same filter.
+# socket to allow. AF_UNIX is stderr to the journal. AF_NETLINK is for
+# the nft that it forks to add an answer to resolved_v4 (nfnetlink under
+# this same filter), for the SNI queue, and for one rtnetlink socket that
+# gets link and address events. With these events pf dns opens the
+# listeners of a segment again when its interface comes back with a new
+# index (internal/dnsd/linkwatch.go).
 RestrictAddressFamilies=AF_INET AF_NETLINK AF_UNIX
 RestrictNamespaces=yes
 RestrictRealtime=yes
