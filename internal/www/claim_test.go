@@ -216,7 +216,11 @@ func TestClaimGitUnderSh(t *testing.T) {
 // a claim file must go in that group. www cannot read a root:root file, and
 // then the full enrolment path gives 404.
 func TestClaimFileCarriesTheDirectoryGroup(t *testing.T) {
-	dir := t.TempDir()
+	s, _ := testServer(t)
+	dir := ClaimsDir(s.Dir)
+	if err := os.MkdirAll(dir, 0770); err != nil {
+		t.Fatal(err)
+	}
 	var dst syscall.Stat_t
 	if err := syscall.Stat(dir, &dst); err != nil {
 		t.Fatal(err)
@@ -275,28 +279,19 @@ func tryClaim(s *Server, ip, code string) int {
 	return w.Code
 }
 
-// The anti-spoof rule admits each address of the agent segment. So a root
-// agent can add an alias for each free address and get limitPerMin tries
-// for each alias. All sources together get segmentPerMin tries a minute.
-func TestClaimSegmentSharesOneLimit(t *testing.T) {
+// Many sources together get no shared cap. Each source has its own limit.
+// A shared cap let a few sources hold every claim of the segment off.
+func TestClaimHasNoSegmentCap(t *testing.T) {
 	s, _ := testServer(t)
 	_ = os.MkdirAll(ClaimsDir(s.Dir), 0770)
-	if segmentPerMin <= limitPerMin {
-		t.Fatalf("segment cap %d is not above the per-source cap %d", segmentPerMin, limitPerMin)
-	}
-	// One address in a loop spends its own budget, not the budget of the
-	// segment. A try that the per-source limit refuses does not count.
-	for range 5 * limitPerMin {
-		tryClaim(s, "10.77.0.10", "ABCDEFGH")
-	}
-	for i := limitPerMin; i < segmentPerMin; i++ {
-		if got := tryClaim(s, fmt.Sprintf("10.77.0.%d", 20+i), "ABCDEFGH"); got != http.StatusNotFound {
-			t.Fatalf("try %d from a new address got %d, want 404", i, got)
+	for i := range 100 {
+		ip := fmt.Sprintf("10.77.0.%d", 20+i/limitPerMin)
+		if got := tryClaim(s, ip, "ABCDEFGH"); got != http.StatusNotFound {
+			t.Fatalf("try %d from %s within its own limit got %d, want 404", i, ip, got)
 		}
 	}
-	for _, ip := range []string{"10.77.0.200", "10.77.0.201"} {
-		if got := tryClaim(s, ip, "ABCDEFGH"); got != http.StatusTooManyRequests {
-			t.Fatalf("try from %s past the segment cap got %d, want 429", ip, got)
-		}
+	// One address in a loop still meets its own limit.
+	if got := tryClaim(s, "10.77.0.20", "ABCDEFGH"); got != http.StatusTooManyRequests {
+		t.Fatalf("try past the limit of one source got %d, want 429", got)
 	}
 }

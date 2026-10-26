@@ -169,6 +169,9 @@ func (t *linuxTerm) ReadKey() (Key, error) {
 			return Key{Kind: KeyResize}, nil
 		case err := <-t.src.err:
 			return Key{}, err
+		case <-t.src.pasteWait():
+			// No byte for pasteGap: the paste is over.
+			t.src.pasting = false
 		case <-t.wake:
 			// Restored: there is no tty to read from now, and the caller
 			// waits for this goroutine, not for a keystroke.

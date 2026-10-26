@@ -41,7 +41,6 @@ type Server struct {
 	// an error: a www that cannot write the log must still serve the handoff.
 	Audit *audit.Log
 	lim   limiter
-	seg   window
 	seen  recent
 }
 
@@ -189,16 +188,18 @@ func clientIP(r *http.Request) string {
 
 // serveClaim answers GET /claim/<CODE> with the enrol script once. A wrong,
 // used or expired code gets the same 404. Over limitPerMin tries a minute
-// from one address, or over segmentPerMin from all addresses together, gets
-// a 429, before serveClaim touches the directory. A try that the per-source
-// limit refuses does not count against the segment.
+// from one address gets a 429, before serveClaim touches the directory.
+// There is no cap for all addresses together. Such a cap let a few
+// addresses hold every enrolment off. The code has 40 bits, so 250
+// addresses at limitPerMin for the 5 minutes of ClaimTTL make about 12500
+// tries against 2^40 codes for one live claim.
 func (s *Server) serveClaim(w http.ResponseWriter, r *http.Request, claims, code string) {
 	if r.Method != http.MethodGet {
 		http.NotFound(w, r)
 		return
 	}
 	ip := clientIP(r)
-	if !s.lim.allow(ip) || !s.seg.allow() {
+	if !s.lim.allow(ip) {
 		http.Error(w, "slow down", http.StatusTooManyRequests)
 		return
 	}

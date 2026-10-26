@@ -257,8 +257,7 @@ func TestSettingsHouseWebTogglesAndAgentSection(t *testing.T) {
 
 func TestSecretsClaimAndQuarantine(t *testing.T) {
 	c, _ := testConfig(t)
-	c.WWWDir = t.TempDir()
-	_ = os.MkdirAll(filepath.Join(c.WWWDir, "claims"), 0770)
+	c.WWWDir = wwwDir(t)
 	slot, err := secrets.Open(c.SecretsPath).MintKinds([]string{"GITHUB_TOKEN"}, map[string]string{"GITHUB_TOKEN": "ghp_live"})
 	if err != nil {
 		t.Fatal(err)
@@ -289,13 +288,13 @@ func TestSecretsClaimAndQuarantine(t *testing.T) {
 	if !strings.Contains(f.Last(), "active") {
 		t.Fatal(f.Last())
 	}
-	run(t, c, NewFake(130, 24).Type(keys(netAgent, secKeys)+"p").Type("yes").Press(KeyEnter))
+	run(t, c, NewFake(130, 24).Type(keys(netAgent, secKeys)+"p").TypeShownCode().Press(KeyEnter))
 	if raw, _ := os.ReadFile(c.SecretsPath); strings.Contains(string(raw), slot) {
 		t.Fatal(string(raw))
 	}
 }
 
-func TestRebootNeedsTypedYes(t *testing.T) {
+func TestRebootNeedsTypedCode(t *testing.T) {
 	c, calls := testConfig(t)
 	hasReboot := func() bool {
 		for _, argv := range *calls {
@@ -309,7 +308,7 @@ func TestRebootNeedsTypedYes(t *testing.T) {
 	if hasReboot() {
 		t.Fatal("rebooted on y")
 	}
-	run(t, c, NewFake(80, 24).Type(keys(netSystem, secActions)).Press(KeyEnd).Press(KeyUp).Press(KeyEnter).Type("yes").Press(KeyEnter))
+	run(t, c, NewFake(80, 24).Type(keys(netSystem, secActions)).Press(KeyEnd).Press(KeyUp).Press(KeyEnter).TypeShownCode().Press(KeyEnter))
 	if !hasReboot() {
 		t.Fatal(*calls)
 	}

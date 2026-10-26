@@ -27,20 +27,8 @@ const (
 	claimLen    = 8
 	sweepAfter  = time.Hour
 	limitPerMin = 10
-	// segmentPerMin is the cap on the claim tries of all sources together.
-	// limitPerMin is per source. The anti-spoof rule admits each address of
-	// AGENT_NET, so a root agent can add an alias for each free address of a
-	// /24. With only the per-source cap, that is approximately 250 x 10
-	// tries a minute. One enrolment is one try: the operator pastes one
-	// command on one agent. 30 a minute is one enrolment each 2 seconds. No
-	// operator does that by hand, and it leaves space for typing errors and
-	// retries. 30 a minute for the 5 minutes of ClaimTTL is 150 tries
-	// against 2^40 codes for each live claim. The cost: an agent that keeps
-	// the cap full stops all claims on the segment while it continues. The
-	// operator sees a 429, not a spent code.
-	segmentPerMin = 30
-	setupWindow   = time.Minute
-	seenMax       = 4096
+	setupWindow = time.Minute
+	seenMax     = 4096
 	// hitsMax bounds the table of the claim limiter, as seenMax bounds the
 	// table for setup. The number and the reason are the same. The endpoint is
 	// different.
@@ -60,8 +48,9 @@ type Claim struct {
 	GitHosts []string `json:"git_hosts,omitempty"`
 	// SetupSHA256 is the hex sha256 of the setup.sh that www served at claim
 	// issue. The claim script refuses a download that does not match it
-	// (ClaimScript). It is empty when there was no setup.sh. Then the claim
-	// script refuses to run at all.
+	// (ClaimScript). IssueClaim refuses to issue a claim when there is no
+	// setup.sh. If a claim file has no hash, the claim script refuses to run
+	// at all.
 	SetupSHA256 string `json:"setup_sha256,omitempty"`
 	// CASHA256 is the same for ca.pem. setup.sh also fetches ca.pem over plain
 	// HTTP, and then trusts it for each TLS connection that the agent makes.
@@ -185,6 +174,12 @@ func IssueClaim(dir, slot string, kinds []string, gitHosts ...string) (Claim, er
 		SetupSHA256: fileSHA256(setupPath(filepath.Dir(dir))), CASHA256: fileSHA256(caPath(filepath.Dir(dir)))}
 	if !scriptFields(c) {
 		return Claim{}, errors.New("claim: invalid slot or kind")
+	}
+	// Without setup.sh and ca.pem, the claim script can enrol nothing. The
+	// operator gets this error now, not a code that a redeem spends for no
+	// result.
+	if c.SetupSHA256 == "" || c.CASHA256 == "" {
+		return Claim{}, errors.New("claim: no setup.sh or ca.pem to serve; run pf apply first")
 	}
 	raw, err := json.Marshal(c)
 	if err != nil {
@@ -606,32 +601,6 @@ func (l *limiter) allow(ip string) bool {
 		l.sweep(now)
 	}
 	l.hits[ip] = append(keep, now)
-	return true
-}
-
-// window counts the claim tries of all sources in the last minute. It keeps
-// one time for each try that it accepts. So it never holds more than
-// segmentPerMin times, and a flood cannot grow it.
-type window struct {
-	mu sync.Mutex
-	at []time.Time
-}
-
-func (w *window) allow() bool {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	now := time.Now()
-	keep := w.at[:0]
-	for _, t := range w.at {
-		if now.Sub(t) < time.Minute {
-			keep = append(keep, t)
-		}
-	}
-	w.at = keep
-	if len(keep) >= segmentPerMin {
-		return false
-	}
-	w.at = append(keep, now)
 	return true
 }
 

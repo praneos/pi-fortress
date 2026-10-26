@@ -6,6 +6,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 	"unsafe"
 )
 
@@ -87,5 +88,52 @@ func TestRawModeTurnsBracketedPasteOnAndOff(t *testing.T) {
 	on, off := strings.Index(string(raw), pasteOn), strings.LastIndex(string(raw), pasteOff)
 	if on < 0 || off < on {
 		t.Fatalf("bracketed paste not on then off: %q", raw)
+	}
+}
+
+// A paste start with no end must not hold the seat. When no byte comes for
+// a short time, the paste is over. Before, every later key was a paste, so
+// q, Ctrl-C and a typed confirm did nothing until the idle timer.
+func TestPasteStartWithNoEndStops(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	defer w.Close()
+	stop := make(chan struct{})
+	defer close(stop)
+	term := &linuxTerm{src: newByteSource(r, stop), wake: stop}
+	read := func(then func()) Key {
+		t.Helper()
+		got := make(chan Key, 1)
+		go func() { k, _ := term.ReadKey(); got <- k }()
+		then()
+		select {
+		case k := <-got:
+			return k
+		case <-time.After(5 * time.Second):
+			t.Fatal("no key")
+		}
+		return Key{}
+	}
+	if k := read(func() { _, _ = w.Write([]byte("\x1b[200~a")) }); k.Rune != 'a' || !k.Paste {
+		t.Fatalf("a key after the start is not a paste: %+v", k)
+	}
+	// A short stop in a paste (a slow link) does not end it.
+	k := read(func() {
+		time.Sleep(200 * time.Millisecond)
+		_, _ = w.Write([]byte("b"))
+	})
+	if k.Rune != 'b' || !k.Paste {
+		t.Fatalf("a short stop ended the paste: %+v", k)
+	}
+	// The seat waits in ReadKey, and the operator types q later.
+	k = read(func() {
+		time.Sleep(1500 * time.Millisecond)
+		_, _ = w.Write([]byte("q"))
+	})
+	if k.Rune != 'q' || k.Paste {
+		t.Fatalf("a typed key long after an open paste start is a paste: %+v", k)
 	}
 }

@@ -496,6 +496,8 @@ func TestClaimsQuarantineAndLedger(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(c.WWWDir, "claims"), 0770); err != nil {
 		t.Fatal(err)
 	}
+	write(t, filepath.Join(c.WWWDir, "setup.sh"), "#!/bin/sh\n")
+	write(t, filepath.Join(c.WWWDir, "ca.pem"), "-----BEGIN CERTIFICATE-----\n")
 	st := secrets.Open(c.SecretsPath)
 	slot, err := st.MintKinds([]string{"CLAUDE_OAT", "CLAUDE_ORT"}, map[string]string{"CLAUDE_OAT": "sk-ant-oat01-x", "CLAUDE_ORT": "sk-ant-ort01-y"})
 	if err != nil {
