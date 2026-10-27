@@ -129,6 +129,9 @@ type Refused struct {
 	// all other causes.
 	Repo   string `json:"repo,omitempty"`
 	Threat string `json:"threat,omitempty"`
+	// DestIP is the address that the broker dialed, or refused to dial.
+	// Only the eyeball_network row has it.
+	DestIP string `json:"dest_ip,omitempty"`
 }
 
 func (w *Writer) Refused(ev Refused) error {

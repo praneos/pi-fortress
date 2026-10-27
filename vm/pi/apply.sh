@@ -265,6 +265,11 @@ if [[ "${FEED_REFRESH}" != "0" && "${FEED_REFRESH}" != "1" ]]; then
   echo "pi-fortress: FEED_REFRESH='${FEED_REFRESH}' is not 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
   exit 1
 fi
+EYEBALL="${EYEBALL:-audit}"
+if [[ "${EYEBALL}" != off && "${EYEBALL}" != audit && "${EYEBALL}" != refuse ]]; then
+  echo "pi-fortress: EYEBALL='${EYEBALL}' is not off, audit or refuse (net.env or ${NET_ENV_LOCAL})" >&2
+  exit 1
+fi
 HW_WATCHDOG="${HW_WATCHDOG:-auto}"
 if [[ "${HW_WATCHDOG}" != auto && "${HW_WATCHDOG}" != 0 && "${HW_WATCHDOG}" != 1 ]]; then
   echo "pi-fortress: HW_WATCHDOG='${HW_WATCHDOG}' is not auto, 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
@@ -914,6 +919,22 @@ install -m 0644 "${POLICY}/house_ech.ips" /etc/pi-fortress/house-ech.ips
 # go when HOUSE_ALLOW_WHATSAPP is on. They ship for the same reason.
 install -m 0644 "${POLICY}/house_whatsapp.ips" /etc/pi-fortress/house-whatsapp.ips
 install -m 0644 "${WORKDIR}/house-doh.domains" /etc/pi-fortress/house-doh-domains.conf
+# The table of eyeball networks that pf fetch built, and the exemptions
+# of the operator. The broker loads both again when they change, so
+# neither is a fence input and neither restarts the fence. No table
+# leaves the installed copy. Its age stops its use in the broker. No
+# eyeball.allow in the policy directory means no exemptions.
+if [[ -s "${POLICY}/generated/eyeball.table" ]]; then
+  cmp -s "${POLICY}/generated/eyeball.table" /etc/pi-fortress/eyeball.table ||
+    install -m 0644 "${POLICY}/generated/eyeball.table" /etc/pi-fortress/eyeball.table
+fi
+if [[ -f "${POLICY}/eyeball.allow" ]]; then
+  if [[ ! "${POLICY}/eyeball.allow" -ef /etc/pi-fortress/eyeball.allow ]]; then
+    install -m 0644 "${POLICY}/eyeball.allow" /etc/pi-fortress/eyeball.allow
+  fi
+else
+  rm -f /etc/pi-fortress/eyeball.allow
+fi
 # name/prefix → feed, read by pf observe to label blocked events.
 install -m 0644 "${WORKDIR}/blocked-domains.map" /etc/pi-fortress/blocked-domains.map
 install -m 0644 "${WORKDIR}/blocked-ips.map" /etc/pi-fortress/blocked-ips.map
@@ -1006,6 +1027,7 @@ fi
 # already set the values.
 BROKER_BUDGET="-slot-warn-requests=${SLOT_WARN_REQUESTS} -slot-stop-requests=${SLOT_STOP_REQUESTS}"
 BROKER_BUDGET="${BROKER_BUDGET} -slot-warn-upload-mb=${SLOT_WARN_UPLOAD_MB} -slot-stop-upload-mb=${SLOT_STOP_UPLOAD_MB}"
+BROKER_BUDGET="${BROKER_BUDGET} -eyeball=${EYEBALL}"
 # A segment with INSPECT=on gets the fence of the agent network. The
 # ruleset sends its 443 to the engine port on the segment address. The
 # engine listens there, and the broker serves its subnet. Both files are

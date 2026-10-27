@@ -57,5 +57,47 @@
       "license": "GPL-3.0",
       "why": "DoH, VPN, Tor and proxy services a device could use to go around the house resolver. House only, and served only while HOUSE_BLOCK_VPN is on (role vpn): the ruleset drops WireGuard and OpenVPN themselves, this stops a VPN app from reaching its provider to sign in or fetch servers. Carries dns.controld.com; a HOUSE_PRIVATE_DNS endpoint still resolves, the more specific name wins. Also carries tailscale.com and Cloudflare WARP."
     }
-  ]
+  ],
+  "eyeball": {
+    "comment": "The table of eyeball networks (home broadband and mobile) for the eyeball check of the broker (docs/fence.md, eyeball_network). An ASN is in the table when an asns feed includes it and none excludes it. bgp.tools asks for a contact in the User-Agent; put yours in user_agent.",
+    "user_agent": "pi-fortress eyeball bgp.tools - https://github.com/praneos/pi-fortress",
+    "max_ranges": 1000000,
+    "ranges": {
+      "id": "iptoasn-v4",
+      "format": "ip2asn",
+      "url": "https://iptoasn.com/data/ip2asn-v4.tsv.gz",
+      "license": "PDDL-1.0",
+      "why": "Each announced IPv4 range and its origin ASN, from the BGP table. Public domain, updated hourly."
+    },
+    "asns": [
+      {
+        "id": "bgptools-asns",
+        "format": "bgptools",
+        "url": "https://bgp.tools/asns.csv",
+        "license": "bgp.tools terms (fetch with a User-Agent, at most every 30 minutes)",
+        "why": "The class of each ASN. Eyeball includes; Content excludes, so a host of servers that another feed calls an ISP stays out."
+      },
+      {
+        "id": "bgptools-dsl",
+        "format": "asn",
+        "url": "https://bgp.tools/tags/dsl.csv",
+        "license": "bgp.tools terms (fetch with a User-Agent, at most every 30 minutes)",
+        "why": "ASNs tagged as home ISPs."
+      },
+      {
+        "id": "bgptools-mobile",
+        "format": "asn",
+        "url": "https://bgp.tools/tags/mobile.csv",
+        "license": "bgp.tools terms (fetch with a User-Agent, at most every 30 minutes)",
+        "why": "ASNs tagged as mobile networks."
+      },
+      {
+        "id": "peeringdb-isp",
+        "format": "peeringdb",
+        "url": "https://www.peeringdb.com/api/net?depth=0\u0026fields=asn,info_type,info_types",
+        "license": "PeeringDB AUP (no bulk redistribution; each box fetches its own copy)",
+        "why": "Networks that call themselves Cable/DSL/ISP. Many large incumbents call themselves NSP, so this feed adds to bgp.tools and does not replace it."
+      }
+    ]
+  }
 }

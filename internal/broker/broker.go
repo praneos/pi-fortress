@@ -21,6 +21,7 @@ import (
 	"pi-fortress/internal/blocklist"
 	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/dest"
+	"pi-fortress/internal/eyeball"
 	"pi-fortress/internal/fakeip"
 	"pi-fortress/internal/fence"
 	"pi-fortress/internal/httpwire"
@@ -114,6 +115,10 @@ type Broker struct {
 	// destination. nil means the system resolver. The -resolver flag sets
 	// NewResolver.
 	Resolve ResolveFunc
+	// Eyeball, when set, checks each address that the broker dials for the
+	// agent network against the table of eyeball networks (eyeball.go).
+	// nil means no check.
+	Eyeball *eyeball.Checker
 
 	// dialTimeout overrides originDialTimeout, and dialTCP overrides the TCP
 	// connect under dial. Thus a test can hold a real TLS handshake against a
@@ -124,6 +129,8 @@ type Broker struct {
 	useMu     sync.Mutex
 	lastUse   map[string]time.Time
 	saidCause map[fence.RefusalCause]bool
+	// eyeSaid is each name and ASN that an eyeball row alerted for.
+	eyeSaid map[string]bool
 	// engineSaid is the time at which Handle last reported each kind of
 	// engine refusal that it did not write (engineErr).
 	engineSaid map[string]time.Time
@@ -204,6 +211,13 @@ func (b *Broker) Handle(ctx context.Context, conn net.Conn) error {
 	if !fake && b.sniKeyRefused(p) {
 		_ = writeErr(conn, 403, "403 Forbidden", sniKeyBody)
 		return fmt.Errorf("%w: %s", ErrSNIKeyShape, CauseSNIKeyShape)
+	}
+	// A fake destination gets this check in dialName, on the address that
+	// the broker resolved. The body is the body of the dest.Allowed
+	// refusal, so the agent cannot tell the two apart.
+	if !fake && b.eyeballRefused(p) {
+		_ = writeErr(conn, 403, "403 Forbidden", "ssrf\n")
+		return fmt.Errorf("%w: %s", ErrSSRF, CauseEyeball)
 	}
 	up := &upstream{b: b, dst: p.OrigDst, sni: p.SNI}
 	if fake {

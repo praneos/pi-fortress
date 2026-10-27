@@ -254,6 +254,7 @@ func (ev *Refused) clip() {
 	ev.ClientIP = clip(ev.ClientIP, maxShort)
 	ev.Repo = clip(ev.Repo, maxRepo)
 	ev.Threat = clip(ev.Threat, maxShort)
+	ev.DestIP = clip(ev.DestIP, maxShort)
 }
 
 func (ev *Use) clip() {

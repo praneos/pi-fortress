@@ -34,6 +34,9 @@ type Spec struct {
 	// policycompile.FeedMinBits.
 	MinIPPrefix int    `json:"min_ip_prefix,omitempty"`
 	Feeds       []Feed `json:"feeds"`
+	// Eyeball, when set, is the source of the table of eyeball networks
+	// (eyeball.go). nil means no table.
+	Eyeball *EyeballSpec `json:"eyeball,omitempty"`
 	// Seeded is each feed id that a ship has offered this box. MergeSeed
 	// adds a shipped feed only when its id is not here, so a feed that the
 	// operator deleted stays deleted.
@@ -123,6 +126,9 @@ func (s *Spec) validate() error {
 		if f.Role != "" && (f.Role != "vpn" || f.Segment != policycompile.SegmentFor(policycompile.AllowByDefault).Name || f.Kind != "domains") {
 			return fmt.Errorf("sources.json: feed '%s' has role '%s'; the only role is vpn, on a house domains feed", f.ID, f.Role)
 		}
+	}
+	if s.Eyeball != nil {
+		return s.Eyeball.validate(seen)
 	}
 	return nil
 }
@@ -316,6 +322,12 @@ func checkURL(u *url.URL) error {
 }
 
 func (c *client) get(rawURL, ua string, timeout time.Duration) (page, error) {
+	return c.getLimit(rawURL, ua, timeout, maxBody)
+}
+
+// getLimit is get with a body cap of limit bytes. The eyeball feeds are
+// larger than the blocklist feeds, and have their own cap.
+func (c *client) getLimit(rawURL, ua string, timeout time.Duration, limit int) (page, error) {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
@@ -362,12 +374,12 @@ func (c *client) get(rawURL, ua string, timeout time.Duration) (page, error) {
 	// block a name that the publisher never listed. A feed that grew past
 	// the cap is a failure like all others. So the run uses the last copy
 	// that was whole.
-	b, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+	b, err := io.ReadAll(io.LimitReader(resp.Body, int64(limit)+1))
 	if err != nil {
 		return page{}, err
 	}
-	if len(b) > maxBody {
-		return page{}, fmt.Errorf("feed is larger than %d bytes", maxBody)
+	if len(b) > limit {
+		return page{}, fmt.Errorf("feed is larger than %d bytes", limit)
 	}
 	return page{body: string(b), final: resp.Request.URL.String()}, nil
 }
@@ -404,8 +416,11 @@ func parseDomain(token string) (string, bool) {
 }
 
 func parseToken(token, kind string) (string, bool) {
-	if kind == "ips" {
+	switch kind {
+	case "ips":
 		return policycompile.ParseIPv4(token)
+	case kindRanges, kindASNs:
+		return parseEyeballToken(token, kind)
 	}
 	return parseDomain(token)
 }
@@ -576,15 +591,22 @@ func toSet(items []string) map[string]struct{} {
 }
 
 func (f *Fetcher) get(u, ua string, timeout time.Duration) (page, error) {
+	return f.getLimit(u, ua, timeout, maxBody)
+}
+
+func (f *Fetcher) getLimit(u, ua string, timeout time.Duration, limit int) (page, error) {
 	if f.Get != nil {
 		body, err := f.Get(u, ua, timeout)
+		if err == nil && len(body) > limit {
+			err = fmt.Errorf("feed is larger than %d bytes", limit)
+		}
 		return page{body: body, final: u}, err
 	}
 	web := f.web
 	if web == nil {
 		web = &client{public: publicAddr}
 	}
-	return web.get(u, ua, timeout)
+	return web.getLimit(u, ua, timeout, limit)
 }
 
 // parseFeed gives the distinct entries of a feed, in feed order, and stops
@@ -816,7 +838,11 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 			}
 		}
 	}
+	eyeText := f.runEyeball(spec, outDir, ua, timeout, seen, &report)
 	pruneCache(outDir, seen)
+	if err := commitEyeball(outDir, eyeText); err != nil {
+		report = append(report, "FAIL eyeball: "+err.Error())
+	}
 	ipOut := capShare(ips, maxIPs, cutIPs, "ips", &report)
 	domOut := capShare(domains, maxDoms, cutDoms, "domains", &report)
 	houseOut := capShare(houseDomains, maxDoms, cutHouse, house.Name+" domains", &report)

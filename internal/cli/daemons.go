@@ -25,6 +25,7 @@ import (
 	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/dnsd"
 	"pi-fortress/internal/engine"
+	"pi-fortress/internal/eyeball"
 	"pi-fortress/internal/fakeip"
 	"pi-fortress/internal/fence"
 	"pi-fortress/internal/jsonl"
@@ -235,8 +236,18 @@ func runBroker(args []string, _, stderr io.Writer) int {
 	fakeNet := fs.String("fakeip-net", "", "fake-IP pool prefix pf dns answers the agent from (e.g. 198.18.0.0/16); empty is off")
 	fakeJournal := fs.String("fakeip-journal", "/var/lib/pi-fortress/dns/fakeip.journal", "fake-IP journal pf dns writes, with -fakeip-net")
 	resolver := fs.String("resolver", "", "host:port of the DNS server for the broker's own fake-IP lookups; empty is the system resolver")
+	// The eyeball check (internal/eyeball, docs/fence.md). pf fetch writes
+	// the table, and the broker loads it again when it changes. No table
+	// means no check: the check fails open, and says so in one log line.
+	eyeMode := fs.String("eyeball", "audit", "dials from the agent network to a home or mobile ISP network: off, audit (dial, log, alert) or refuse")
+	eyeTable := fs.String("eyeball-table", "/etc/pi-fortress/eyeball.table", "table of eyeball networks that pf fetch writes; missing turns the check off")
+	eyeAllow := fs.String("eyeball-allow", "/etc/pi-fortress/eyeball.allow", "names and ASNs (AS64496) that the eyeball check exempts; missing is empty")
 	if code, ok := parse(fs, args); !ok {
 		return code
+	}
+	mode, err := eyeball.ParseMode(*eyeMode)
+	if err != nil {
+		return fail(stderr, fmt.Errorf("broker: -eyeball: %w", err))
 	}
 	for name, v := range map[string]int64{
 		"slot-warn-requests":  *warnRequests,
@@ -357,6 +368,12 @@ func runBroker(args []string, _, stderr io.Writer) int {
 		}
 		b.FenceNets = append(b.FenceNets, fp.Masked())
 	}
+	if mode != eyeball.Off {
+		b.Eyeball = &eyeball.Checker{Mode: mode, TablePath: *eyeTable, AllowPath: *eyeAllow}
+		b.Eyeball.Reload()
+	} else {
+		log.Print("pf broker: eyeball check off")
+	}
 	if *maxConns <= 0 {
 		*maxConns = 256
 	}
@@ -387,6 +404,7 @@ func runBroker(args []string, _, stderr io.Writer) int {
 		ln.Close()
 	}()
 	go b.WatchExpiry(ctx, time.Hour)
+	go b.Eyeball.Watch(ctx, time.Minute)
 	if *adminSock != "" {
 		if err := serveAdmin(ctx, *adminSock, b); err != nil {
 			return fail(stderr, err)

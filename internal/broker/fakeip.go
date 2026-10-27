@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"pi-fortress/internal/dest"
+	"pi-fortress/internal/eyeball"
 	"pi-fortress/internal/fence"
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/keyshape"
@@ -264,13 +265,31 @@ func (b *Broker) dialName(ctx context.Context, name string, port uint16, sni, ip
 	}
 	var last error
 	tried := 0
+	// The eyeball check (eyeball.go) runs on each address that passed
+	// dest.Allowed. In refuse mode an eyeball address is not dialable, and
+	// the next address gets its turn. In audit mode the first eyeball
+	// address that the broker dials writes one row.
+	var skipped netip.Addr
+	var skippedASN uint32
+	audited := false
 	for _, a := range addrs {
 		dst := netip.AddrPortFrom(a.Unmap(), port)
 		if !dst.Addr().Is4() || !dest.Allowed(dst) {
 			continue
 		}
+		asn, eye := b.Eyeball.Match(name, dst.Addr())
+		if eye && b.Eyeball.Mode == eyeball.Refuse {
+			if !skipped.IsValid() {
+				skipped, skippedASN = dst.Addr(), asn
+			}
+			continue
+		}
 		if tried == maxFakeDials {
 			break
+		}
+		if eye && !audited {
+			audited = true
+			b.logEyeball(name, sni, ip, whereAudit, dst.Addr(), asn)
 		}
 		tried++
 		c, err := b.dial(ctx, dst, sni)
@@ -281,6 +300,10 @@ func (b *Broker) dialName(ctx context.Context, name string, port uint16, sni, ip
 		if ctx.Err() != nil {
 			break
 		}
+	}
+	if tried == 0 && skipped.IsValid() {
+		b.logEyeball(name, sni, ip, "resolve", skipped, skippedASN)
+		return nil, netip.AddrPort{}, fmt.Errorf("%w: %s resolved only to eyeball networks", ErrSSRF, name)
 	}
 	if tried == 0 {
 		b.refuseResolve(name, name, ip, CauseFakeIPDestDenied)

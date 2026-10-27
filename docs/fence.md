@@ -670,6 +670,70 @@ Agents keep the answers that they already cached until their TTL ends: 60 s
 for a pool answer, and up to the TTL of the upstream for a real answer. Until
 then, connections to those addresses fail at the gate.
 
+**Eyeball networks (`eyeball_network`, `EYEBALL=audit`, the default).**
+`dest.Allowed` refuses private, reserved and LAN addresses. A public name can
+still resolve to the home line of an attacker: a dynamic DNS name, a
+residential proxy, or a home server for exfil or control. The agent reaches
+cloud, hosting and CDN networks on a normal day. A home or mobile line is
+rare, and it has the shape of those channels.
+
+The broker looks up each address that it dials for the agent network in a
+table of eyeball networks (`internal/eyeball`). The lookup is after
+`dest.Allowed` and before the dial. In fakeip mode, the broker looks up each
+address that the name resolved to. In forward mode, it looks up the address
+that the agent dialed. A segment with `INSPECT=on` does not get the check.
+
+| `EYEBALL` | A hit |
+|---|---|
+| `audit` | The broker dials. It writes a refusal row with `where` `audit`. |
+| `refuse` | The broker does not dial that address. In fakeip mode it dials the next address of the name that is not a hit. If no address is left, the agent gets the 502 of a name with no dialable address, and the row has `where` `resolve`. In forward mode, the agent gets the 403 `ssrf` of `dest.Allowed`, and the row has `where` `preamble`. |
+| `off` | No check. |
+
+The row has `cause` `eyeball_network`, `host` (the name), `sni`, `dest_ip`
+(the address), and `kind` (the ASN, for example `AS64496`). It alerts one
+time for each name and ASN while the broker runs. The next rows for that
+pair go only to the log. Thus a second home server does not hide behind the
+first one.
+
+The table: `pf fetch` builds `generated/eyeball.table` from the `eyeball`
+section of `sources.json`. `pf apply` installs it as
+`/etc/pi-fortress/eyeball.table`.
+
+- The ranges feed maps each announced IPv4 range to its ASN (iptoasn.com,
+  public domain).
+- An ASN feed says which ASNs are eyeball networks: the class Eyeball of
+  bgp.tools, its `dsl` and `mobile` tags, and the type Cable/DSL/ISP of
+  PeeringDB.
+- An ASN is in the table when an ASN feed includes it and no feed excludes
+  it. bgp.tools class Content excludes. Thus a host of servers that calls
+  itself an ISP in PeeringDB stays out.
+- An unknown ASN is not in the table, so it is never a hit.
+
+Each feed has its own last-good copy, as a blocklist feed has. The table
+has the time of its oldest data. The broker loads the table again when the
+file changes, with no restart. The check fails open:
+
+- With no table, the check is off.
+- With a table older than 30 days, the check is off.
+- With a file that does not parse, the broker keeps the last good table.
+
+The broker logs each change of that state one time (`pf broker: eyeball
+...`).
+
+A false hit is possible. Some CDNs put cache servers inside the network of
+an ISP (Google Global Cache, Akamai, Netflix Open Connect). Such a server
+has an address of the ISP, so a name that the CDN sends there is a hit.
+Exempt that name.
+
+`eyeball.allow` in the policy directory exempts a destination. One entry is
+on each line: a name, which also exempts the names below it, or an ASN
+(`AS64496`). On the Pi, edit `/opt/pi-fortress/vm/policy/eyeball.allow` and
+run `pf apply`. The broker reads the list again when it changes.
+
+What the check does not catch: a server in a cloud or hosting network, an
+ISP that no feed lists, IPv6, and the time when the check fails open. It is
+a detector on top of the fence, not a gate (`docs/risk_model.md` §2.1).
+
 ### 5.2b One wall, not a taxonomy
 
 Substitution can fail for these reasons:
@@ -1128,7 +1192,7 @@ of the broker. This stalls TLS.
 
 | Path | What |
 |---|---|
-| `/var/log/pi-fortress/strip.jsonl` | One line for each match: `host`, `where`, `rule`, `t`, and `client_ip` when the preamble carried a source. Refusals add `ev`, `sni`, `cause`, `slot`, `kind`, and `alert` when the broker marks them. A §5.2d budget crossing adds `threat`, `slot`, `count`, `limit`. A §5.2e expiry row adds `threat` and `slot`, and `host` is `-`. An expiring row also adds `count`. A name that the engine refused because the blocklist has it is a refusal with `cause` and `threat` `sni_blocked` and `where` `sni`. It never has `alert`, and one client and name give at most one such row each minute. |
+| `/var/log/pi-fortress/strip.jsonl` | One line for each match: `host`, `where`, `rule`, `t`, and `client_ip` when the preamble carried a source. Refusals add `ev`, `sni`, `cause`, `slot`, `kind`, and `alert` when the broker marks them. An `eyeball_network` row also adds `dest_ip`. A §5.2d budget crossing adds `threat`, `slot`, `count`, `limit`. A §5.2e expiry row adds `threat` and `slot`, and `host` is `-`. An expiring row also adds `count`. A name that the engine refused because the blocklist has it is a refusal with `cause` and `threat` `sni_blocked` and `where` `sni`. It never has `alert`, and one client and name give at most one such row each minute. |
 | `pf alert` (`internal/alert`) | Tails the jsonl file and `notice.jsonl`. Writes the last event. Optional webhook. |
 | `./vm/bin/alerts.sh follow` | Host terminal bell + `notify-send`. |
 | `vm/policy/alert.url` | One URL: ntfy / Slack / Discord. |
