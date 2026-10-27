@@ -10,8 +10,10 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -864,4 +866,129 @@ func TestSNIRefusesASegmentFarFromTheStart(t *testing.T) {
 			t.Fatalf("after the segment at %#x: %+v", seq, v)
 		}
 	}
+}
+
+// A new SYN on the same addresses and ports can come at the same time as
+// the verdict of the old flow. The old verdict must not go to the data of
+// the new connection. Data that is not a ClientHello never gets the ok
+// mark. The race is short. Thus the test runs it many times, and moves the
+// SYN by a different delay each time.
+func TestSNIDataAfterANewSYNNeverGetsTheOldVerdict(t *testing.T) {
+	if runtime.GOMAXPROCS(0) < 2 {
+		t.Skip("the race needs two threads")
+	}
+	dst := "203.0.113.9"
+	hello := clientHello(t, "a.example")
+	junk := make([]byte, 64)
+	ctx := context.Background()
+	var sink int
+	for i := range 4000 {
+		q := newFakeQueue()
+		asked := make(chan struct{})
+		var release atomic.Bool
+		c := newSNICheck(q, func(context.Context, netip.Addr, string) ([]netip.Addr, bool, error) {
+			close(asked)
+			for !release.Load() {
+			}
+			return []netip.Addr{netip.MustParseAddr(dst)}, false, nil
+		}, nil)
+		c.logf = func(string, ...any) {}
+		c.wait = time.Hour
+		c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4f(dst, 1000, tcpSYN, hello)})
+		<-asked
+		syn := tcp4f(dst, 263144, tcpSYN, nil)
+		release.Store(true)
+		for j := range i % 400 {
+			sink += j
+		}
+		c.packet(ctx, nfq.Packet{ID: 2, Payload: syn})
+		c.judges.Wait()
+		c.packet(ctx, nfq.Packet{ID: 3, Payload: tcp4(dst, 263145, junk)})
+		if v := q.wait(t, 3); v.mark&sniBits == sniOK {
+			t.Fatalf("run %d: data that is not a ClientHello after a new SYN: %+v (SYN %+v, old flow %+v)", i, v, q.wait(t, 2), q.wait(t, 1))
+		}
+	}
+	_ = sink
+}
+
+// A new SYN on the same addresses and ports starts a new check. The
+// verdict of the old connection does not go to the new one. A retransmit
+// of the first SYN, with the same data, is part of the same check.
+func TestSNINewSYNStartsAFreshCheck(t *testing.T) {
+	dst := "203.0.113.9"
+	r := &fakeResolve{ans: map[string][]netip.Addr{"a.example": {netip.MustParseAddr(dst)}}}
+	hello := clientHello(t, "a.example")
+	junk := make([]byte, 64)
+	ctx := context.Background()
+	bad := func(t *testing.T, q *fakeQueue, id uint32, what string) {
+		t.Helper()
+		if v := q.wait(t, id); v.mark&sniBits == sniOK {
+			t.Fatalf("%s: %+v, want no ok mark", what, v)
+		}
+	}
+	ok := func(t *testing.T, q *fakeQueue, id uint32, what string) {
+		t.Helper()
+		if v := q.wait(t, id); v.v != nfq.Repeat || v.mark&sniBits != sniOK {
+			t.Fatalf("%s: %+v, want the ok mark", what, v)
+		}
+	}
+
+	t.Run("SYN without data, then data that is not TLS", func(t *testing.T) {
+		c, q := newTestCheck(t, r)
+		c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4f(dst, 1000, tcpSYN, hello)})
+		ok(t, q, 1, "first connection")
+		c.packet(ctx, nfq.Packet{ID: 2, Payload: tcp4f(dst, 263144, tcpSYN, nil)})
+		if v := q.wait(t, 2); v.v != nfq.Accept || v.set {
+			t.Fatalf("new SYN: %+v, want a plain accept", v)
+		}
+		c.packet(ctx, nfq.Packet{ID: 3, Payload: tcp4(dst, 263145, junk)})
+		bad(t, q, 3, "data that is not TLS on the new connection")
+	})
+
+	t.Run("SYN with Fast Open data that is not TLS", func(t *testing.T) {
+		c, q := newTestCheck(t, r)
+		c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4f(dst, 1000, tcpSYN, hello)})
+		ok(t, q, 1, "first connection")
+		c.packet(ctx, nfq.Packet{ID: 2, Payload: tcp4f(dst, 263144, tcpSYN, junk)})
+		bad(t, q, 2, "Fast Open SYN with data that is not TLS")
+		c.packet(ctx, nfq.Packet{ID: 3, Payload: tcp4(dst, 263145+64, junk)})
+		bad(t, q, 3, "more data on that connection")
+	})
+
+	t.Run("new SYN while the lookup runs", func(t *testing.T) {
+		q := newFakeQueue()
+		rel := make(chan struct{})
+		c := newSNICheck(q, func(context.Context, netip.Addr, string) ([]netip.Addr, bool, error) {
+			<-rel
+			return []netip.Addr{netip.MustParseAddr(dst)}, false, nil
+		}, nil)
+		c.logf = t.Logf
+		c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4f(dst, 1000, tcpSYN, hello)})
+		c.packet(ctx, nfq.Packet{ID: 2, Payload: tcp4f(dst, 263144, tcpSYN, nil)})
+		if v := q.wait(t, 2); v.v != nfq.Drop {
+			t.Fatalf("SYN that moves the stream: %+v, want a drop", v)
+		}
+		bad(t, q, 1, "old flow")
+		close(rel)
+		c.judges.Wait()
+		c.packet(ctx, nfq.Packet{ID: 3, Payload: tcp4(dst, 263145, junk)})
+		bad(t, q, 3, "data after the dropped SYN")
+	})
+
+	t.Run("retransmit of a Fast Open SYN while the lookup runs", func(t *testing.T) {
+		q := newFakeQueue()
+		rel := make(chan struct{})
+		c := newSNICheck(q, func(context.Context, netip.Addr, string) ([]netip.Addr, bool, error) {
+			<-rel
+			return []netip.Addr{netip.MustParseAddr(dst)}, false, nil
+		}, nil)
+		c.logf = t.Logf
+		c.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4f(dst, 1000, tcpSYN, hello)})
+		c.packet(ctx, nfq.Packet{ID: 2, Payload: tcp4f(dst, 1000, tcpSYN, hello)})
+		q.none(t, 1)
+		q.none(t, 2)
+		close(rel)
+		ok(t, q, 1, "Fast Open SYN")
+		ok(t, q, 2, "its retransmit")
+	})
 }
