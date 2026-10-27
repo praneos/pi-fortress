@@ -1087,6 +1087,13 @@ func dnsLines(names []string) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
+// MapHouseMark is the line in the DomainMap between the names that all
+// segments get (blacklist.domains and its feeds) and the names of the
+// house lists only. The line has no tab, so ParseMap skips it. pf observe
+// reads it to tell a house feed or house.domains from a shared feed or
+// blacklist.domains, because both halves label an operator entry "local".
+const MapHouseMark = "# house"
+
 // ParseMap reads "<item>\t<feed>" lines. This is the format of
 // generated/feeds.map and of the compiled DomainMap and IPMap. It skips
 // blank and malformed lines. The first feed named for an item wins.
@@ -1367,7 +1374,7 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
-	if err := writeFile(out.DomainMap, mapLines(domainFinal, feeds, set(localDomains))+mapLines(houseFinal, feeds, houseLocal)+mapLines(houseVPNFinal, feeds, nil)); err != nil {
+	if err := writeFile(out.DomainMap, mapLines(domainFinal, feeds, set(localDomains))+MapHouseMark+"\n"+mapLines(houseFinal, feeds, houseLocal)+mapLines(houseVPNFinal, feeds, nil)); err != nil {
 		return Summary{}, err
 	}
 

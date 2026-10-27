@@ -139,7 +139,7 @@ plain HTTP.
 | `HOUSE_BLOCK_DIRECT_IP` | on | Stops an app or device that tries to go around the block list with a direct connection to an IP address. The Pi drops a plain HTTP connection to an address that your house DNS did not give. The Pi examines an HTTPS connection by the site name that it sends. The connection passes only if that name is not blocked and points to that address. Thus a phone with its own private DNS still works. Disable this setting only if a trusted device needs raw IP connections. |
 | `HOUSE_BLOCK_HTTP` | off | When on, the Pi rejects all plain HTTP (port 80) connections, blocked or not. This can break captive portals, some smart TVs and printers, the Android "no internet" check, and old software update mirrors. It has no effect on HTTP on other ports. |
 | `HOUSE_BLOCK_VPN` | on | Stops a device that runs its own VPN (WireGuard apps such as Mullvad, or OpenVPN). Also stops a device that tries to reach VPN, proxy, and DNS-bypass services. Also stops Tailscale and Cloudflare WARP. It does not control Wi-Fi calling. Wi-Fi calling has its own switch, `HOUSE_ALLOW_WIFI_CALLING`. Disable this setting if a person in the house needs a VPN. |
-| `HOUSE_EGRESS` | strict | Controls the ports that the house can use. `strict`: allows web traffic and other encrypted ports (mail, push notifications), time sync, and ping. The Pi examines each connection on these ports by site name. `strict` also allows the mail ports TCP 143 (IMAP) and TCP 587 (SMTP submission). These ports start encryption later (STARTTLS), so the Pi does not examine them by site name. The Pi drops all other traffic. `audit`: logs the traffic that strict mode would drop, but lets it through. Use this mode for one day first to see the effect. `open`: allows all ports. In all modes, the house cannot reach the page of your router or other local networks. |
+| `HOUSE_EGRESS` | strict | Controls the ports that the house can use. `strict`: allows web traffic and other encrypted ports (mail, push notifications), and ping. The Pi examines each connection on these ports by site name. `strict` also allows the mail ports TCP 143 (IMAP) and TCP 587 (SMTP submission). These ports start encryption later (STARTTLS), so the Pi does not examine them by site name. The Pi drops all other traffic, also NTS key exchange (TCP 4460). Time sync goes to the Pi in all modes (refer to [Time](#time)). `audit`: logs the traffic that strict mode would drop, but lets it through. Use this mode for one day first to see the effect. `open`: allows all ports. In all modes, the house cannot reach the page of your router or other local networks. |
 | `HOUSE_ALLOW_WIFI_CALLING` | off | Opens Wi-Fi calling (a VoIP-over-IPsec protocol). When on, an IKEv2 VPN app can also get through. |
 | `HOUSE_ALLOW_WHATSAPP` | on | Lets the WhatsApp chat connection through. WhatsApp uses its own protocol. The Pi cannot examine this protocol by site name. Thus the Pi allows it only to the addresses of Meta. If you disable this setting, WhatsApp messages stop on the home network. |
 | `HOUSE_ALLOW_CALL_UDP` | off | Opens the direct media ports of Meet, Zoom, Teams, WhatsApp, and FaceTime. When off, calls still work through the relay servers of the apps, with a small increase in delay. |
@@ -158,6 +158,31 @@ Press `e` to enable or disable a feed.
 | `house_direct_ip.allow` | Addresses that `HOUSE_BLOCK_DIRECT_IP` does not apply to. One IPv4 address or address range on each line. The widest range is `/24`. This list is separate from the list of the agent network |
 | `house_private_dns.domains` | Your own private DNS endpoint, for example `abc123.dns.controld.com`. The Pi refuses a bare provider name |
 | `house_private_dns.ips` | The addresses of that endpoint, one on each line (`dig +short` the endpoint). Single addresses only |
+
+## Time
+
+The Pi is the time server (NTP) of the house. DHCP gives the Pi as the NTP server. The Pi
+also answers NTP that a device sends to a different server: the Pi sends each NTP packet
+(UDP 123) of the house to itself, in all `HOUSE_EGRESS` modes. Thus no NTP packet leaves the
+house. Reason: an NTP packet can carry hidden data to a server outside. The Pi gets its own
+time over NTS (NTP with authentication).
+
+The Pi does not serve NTS. Under `strict`, NTS key exchange (TCP 4460) does not go out. Thus
+an NTS client cannot set its clock. An example is chrony on recent Ubuntu releases. For such
+a client, use the Pi as a plain NTP server:
+
+1. Remove the NTS sources: the `server` and `pool` lines with `nts`, in
+   `/etc/chrony/chrony.conf` and in `/etc/chrony/sources.d/`.
+2. Add this line, with the `HOUSE_IP` of your Pi (`10.78.0.1` is the default):
+
+    ```
+    server 10.78.0.1 iburst
+    ```
+
+3. Restart chrony: `sudo systemctl restart chrony`.
+
+The Pi answers only with a clock that it synchronized. If a device gets no time, examine the
+clock of the Pi with `chronyc tracking`.
 
 ## Check it works
 
@@ -178,6 +203,7 @@ location.
 | `nc -zv -w 3 10.77.0.10 22` | Admin device only | succeeds only from the reserved admin address |
 | `nc -zv -w 3 10.79.0.2 22` | Admin device, with the desk's `SSH_FROM` set | succeeds only from that address |
 | `sudo pf status` | Pi | shows the `HOUSE_BLOCK_*` and `HOUSE_EGRESS` settings |
+| `sudo nft list chain inet fortress prerouting \| grep 'dport 123'` | Pi | the counter of the house line increases when a device syncs its clock |
 | `sudo journalctl -k -g house-audit` | Pi | in `audit` mode: the traffic that strict mode would drop. Use it to decide what to open |
 | `sudo pf observe once` | Pi | shows the device as `house/<name>` |
 

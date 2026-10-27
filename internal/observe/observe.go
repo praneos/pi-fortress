@@ -26,6 +26,7 @@ import (
 
 	"pi-fortress/internal/base"
 	"pi-fortress/internal/dnslog"
+	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/leases"
 	"pi-fortress/internal/policycompile"
 )
@@ -311,11 +312,14 @@ type Observer struct {
 	keyErr   string
 
 	domainFeeds map[string]string
+	domainLists domainLists
 	ipFeeds     []prefixFeed
-	mapStamp    [2]time.Time
-	cursor      string
-	cursorRead  bool
-	journalErr  string
+	// tally is the count of blocks for the Blocks rows (blocks.go).
+	tally      blockTally
+	mapStamp   [2]time.Time
+	cursor     string
+	cursorRead bool
+	journalErr string
 	// journalCap and journalTimeout are maxJournal and journalWait, separate
 	// so that a test can make them small. Zero is the default.
 	journalCap     int
@@ -1085,11 +1089,10 @@ func (o *Observer) loadMaps() {
 			continue
 		}
 		o.mapStamp[i] = fi.ModTime()
-		m := policycompile.ParseMap(string(raw))
 		if i == 0 {
-			o.domainFeeds = m
+			o.domainFeeds, o.domainLists = parseDomainMap(string(raw))
 		} else {
-			o.ipFeeds = prefixFeeds(m)
+			o.ipFeeds = prefixFeeds(policycompile.ParseMap(string(raw)))
 		}
 	}
 }
@@ -1183,6 +1186,8 @@ func (o *Observer) touchDNSSeg(st *State, segment, name, src, qtype string, sink
 	if sinkholed {
 		c.Blocked++
 		o.event(st, Event{T: o.now().UTC(), Segment: c.Segment, Src: src, Dst: name, Threat: feedForName(o.domainFeeds, name), Detail: "dns " + qtype})
+		class, feed := o.nameClass(name)
+		o.tally.add(c.Segment, class, feed, src, name, 1)
 	}
 	found := false
 	for _, q := range rec.Qtypes {
@@ -1233,6 +1238,9 @@ func (o *Observer) touchSuppressedSeg(st *State, segment string, ev dnslog.Event
 		b.Queries += uint32(ev.N)
 		if ev.Listed {
 			b.Blocked += uint32(ev.N)
+			if seg == "agent" {
+				o.tally.add(seg, jsonl.BlockOther, "", "(untracked)", "(not logged)", ev.N)
+			}
 		}
 		return
 	}
@@ -1244,6 +1252,12 @@ func (o *Observer) touchSuppressedSeg(st *State, segment string, ev dnslog.Event
 	if ev.Listed {
 		c.Blocked += uint32(ev.N)
 		b.Blocked += uint32(ev.N)
+		// The row has no name, so the list is not known. On a plain
+		// segment or the house, most of these are the ad lists. On the
+		// agent, each block counts.
+		if seg == "agent" {
+			o.tally.add(seg, jsonl.BlockOther, "", ev.Src, "(not logged)", ev.N)
+		}
 	}
 }
 
@@ -1549,6 +1563,12 @@ func (o *Observer) ingestStrip(st *State) {
 			o.client(st, "agent", r.ClientIP, t.Format(base.ISO)).Blocked++
 		}
 		o.event(st, ev)
+		// The engine refused a name that the blocklist has.
+		if ev.Threat == "sni_blocked" {
+			name := strings.ToLower(cleanName(ev.Dst))
+			class, feed := o.nameClass(name)
+			o.tally.add("agent", class, feed, r.ClientIP, name, 1)
+		}
 	})
 }
 
@@ -1934,6 +1954,10 @@ func (o *Observer) journalLines(st *State, out []byte, whole bool) {
 			o.client(st, segment, l.Src, t.Format(base.ISO)).Blocked++
 		}
 		o.event(st, Event{T: t, Segment: segment, Src: l.Src, Dst: l.Dst, Threat: threat, Detail: strings.TrimSpace(detail)})
+		if strings.HasSuffix(l.Prefix, "-blacklist") {
+			class, feed := o.ipClass(l.Dst)
+			o.tally.add(segment, class, feed, l.Src, l.Dst, 1)
+		}
 	}
 }
 
@@ -1972,6 +1996,9 @@ func (o *Observer) Snapshot() *State {
 		o.st = o.Load()
 		o.offsets = nil
 		o.cursorRead = false
+		// The logs are read again from the checkpoints, so the blocks that
+		// the tally counted after them are counted again.
+		o.tally = blockTally{}
 		o.lastFlush = o.now()
 	}
 	st := o.st
@@ -2055,6 +2082,12 @@ func (o *Observer) flush() error {
 			return err
 		}
 		o.rows.Reset()
+	}
+	// The Blocks rows go with the checkpoints of the logs that they count.
+	// A crash after this line and before the checkpoints can count a window
+	// two times. It cannot lose one.
+	if err := o.flushBlocks(); err != nil {
+		return err
 	}
 	expireEvents(st, o.now())
 	expireSeries(st, o.now())
@@ -2297,6 +2330,7 @@ func (o *Observer) reset() error {
 	o.tun, o.tunSupp = nil, nil
 	o.cursor, o.cursorRead = "", false
 	o.rows.Reset()
+	o.tally = blockTally{}
 	return nil
 }
 

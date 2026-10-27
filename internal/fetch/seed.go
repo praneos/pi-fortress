@@ -45,6 +45,9 @@ func MergeSeed(kept, shipped []byte) (out []byte, changed bool, err error) {
 			changed = true
 		}
 	}
+	if mergeEyeball(&box, seed.Eyeball, known) {
+		changed = true
+	}
 	if !changed {
 		return kept, false, nil
 	}
@@ -53,4 +56,49 @@ func MergeSeed(kept, shipped []byte) (out []byte, changed bool, err error) {
 		return kept, false, err
 	}
 	return append(raw, '\n'), true, nil
+}
+
+// mergeEyeball is MergeSeed for the eyeball section. A box with no
+// section gets the shipped one, unless the box was offered its ranges
+// feed before: then the operator deleted the section, and it stays
+// deleted. A box with a section gets each shipped ASN feed that it was not
+// offered. The section of the box keeps all else that the operator set.
+func mergeEyeball(box *Spec, seed *EyeballSpec, known map[string]bool) (changed bool) {
+	if seed == nil {
+		return false
+	}
+	offer := func(id string) {
+		if !slices.Contains(box.Seeded, id) {
+			box.Seeded = append(box.Seeded, id)
+			changed = true
+		}
+	}
+	switch {
+	case box.Eyeball == nil && !known[seed.Ranges.ID]:
+		e := *seed
+		e.ASNs = nil
+		for _, a := range seed.ASNs {
+			if !known[a.ID] {
+				e.ASNs = append(e.ASNs, a)
+			}
+		}
+		box.Eyeball = &e
+		changed = true
+	case box.Eyeball != nil:
+		have := map[string]bool{box.Eyeball.Ranges.ID: true}
+		for _, a := range box.Eyeball.ASNs {
+			have[a.ID] = true
+		}
+		for _, a := range seed.ASNs {
+			if !known[a.ID] && !have[a.ID] {
+				box.Eyeball.ASNs = append(box.Eyeball.ASNs, a)
+				changed = true
+			}
+		}
+	}
+	offer(seed.Ranges.ID)
+	for _, a := range seed.ASNs {
+		offer(a.ID)
+	}
+	return changed
 }

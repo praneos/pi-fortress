@@ -60,12 +60,13 @@ func uplinkTests(t *testing.T) {
 		// occur after, in the same order as before.
 		ports := []string{"22", "53", "80", "443", "853", "8080"}
 		open := make([]bool, len(ports))
-		var answers bool
+		var answers, ntp bool
 		var wg sync.WaitGroup
 		for i, p := range ports {
 			wg.Go(func() { open[i] = tcpOpen(ip, p) })
 		}
 		wg.Go(func() { answers = dnsAnswers(ip) })
+		wg.Go(func() { ntp = ntpAnswers(ip) })
 		wg.Wait()
 		if open[0] == closed {
 			t.Errorf("tcp 22 from the uplink: open=%v, want open=%v", open[0], !closed)
@@ -77,6 +78,11 @@ func uplinkTests(t *testing.T) {
 		}
 		if answers {
 			t.Error("udp 53 answered from the uplink")
+		}
+		// chrony listens on all addresses when the Pi has a house or a
+		// segment. Input and its allow lines keep the uplink out.
+		if ntp {
+			t.Error("udp 123 answered from the uplink")
 		}
 	})
 
@@ -238,15 +244,27 @@ func tcpOpen(ip net.IP, port string) bool {
 }
 
 // dnsAnswers sends one A query for example.com and waits 3 s for any
-// reply. A refused port reads as an error, so it is not an answer.
+// reply.
 func dnsAnswers(ip net.IP) bool {
-	c, err := net.DialTimeout("udp", net.JoinHostPort(ip.String(), "53"), 3*time.Second)
+	return udpAnswers(ip, "53", []byte{0x70, 0x66, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0,
+		7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1})
+}
+
+// ntpAnswers sends one NTPv4 client request and waits 3 s for any reply.
+func ntpAnswers(ip net.IP) bool {
+	q := make([]byte, 48)
+	q[0] = 4<<3 | 3
+	return udpAnswers(ip, "123", q)
+}
+
+// udpAnswers sends q to ip:port and waits 3 s for any reply. A refused
+// port reads as an error, so it is not an answer.
+func udpAnswers(ip net.IP, port string, q []byte) bool {
+	c, err := net.DialTimeout("udp", net.JoinHostPort(ip.String(), port), 3*time.Second)
 	if err != nil {
 		return false
 	}
 	defer c.Close()
-	q := []byte{0x70, 0x66, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0,
-		7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1}
 	c.SetDeadline(time.Now().Add(3 * time.Second))
 	if _, err := c.Write(q); err != nil {
 		return false

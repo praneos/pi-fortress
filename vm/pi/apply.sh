@@ -265,6 +265,11 @@ if [[ "${FEED_REFRESH}" != "0" && "${FEED_REFRESH}" != "1" ]]; then
   echo "pi-fortress: FEED_REFRESH='${FEED_REFRESH}' is not 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
   exit 1
 fi
+EYEBALL="${EYEBALL:-audit}"
+if [[ "${EYEBALL}" != off && "${EYEBALL}" != audit && "${EYEBALL}" != refuse ]]; then
+  echo "pi-fortress: EYEBALL='${EYEBALL}' is not off, audit or refuse (net.env or ${NET_ENV_LOCAL})" >&2
+  exit 1
+fi
 HW_WATCHDOG="${HW_WATCHDOG:-auto}"
 if [[ "${HW_WATCHDOG}" != auto && "${HW_WATCHDOG}" != 0 && "${HW_WATCHDOG}" != 1 ]]; then
   echo "pi-fortress: HW_WATCHDOG='${HW_WATCHDOG}' is not auto, 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
@@ -914,6 +919,22 @@ install -m 0644 "${POLICY}/house_ech.ips" /etc/pi-fortress/house-ech.ips
 # go when HOUSE_ALLOW_WHATSAPP is on. They ship for the same reason.
 install -m 0644 "${POLICY}/house_whatsapp.ips" /etc/pi-fortress/house-whatsapp.ips
 install -m 0644 "${WORKDIR}/house-doh.domains" /etc/pi-fortress/house-doh-domains.conf
+# The table of eyeball networks that pf fetch built, and the exemptions
+# of the operator. The broker loads both again when they change, so
+# neither is a fence input and neither restarts the fence. No table
+# leaves the installed copy. Its age stops its use in the broker. No
+# eyeball.allow in the policy directory means no exemptions.
+if [[ -s "${POLICY}/generated/eyeball.table" ]]; then
+  cmp -s "${POLICY}/generated/eyeball.table" /etc/pi-fortress/eyeball.table ||
+    install -m 0644 "${POLICY}/generated/eyeball.table" /etc/pi-fortress/eyeball.table
+fi
+if [[ -f "${POLICY}/eyeball.allow" ]]; then
+  if [[ ! "${POLICY}/eyeball.allow" -ef /etc/pi-fortress/eyeball.allow ]]; then
+    install -m 0644 "${POLICY}/eyeball.allow" /etc/pi-fortress/eyeball.allow
+  fi
+else
+  rm -f /etc/pi-fortress/eyeball.allow
+fi
 # name/prefix → feed, read by pf observe to label blocked events.
 install -m 0644 "${WORKDIR}/blocked-domains.map" /etc/pi-fortress/blocked-domains.map
 install -m 0644 "${WORKDIR}/blocked-ips.map" /etc/pi-fortress/blocked-ips.map
@@ -1006,6 +1027,7 @@ fi
 # already set the values.
 BROKER_BUDGET="-slot-warn-requests=${SLOT_WARN_REQUESTS} -slot-stop-requests=${SLOT_STOP_REQUESTS}"
 BROKER_BUDGET="${BROKER_BUDGET} -slot-warn-upload-mb=${SLOT_WARN_UPLOAD_MB} -slot-stop-upload-mb=${SLOT_STOP_UPLOAD_MB}"
+BROKER_BUDGET="${BROKER_BUDGET} -eyeball=${EYEBALL}"
 # A segment with INSPECT=on gets the fence of the agent network. The
 # ruleset sends its 443 to the engine port on the segment address. The
 # engine listens there, and the broker serves its subnet. Both files are
@@ -1634,7 +1656,31 @@ fi
 # file when chrony stops, because timesyncd no longer does. The output
 # chain policy is accept, and no rule drops 4460 or 123 for the _chrony
 # user. Thus the firewall needs nothing (render TestPiOwnTimeSyncIsNotDropped).
-if command -v chronyd >/dev/null 2>&1; then
+#
+# chrony is also the NTP server of the house and of each plain segment.
+# The ruleset sends each NTP packet of these networks to the gateway
+# (render ntpRedirect). NTP to a server of the device could carry data, so
+# it never leaves. allow names only these networks: never the agent
+# network, which has no NTP (vm/agent/setup.sh), and never the uplink.
+# Input drops NTP on those interfaces too. The gateway serves plain NTP,
+# not NTS: it has no NTS server key. It has no local directive, so it
+# never serves a clock that it did not sync: an unsynced chrony answers
+# with the leap bits of an unsynchronised server, and clients ignore it.
+#
+# ratelimit: a client address gets an answer for one request each 2 s on
+# average (interval 1), with bursts of 8. iburst sends 4 to 8 requests
+# 2 s apart, and a client then asks each 64 s or slower. A flood gets no
+# answer above that, except the leak of chrony (1 in 4 by default), which
+# tells a real client that the server is still there. chrony keeps this
+# state in its client log, which has a fixed size (clientloglimit, 512 KiB
+# by default). Thus the memory of chronyd does not grow with the number
+# of clients. The command port stays off (cmdport 0). chronyc uses the
+# Unix socket. bindcmdaddress keeps it on localhost if the port is ever
+# on.
+# chrony_conf writes chrony.conf on stdout: NTS sources, and an allow line
+# for HOUSE_NET (when HOUSE_IF is set) and for each SEG_NET.
+chrony_conf() {
+  local n
   printf '%s\n' \
     '# Written by pi-fortress apply.sh; edits here are replaced on the next apply.' \
     'server time.cloudflare.com iburst nts' \
@@ -1648,7 +1694,18 @@ if command -v chronyd >/dev/null 2>&1; then
     'rtcsync' \
     'maxupdateskew 100.0' \
     'cmdport 0' \
-    'logdir /var/log/chrony' >"${WORKDIR}/chrony.conf"
+    'bindcmdaddress 127.0.0.1' \
+    'logdir /var/log/chrony'
+  if [[ -n "${HOUSE_IF:-}" && -n "${HOUSE_NET:-}" ]]; then
+    printf 'allow %s\n' "${HOUSE_NET}"
+  fi
+  for n in "${SEG_NET[@]}"; do
+    [[ -n "${n}" ]] && printf 'allow %s\n' "${n}"
+  done
+  printf '%s\n' 'ratelimit interval 1 burst 8'
+}
+if command -v chronyd >/dev/null 2>&1; then
+  chrony_conf >"${WORKDIR}/chrony.conf"
   printf '%s\n' '[Service]' 'ExecStopPost=-/usr/bin/touch /var/lib/systemd/timesync/clock' >"${WORKDIR}/chrony-dropin.conf"
   install -d -m 0755 /etc/chrony /etc/systemd/system/chrony.service.d /var/lib/systemd/timesync
   _chrony_changed=0
@@ -1966,6 +2023,8 @@ if [[ -n "${HOUSE_IF}" ]]; then
   #
   # dhcp-option:dns-server still gives HOUSE_IP: the address did not
   # change. Only the daemon that answers on it changed.
+  # dhcp-option:ntp-server gives HOUSE_IP too: chrony answers there, and
+  # the ruleset sends all other NTP of the house there.
   #
   # The DHCP log is a separate file. pf dns owns dns-house.jsonl and
   # rotates it (internal/dnsd sweepLogs). A dnsmasq with an fd to
@@ -1980,6 +2039,7 @@ dhcp-range=${HOUSE_DHCP_START},${HOUSE_DHCP_END},12h
 dhcp-authoritative
 dhcp-option=option:router,${HOUSE_IP}
 dhcp-option=option:dns-server,${HOUSE_IP}
+dhcp-option=option:ntp-server,${HOUSE_IP}
 dhcp-hostsfile=/etc/pi-fortress/house.hosts
 dhcp-leasefile=/var/lib/pi-fortress/house.leases
 log-dhcp

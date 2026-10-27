@@ -2409,11 +2409,11 @@ dconf="${droot}/etc/dhcp-iot.conf"
 [[ -f "${dconf}" ]] || fail "no dnsmasq conf for the DHCP segment"
 [[ ! -e "${droot}/etc/dhcp-desk.conf" ]] || fail "a conf was written for the desk, which has no DHCP"
 for _l in 'interface=eth1.30' 'except-interface=lo' 'bind-dynamic' 'port=0' 'dhcp-range=10.30.0.100,10.30.0.199,12h' \
-  'dhcp-option=option:router,10.30.0.1' 'dhcp-option=option:dns-server,10.30.0.1' \
+  'dhcp-option=option:router,10.30.0.1' 'dhcp-option=option:dns-server,10.30.0.1' 'dhcp-option=option:ntp-server,10.30.0.1' \
   "dhcp-leasefile=${droot}/lib/dhcp-iot.leases" "log-facility=${droot}/log/dhcp-iot.log"; do
   grep -qxF -- "${_l}" "${dconf}" || fail "dhcp-iot.conf lacks '${_l}':$(printf '\n%s' "$(cat "${dconf}")")"
 done
-[[ "$(grep -c '^dhcp-option=' "${dconf}")" -eq 2 ]] || fail "dhcp-iot.conf sends more than the router and the resolver"
+[[ "$(grep -c '^dhcp-option=' "${dconf}")" -eq 3 ]] || fail "dhcp-iot.conf sends more than the router, the resolver and the NTP server"
 [[ "$(grep -c '^interface=' "${dconf}")" -eq 1 ]] || fail "dhcp-iot.conf binds more than one interface"
 grep -qE '^(conf-dir|conf-file|domain|dhcp-script|dhcp-boot|enable-tftp|server)=' "${dconf}" &&
   fail "dhcp-iot.conf pulls in or hands out something beyond the lease: $(grep -E '^(conf-dir|conf-file|domain|dhcp-script|dhcp-boot|enable-tftp|server)=' "${dconf}")"
@@ -2492,6 +2492,37 @@ _seg_dhcp="$(grep -nx 'seg_dhcp_sync || exit 1' "${apply}" | cut -d: -f1)"
 # the account of its instance, which gets a signal to reopen it.
 grep -A12 '^/var/log/pi-fortress/dhcp-\*\.log {' "${conf}" | grep -qx '    create 0640' ||
   fail "logrotate.conf: the segment DHCP logs are not rotated, or not recreated with the owner they had"
+
+# chrony.conf (apply.sh chrony_conf): NTS sources, and NTP served to the
+# house and to each plain segment only. Never to the agent network, never
+# a clock that chrony did not sync (no local line), a rate limit on each
+# client, and no command port on the network.
+grep -qx '  chrony_conf >"${WORKDIR}/chrony.conf"' "${apply}" || fail "apply.sh does not write chrony.conf with chrony_conf"
+chrony_render() {
+  (
+    # shellcheck source=/dev/null
+    source <(sed -n '/^chrony_conf() {$/,/^}$/p' "${apply}")
+    HOUSE_IF="$1" HOUSE_NET="$2"
+    read -r -a SEG_NET <<<"$3"
+    chrony_conf
+  )
+}
+_cc="$(chrony_render eth2 10.78.0.0/24 '10.79.0.0/30 10.30.0.0/24')"
+for _l in 'server time.cloudflare.com iburst nts' 'server nts.netnod.se iburst nts' 'server ptbtime1.ptb.de iburst nts' \
+  'authselectmode require' 'cmdport 0' 'bindcmdaddress 127.0.0.1' \
+  'allow 10.78.0.0/24' 'allow 10.79.0.0/30' 'allow 10.30.0.0/24' 'ratelimit interval 1 burst 8'; do
+  grep -qxF -- "${_l}" <<<"${_cc}" || fail "chrony.conf lacks '${_l}':$(printf '\n%s' "${_cc}")"
+done
+[[ "$(grep -c '^allow ' <<<"${_cc}")" -eq 3 ]] || fail "chrony.conf allows more than the house and the two segments:$(printf '\n%s' "${_cc}")"
+grep -qE '^(local|allow all|allow$|deny|cmdallow|ntsserverkey|ntsservercert|bindcmdaddress (0\.0\.0\.0|::))' <<<"${_cc}" &&
+  fail "chrony.conf serves unsynced time, serves all, or opens the command port:$(printf '\n%s' "${_cc}")"
+grep -qF '10.77.' <<<"${_cc}" && fail "chrony.conf names the agent network"
+# No house and no segment: chrony serves no one.
+_cc="$(chrony_render '' 10.78.0.0/24 '')"
+grep -q '^allow' <<<"${_cc}" && fail "chrony.conf allows a client with no house and no segment:$(printf '\n%s' "${_cc}")"
+grep -qx 'ratelimit interval 1 burst 8' <<<"${_cc}" || fail "chrony.conf without clients has no rate limit"
+# The house DHCP offers the gateway as its NTP server, as each segment does.
+grep -qx 'dhcp-option=option:ntp-server,${HOUSE_IP}' "${apply}" || fail "the house DHCP does not offer the gateway as NTP server"
 
 # Reservations on a DHCP segment: dhcp.<name>.hosts next to segments.d,
 # in the house.hosts form. Render checks them and gives them to apply in
@@ -3359,6 +3390,8 @@ done
 grep -qx 'StateDirectory=pi-fortress/alert' "${here}/alert.service" || fail "alert.service has no state directory for pressure.json"
 grep -qF 'DefaultStatePath = "/var/lib/pi-fortress/alert/pressure.json"' "${here}/../../internal/alert/pressure.go" ||
   fail "pf alert keeps its pressure state outside the StateDirectory of alert.service"
+grep -qF 'DefaultDigestState = "/var/lib/pi-fortress/alert/digest.json"' "${here}/../../internal/alert/digest.go" ||
+  fail "pf alert keeps its block digest state outside the StateDirectory of alert.service"
 # apply makes the directory and the files before it starts the units.
 # provision.sh makes the directory too: it can start observe before the
 # first apply.

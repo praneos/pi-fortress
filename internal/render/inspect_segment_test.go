@@ -39,7 +39,7 @@ func TestInspectOnSendsTheDeskToTheEngine(t *testing.T) {
 	c := inspectedDesk(t)
 	nft := c.Ruleset(labElements)
 	for _, want := range []string{
-		"    iifname \"eth0\" tcp dport 443 redirect to :8080\n    iifname \"eth0.79\" tcp dport 443 redirect to :8080\n  }",
+		"    iifname \"eth0\" tcp dport 443 redirect to :8080\n    iifname \"eth0.79\" tcp dport 443 redirect to :8080\n",
 		`iifname "eth0.79" tcp dport 8080 ct state new add @seg_desk_fence_conn_v4 { ip saddr ct count over 128 } jump seg_desk_fence_connlimit`,
 		`iifname "eth0.79" tcp dport 8080 accept`,
 		"chain seg_desk_fence_connlimit {",

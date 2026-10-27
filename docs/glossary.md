@@ -16,5 +16,6 @@ This is the one list of terms for Pi Fortress. Docs and code comments use these 
 | refuse | Stop a request and send an error response. Nothing goes to the origin server. |
 | drop | Discard a packet or connection. Send no response. |
 | core host | A host in `core.hosts`. The gateway manages credentials for these hosts. |
+| eyeball network | A network of an ISP that connects homes or mobile phones to the internet, not servers. Its ASN is the unit that the eyeball check uses. |
 | PSI | Pressure stall information. The kernel file `/proc/pressure` tells how much of the time tasks wait for memory, a CPU or I/O. |
 | hardware watchdog | A timer in the hardware. It resets the gateway when systemd stops its signals, for example when the kernel hangs. |

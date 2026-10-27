@@ -218,9 +218,10 @@ type Config struct {
 	// house_private_dns.domains from the house DoH sinkhole. "" is off.
 	HousePrivateDNS string
 	// HouseEgress sets the ports that the house can use to go out. "" (strict)
-	// allows web, the TLS ports, NTP, ping and the toggles below. It checks
-	// each new TLS flow by name. "audit" logs what strict would drop, and lets
-	// it pass. "open" is all ports, as before 2026-09-23.
+	// allows web, the TLS ports, ping and the toggles below. It checks each new
+	// TLS flow by name. NTP goes to the gateway in all modes (ntpRedirect).
+	// "audit" logs what strict would drop, and lets it pass. "open" is all
+	// ports, as before 2026-09-23.
 	HouseEgress string
 	// HouseAllowWiFiCalling and HouseAllowCallUDP "on" open IPsec and
 	// the UDP media of the call apps under strict. "" is off.

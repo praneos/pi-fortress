@@ -139,6 +139,7 @@ The TUI refuses a value that the gateway cannot use.
 | `SLOT_STOP_REQUESTS` | Number of requests in one hour, per credential slot, before the gateway disables that slot. `0` disables it. This is the shipped setting. | `0` |
 | `SLOT_WARN_UPLOAD_MB` | Uploaded megabytes in one hour, per credential slot, before you get one alert. `0` disables it. | `500` |
 | `SLOT_STOP_UPLOAD_MB` | Uploaded megabytes in one hour, per credential slot, before the gateway disables that slot. `0` disables it. This is the shipped setting. | `0` |
+| `EYEBALL` | What the gateway does when the agent connects to an address on a home or mobile internet line (an eyeball network). Such an address can be a home server or a residential proxy of an attacker, behind a public name. `audit` lets the connection continue, logs it, and sends one alert for each name. `refuse` stops the connection. `off` disables the check. The gateway gets the list of these networks in the nightly feed refresh. With no list, or a list older than 30 days, the check is off and the log says so. To exempt a name or a network, put the name (`nas.example.com`) or the ASN (`AS64496`) on one line of `eyeball.allow` in the policy directory. The gateway reads the list again when it changes. | `audit` |
 | `AGENT_CONN_PER_IP` | Number of open connections that one agent address can hold to the gateway at the same time. Above this number, the gateway refuses and logs new connections. It never stops connections that are already open. `0` disables it. | `128` |
 | `AGENT_NEW_PER_IP` | Number of new connections in one second that one agent address can open. The format is `RATE/BURST`: the steady rate, and how many connections the address can open at the same time before the rate applies. `0` disables it. | `50/200` |
 | `AGENT_CONN_TOTAL` | Number of open connections that the full agent network can hold at the same time, for all of its addresses. `0` disables it. | `4096` |
@@ -261,6 +262,52 @@ sudo systemctl restart pi-fortress-alert
 The hardware watchdog: systemd sends a signal to the watchdog device of the Pi at regular intervals. If the Pi hangs and the signals stop for 30 seconds, the device resets the Pi. If the device accepts less time than that, the gateway uses the maximum of the device. During a reboot, the time is 2 minutes, with the same limit. `HW_WATCHDOG=auto` enables the watchdog when the kernel has a watchdog device. A lab VM usually has none.
 
 To disable the watchdog, add `HW_WATCHDOG=0` to `/etc/pi-fortress/net.env.local`. Then run `sudo pf apply`. To disable the pressure watch, use `-pressure=false` in `alert.env`.
+
+### Block digest
+
+`pf alert run` also sends a digest of the blocked requests to listed destinations. It sends a maximum of one digest each 30 minutes. It sends no digest for a window with no block that is important. The digest is on when `/etc/pi-fortress/alert.url` names a webhook.
+
+The digest uses the blocks that `pf observe` records:
+
+- A name that the sinkhole of a segment answers.
+- An address that the `blacklist_v4` set drops. The kernel log has these lines, with the prefix `pi-fortress <segment>-blacklist:`.
+- A name that the engine refuses because the blocklist has it.
+
+Each block has a class. The class comes from the list that has the name or the address:
+
+| Class | Lists | Causes a digest |
+|---|---|---|
+| security feeds | the feeds that all segments get, for example `urlhaus-domains-online`, `phishing-army`, `spamhaus-drop` and `feodo-tracker` | Yes, on all segments |
+| operator blacklist | `blacklist.domains` and `blacklist.ips` | Yes, on all segments |
+| not listed | a DNS-over-HTTPS name, a name that paranoid mode does not allow | Only on the agent segment |
+| house ad and tracker lists | the house feeds (`hagezi-pro`, `hagezi-doh-vpn-proxy-bypass`), `house.domains` and the house defaults | No |
+
+Each block on the agent segment causes a digest. When a digest goes out, it gives these items for each segment:
+
+- The number of blocks in each class.
+- The five most frequent destinations, with the feed and the number of blocks. A house list block is only a number.
+- On the agent segment, the address of the agent device for each destination. The digest does not name the devices of other segments.
+
+A digest shows the zone of a name that has the shape of a key or a placeholder, for example `(redacted).example.com`. It never shows the full name. `pf observe` sends its counts to `pf alert` each time that it writes its ledger. This occurs each 15 minutes by default. Thus a block can be in the digest of the next window.
+
+The alert service keeps the open window in `/var/lib/pi-fortress/alert/digest.json`. After a restart, the service continues the same window. It does not send a digest two times. If the service stops while a digest is not yet sent, you lose that digest only.
+
+| Flag | Meaning | Default |
+|---|---|---|
+| `-digest` | Minimum time between two digests. The minimum value is `1m`. `0` disables the digest | `30m` |
+| `-digest-state` | The file that keeps the open digest window. Empty keeps no file | `/var/lib/pi-fortress/alert/digest.json` |
+
+Put the flags in `PF_ALERT_FLAGS` in `/etc/pi-fortress/alert.env`, as for the pressure flags. Then restart the service. For example, to disable the digest:
+
+**Pi:**
+```
+echo 'PF_ALERT_FLAGS="-digest=0"' | sudo tee /etc/pi-fortress/alert.env
+sudo systemctl restart pi-fortress-alert
+```
+
+This command replaces the file. If the file has other flags, put all of the flags in the one line.
+
+The digest uses the domain map that `pf apply` writes. A map from a version before the digest does not tell the house lists from the other lists. Then a house list block reads as a security feed block. Run `sudo pf apply` one time after the upgrade.
 
 ## 5. Cable the agent
 
@@ -456,12 +503,12 @@ sudo nano /etc/pi-fortress/segments.d/<name>.env
 | `ADMIN` | no, default `no` | `yes` opens rate-limited SSH to the gateway from this segment. Apply refuses it on the cable of the house port (below) |
 | `SSH_TO` | no | An address or range in `AGENT_NET` that this segment can reach on TCP 22. Apply refuses it on the cable of the house port (below) |
 | `BLOCK_DIRECT_IP` | no, default `on` | `off` stops the drop of new connections to an address that the DNS of this segment did not give recently. Set it to `off` only for software that connects to addresses that it got from a different source. An example is the relays of a mesh VPN |
-| `EGRESS` | no, default `strict` | `strict` allows web, the mail and push ports (also IMAP 143 and SMTP submission 587), time, and ping. It drops other ports. `audit` logs what `strict` would drop, but lets it through. Use `audit` for one day first. `open` allows all ports |
+| `EGRESS` | no, default `strict` | `strict` allows web, the mail and push ports (also IMAP 143 and SMTP submission 587), and ping. It drops other ports. `audit` logs what `strict` would drop, but lets it through. Use `audit` for one day first. `open` allows all ports. In all modes, the gateway is the time server of the segment. It answers NTP (UDP 123) to any address with its own clock, and no NTP goes out. Reason: an NTP packet can carry hidden data. Under `strict`, NTS key exchange (TCP 4460) does not go out. Thus an NTS client must use the gateway as a plain NTP server: `server <IP> iburst` in its chrony configuration |
 | `ALLOW_PORTS` | no | More ports for `strict`, for example `"tcp:5000-5002 udp:3478"`. Use plain decimal. Apply refuses a leading zero or `+` |
 | `SSH_FROM` | no | One address that can open SSH into this segment, for example your admin laptop on the house network. The segment can never open a connection back to it. This SSH path is not reachable from the uplink or the agent network. Apply refuses the address of an agent. The SSH connection arrives only on the house interface or on the interface of a different plain segment. Thus the address must be inside `HOUSE_NET` or inside the `NET` of a different plain segment. Apply refuses any other address, because the source check of those interfaces drops it. It never arrives on the WireGuard tunnel. When `WG_IF` is set, the house can still reach it |
 | `CONN_PER_IP`, `NEW_PER_IP`, `CONN_TOTAL`, `NEW_TOTAL` | no, default the `SEG_` values from step 4: `128`, `50/200`, `4096`, `300/600` | The connection limits of this network, one key at a time. `0` disables one limit |
 | `DNS_TYPES` | no | The DNS of the segment answers only with addresses. It refuses names that have the shape of a key, as the agent network does. List the record types that the software of the segment needs, for example `"SRV TXT MX"`. Chat, single sign-on, or mail clients can query these types. The DNS always answers AAAA, HTTPS and SVCB empty. An entry for one of them has no effect, and apply writes a warning |
-| `DHCP` | no, default `off` | `on` makes the gateway lease addresses on this segment, from `DHCP_START` to `DHCP_END`. Each device gets `IP` as its router and DNS server, and a 12-hour lease. The house gets the same service. Use it for devices that cannot use a static address, for example IoT devices on a VLAN per SSID. It is permitted on the cable of the house port. The access point must not run its own DHCP on that SSID (in AP mode, it does not) |
+| `DHCP` | no, default `off` | `on` makes the gateway lease addresses on this segment, from `DHCP_START` to `DHCP_END`. Each device gets `IP` as its router, DNS server and NTP server, and a 12-hour lease. The house gets the same service. Use it for devices that cannot use a static address, for example IoT devices on a VLAN per SSID. It is permitted on the cable of the house port. The access point must not run its own DHCP on that SSID (in AP mode, it does not) |
 | `DHCP_START`, `DHCP_END` | with `DHCP=on` | The first and the last address to lease, in `NET`. Apply refuses a range that includes `IP`, or the network or broadcast address of `NET`. A /31 `NET` has no network or broadcast address, so the range can be the address that is not `IP`. It also refuses a range that goes backwards. Set the two keys or neither |
 | Reservations | no | This is not a key. It is a file: `/etc/pi-fortress/dhcp.<name>.hosts`. It has one `mac,ip,name` line per device. The name is optional. `#` starts a comment. The format is the same as `house.hosts`. Each device always gets its address, in the `DHCP_START`–`DHCP_END` range or outside it. Apply refuses a malformed MAC, an address outside `NET`, `IP` itself, and the network or broadcast address of `NET` (a /31 has neither). It also refuses a MAC or address that is in the file two times, and all reservations while `DHCP` is off. `pf backup` includes the file, as it includes `house.hosts` |
 | `INSPECT` | no, default `off` | `on` gives this segment the credential fence of the agent network. All TCP 443 of the segment goes to the engine and the broker. The machines of the segment must trust the gateway CA first. Apply refuses it on the cable of the house port, and with `BLOCK_DIRECT_IP=off`. With `ADMIN=yes`, apply warns. Refer to [the credential fence on the desk](#the-credential-fence-on-the-desk) |

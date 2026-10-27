@@ -283,6 +283,14 @@ func TestSummarizeCanary(t *testing.T) {
 	}
 }
 
+// A refusal row in audit mode reads as an audit: the connection went ahead.
+func TestSummarizeAuditRowIsNotARefusal(t *testing.T) {
+	got := Summarize(map[string]any{"ev": "substitution_refused", "cause": "eyeball_network", "where": "audit", "kind": "AS64496", "host": "example.com", "dest_ip": "192.0.2.1", "alert": true})
+	if got != "AUDIT eyeball_network (AS64496) -> example.com 192.0.2.1 (connection allowed)" {
+		t.Fatal(got)
+	}
+}
+
 // The notice file of observe is a second log with its own checkpoint. A row
 // there posts, reads as what it is, and does not change the strip offset.
 func TestNoticeLogPostsBesideTheStripLog(t *testing.T) {

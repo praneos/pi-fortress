@@ -30,8 +30,9 @@ source "${_pf_lib}/guard.sh" && pf_guard_target lib/dhcp.sh || return 1 2>/dev/n
 # seg_dhcp_conf NAME IF IP START END [HOSTS]: the dnsmasq conf of the
 # instance. It is the house conf (apply.sh, dns-house.conf) with the segment
 # names: bound to its one interface, port=0 so it never answers DNS (pf dns
-# holds 53 on IP), the Pi as router and resolver, its own leases and log.
-# It sends no other option: no domain, no search list, no WPAD. HOSTS is
+# holds 53 on IP), the Pi as router, resolver and NTP server (chrony,
+# apply.sh chrony_conf), its own leases and log. It sends no other
+# option: no domain, no search list, no WPAD. HOSTS is
 # the SEG_DHCP_HOSTS of the segment: the reservations from dhcp.<name>.hosts
 # that render checked. Each MAC,IP[,name] becomes a dhcp-host line. The
 # house reads its house.hosts as a dhcp-hostsfile instead. The TUI edits that
@@ -48,6 +49,7 @@ dhcp-range=${start},${end},12h
 dhcp-authoritative
 dhcp-option=option:router,${ip}
 dhcp-option=option:dns-server,${ip}
+dhcp-option=option:ntp-server,${ip}
 dhcp-leasefile=${DHCP_STATE}/dhcp-${name}.leases
 log-dhcp
 log-facility=${DHCP_LOGS}/dhcp-${name}.log
