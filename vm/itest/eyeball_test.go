@@ -128,4 +128,13 @@ func eyeRestore(t *testing.T) {
 	if out, err := ssh(t, 30*time.Second, "pi", "sudo sh -c "+shellQuote(steps)); err != nil {
 		t.Errorf("restore the eyeball table: %v\n%s", err, out)
 	}
+	// The apply restarted the fence. The next group sends its first request
+	// at once and does not retry, so wait here until the agent gets
+	// example.com again.
+	eventuallyEvery(t, 90*time.Second, 3*time.Second, func() string {
+		if code := httpCode(t, "https://example.com"); code != "200" {
+			return "https://example.com after the eyeball restore: " + code + ", want 200"
+		}
+		return ""
+	})
 }
