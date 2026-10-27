@@ -35,10 +35,10 @@ git fetch --tags
 git tag -l 'v*' --sort=-v:refname | head -1
 ```
 
-Verify that tag. This example uses `v0.1.6`:
+Verify that tag. This example uses `v0.1.7`:
 
 ```
-git -c gpg.ssh.allowedSignersFile="$HOME/pi-fortress.allowed_signers" verify-tag v0.1.6
+git -c gpg.ssh.allowedSignersFile="$HOME/pi-fortress.allowed_signers" verify-tag v0.1.7
 ```
 
 The command must print this line:
@@ -48,7 +48,7 @@ Good "git" signature for release@pi-fortress with ED25519 key SHA256:N8NU9P+r5dU
 ```
 
 If it prints a different result, do not build that tag. Then run
-`git checkout v0.1.6` and build.
+`git checkout v0.1.7` and build.
 
 The signature covers the tag and the commit that it names. Thus it
 covers all the source at that commit. A commit on `main` that has no

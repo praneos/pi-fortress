@@ -355,10 +355,10 @@ On the desktop, get the source and find the newest stable tag:
 git clone https://github.com/praneos/pi-fortress && cd pi-fortress
 git tag -l 'v*' --sort=-v:refname | head -1
 ```
-Verify that tag against the key on [Verify the source](verify.md). Then check it out. This example uses `v0.1.6`:
+Verify that tag against the key on [Verify the source](verify.md). Then check it out. This example uses `v0.1.7`:
 ```
-git -c gpg.ssh.allowedSignersFile="$HOME/pi-fortress.allowed_signers" verify-tag v0.1.6
-git checkout v0.1.6
+git -c gpg.ssh.allowedSignersFile="$HOME/pi-fortress.allowed_signers" verify-tag v0.1.7
+git checkout v0.1.7
 ```
 Then build, sign and install. The commands are in the README of the source, section [Install from source](https://github.com/praneos/pi-fortress#install-from-source). They do these steps on the desktop:
 

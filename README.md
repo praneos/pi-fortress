@@ -88,13 +88,13 @@ git clone https://github.com/praneos/pi-fortress && cd pi-fortress
 git tag -l 'v*' --sort=-v:refname | head -1
 ```
 
-The newest stable tag now is `v0.1.6`. Verify the tag against the key
+The newest stable tag now is `v0.1.7`. Verify the tag against the key
 of the project, then check it out:
 
 ```
 echo 'release@pi-fortress namespaces="git" ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKVK/2pcp/J483O0Q/NvHVZr6jAR3uzMQfTabUh5B96R' > ~/pi-fortress.allowed_signers
-git -c gpg.ssh.allowedSignersFile="$HOME/pi-fortress.allowed_signers" verify-tag v0.1.6
-git checkout v0.1.6
+git -c gpg.ssh.allowedSignersFile="$HOME/pi-fortress.allowed_signers" verify-tag v0.1.7
+git checkout v0.1.7
 ```
 
 `verify-tag` must print `Good "git" signature for release@pi-fortress`.
