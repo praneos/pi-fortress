@@ -240,6 +240,37 @@ func TestChunkSizeLineCappedAt4KiB(t *testing.T) {
 	}
 }
 
+// The framing bytes past 16 per chunk and two per data byte are counted,
+// as in net/http. A body where that count passes 16 KiB is refused.
+func TestChunkOverheadCapped(t *testing.T) {
+	ext := ";" + strings.Repeat("x", 4000)
+	body := func(chunks int) string {
+		return strings.Repeat("1"+ext+"\r\na\r\n", chunks) + "0\r\n\r\n"
+	}
+	// Four chunks are 4 * 3986 bytes of overhead: under the limit.
+	for _, c := range []struct {
+		chunks int
+		ok     bool
+	}{{4, true}, {5, false}} {
+		got, err := io.ReadAll(newChunkedReader(bufio.NewReader(strings.NewReader(body(c.chunks)))))
+		if c.ok && (err != nil || len(got) != c.chunks) {
+			t.Fatalf("%d chunks: %v %q", c.chunks, err, got)
+		}
+		if !c.ok && !errors.Is(err, ErrBadRequest) {
+			t.Fatalf("%d chunks: err=%v", c.chunks, err)
+		}
+		_, err = io.ReadAll(httputil.NewChunkedReader(strings.NewReader(body(c.chunks))))
+		if (err == nil) != c.ok {
+			t.Fatalf("stdlib %d chunks: err=%v", c.chunks, err)
+		}
+	}
+	// One byte per chunk is 5 bytes of framing per data byte, and passes.
+	got, err := io.ReadAll(newChunkedReader(bufio.NewReader(strings.NewReader(strings.Repeat("1\r\na\r\n", 50000) + "0\r\n\r\n"))))
+	if err != nil || len(got) != 50000 {
+		t.Fatalf("small chunks: %v %d", err, len(got))
+	}
+}
+
 type endless struct{}
 
 func (endless) Read(p []byte) (int, error) { return len(p), nil }
