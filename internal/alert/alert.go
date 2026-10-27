@@ -87,6 +87,11 @@ type Alerter struct {
 	// Pressure, when it is set, watches memory and CPU pressure beside the
 	// tails of Run. It posts through its own sender.
 	Pressure *Pressure
+	// Digest, when it is set, adds the Blocks rows of the notice log into a
+	// digest of blocked requests, and posts it a maximum of one time in
+	// each window (digest.go). When it is nil, a Blocks row is only a
+	// console line.
+	Digest *Digest
 }
 
 type pending struct {
@@ -313,6 +318,8 @@ func Summarize(event map[string]any) string {
 		return stripSuppressedLine(event)
 	}
 	switch field(event, "threat", "") {
+	case jsonl.BlocksThreat:
+		return blocksLine(event)
 	case "canary":
 		return "CANARY " + summarize(event)
 	case "slot_budget":
@@ -397,6 +404,12 @@ func count(event map[string]any, key string) string {
 }
 
 func summarize(event map[string]any) string {
+	// A refusal row with where "audit" is a check in audit mode: the
+	// connection went ahead. The post must not say that it was refused.
+	if field(event, "ev", "") == refusedEv && field(event, "where", "") == "audit" {
+		return "AUDIT " + field(event, "cause", "?") + " (" + field(event, "kind", "?") + ") -> " +
+			field(event, "host", "?") + " " + field(event, "dest_ip", "?") + " (connection allowed)"
+	}
 	if field(event, "ev", "") == refusedEv {
 		return "REFUSED " + field(event, "cause", "?") + " slot " + field(event, "slot", "?") +
 			" (" + field(event, "kind", "?") + ") -> " + field(event, "host", "?")
@@ -645,7 +658,12 @@ func (a *Alerter) saveLast(event map[string]any) error {
 // always: alert.last and the console line are written immediately when the
 // row is read. The checkpoint moves past the row, whatever the webhook
 // does. The post itself waits in the queue for flush.
-func (a *Alerter) handle(line, url string) error {
+func (a *Alerter) handle(line, url string) error { return a.handleFrom(line, url, false) }
+
+// handleFrom is handle with the log that the line came from. Only pf
+// observe writes the notice log. So only a Blocks row from that log goes
+// into the digest.
+func (a *Alerter) handleFrom(line, url string, notice bool) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	raw := strings.TrimSpace(line)
@@ -654,6 +672,15 @@ func (a *Alerter) handle(line, url string) error {
 	}
 	var event map[string]any
 	if err := json.Unmarshal([]byte(raw), &event); err != nil || event == nil {
+		return nil
+	}
+	// A Blocks row is a count for the digest, not an alert. It does not
+	// replace alert.last, and it never posts alone.
+	if tailer.Field(event, "threat", "") == jsonl.BlocksThreat {
+		fmt.Fprintln(a.out(), Summarize(event))
+		if row, ok := digestRow(raw); ok && notice && url != "" && a.Digest != nil {
+			a.Digest.add(row, a.clock())
+		}
 		return nil
 	}
 	if a.deb.Now == nil && a.Now != nil {
@@ -803,7 +830,11 @@ func summarizeLine(line string) string {
 	return line
 }
 
-func (a *Alerter) tail() *tailer.Tail {
+func (a *Alerter) tail() *tailer.Tail { return a.tailOf(false) }
+
+// tailOf is the tail of the strip log, or with notice set, the sink of
+// the notice log. The caller sets the paths of the notice log.
+func (a *Alerter) tailOf(notice bool) *tailer.Tail {
 	var url string
 	return &tailer.Tail{
 		Path:       a.StripLog,
@@ -816,10 +847,13 @@ func (a *Alerter) tail() *tailer.Tail {
 		Stderr:     a.Stderr,
 		Deliver: func() func(line string) error {
 			url = LoadURL(a.PolicyDirs)
-			return func(line string) error { return a.handle(line, url) }
+			return func(line string) error { return a.handleFrom(line, url, notice) }
 		},
-		After: func() error { return a.flush(url) },
-		Line:  summarizeLine,
+		After: func() error {
+			a.digestTick(url)
+			return a.flush(url)
+		},
+		Line: summarizeLine,
 	}
 }
 
@@ -832,9 +866,25 @@ func (a *Alerter) Once() int { return a.tail().Once() }
 // noticeTail is the second log. It keeps no last-event file of its own:
 // handle writes LastPath for both.
 func (a *Alerter) noticeTail() *tailer.Tail {
-	t := a.tail()
+	t := a.tailOf(true)
 	t.Path, t.OffsetPath, t.ShowPath = a.NoticeLog, a.NoticeOffsetPath, a.NoticeLog
 	return t
+}
+
+// digestTick closes the digest window when its time is up, and queues its
+// post. The post goes through the queue, so a failed post gets the same
+// retry as the others. It does not use the hourly cap: the digest is a
+// maximum of one post in each window already.
+func (a *Alerter) digestTick(url string) {
+	if a.Digest == nil || url == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if msg := a.Digest.due(a.clock()); msg != "" {
+		fmt.Fprintln(a.out(), msg)
+		a.enqueue(pending{msg: msg, kind: jsonl.BlocksThreat, keep: true})
+	}
 }
 
 func (a *Alerter) Run(ctx context.Context) error {

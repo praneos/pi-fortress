@@ -262,6 +262,52 @@ The hardware watchdog: systemd sends a signal to the watchdog device of the Pi a
 
 To disable the watchdog, add `HW_WATCHDOG=0` to `/etc/pi-fortress/net.env.local`. Then run `sudo pf apply`. To disable the pressure watch, use `-pressure=false` in `alert.env`.
 
+### Block digest
+
+`pf alert run` also sends a digest of the blocked requests to listed destinations. It sends a maximum of one digest each 30 minutes. It sends no digest for a window with no block that is important. The digest is on when `/etc/pi-fortress/alert.url` names a webhook.
+
+The digest uses the blocks that `pf observe` records:
+
+- A name that the sinkhole of a segment answers.
+- An address that the `blacklist_v4` set drops. The kernel log has these lines, with the prefix `pi-fortress <segment>-blacklist:`.
+- A name that the engine refuses because the blocklist has it.
+
+Each block has a class. The class comes from the list that has the name or the address:
+
+| Class | Lists | Causes a digest |
+|---|---|---|
+| security feeds | the feeds that all segments get, for example `urlhaus-domains-online`, `phishing-army`, `spamhaus-drop` and `feodo-tracker` | Yes, on all segments |
+| operator blacklist | `blacklist.domains` and `blacklist.ips` | Yes, on all segments |
+| not listed | a DNS-over-HTTPS name, a name that paranoid mode does not allow | Only on the agent segment |
+| house ad and tracker lists | the house feeds (`hagezi-pro`, `hagezi-doh-vpn-proxy-bypass`), `house.domains` and the house defaults | No |
+
+Each block on the agent segment causes a digest. When a digest goes out, it gives these items for each segment:
+
+- The number of blocks in each class.
+- The five most frequent destinations, with the feed and the number of blocks. A house list block is only a number.
+- On the agent segment, the address of the agent device for each destination. The digest does not name the devices of other segments.
+
+A digest shows the zone of a name that has the shape of a key or a placeholder, for example `(redacted).example.com`. It never shows the full name. `pf observe` sends its counts to `pf alert` each time that it writes its ledger. This occurs each 15 minutes by default. Thus a block can be in the digest of the next window.
+
+The alert service keeps the open window in `/var/lib/pi-fortress/alert/digest.json`. After a restart, the service continues the same window. It does not send a digest two times. If the service stops while a digest is not yet sent, you lose that digest only.
+
+| Flag | Meaning | Default |
+|---|---|---|
+| `-digest` | Minimum time between two digests. The minimum value is `1m`. `0` disables the digest | `30m` |
+| `-digest-state` | The file that keeps the open digest window. Empty keeps no file | `/var/lib/pi-fortress/alert/digest.json` |
+
+Put the flags in `PF_ALERT_FLAGS` in `/etc/pi-fortress/alert.env`, as for the pressure flags. Then restart the service. For example, to disable the digest:
+
+**Pi:**
+```
+echo 'PF_ALERT_FLAGS="-digest=0"' | sudo tee /etc/pi-fortress/alert.env
+sudo systemctl restart pi-fortress-alert
+```
+
+This command replaces the file. If the file has other flags, put all of the flags in the one line.
+
+The digest uses the domain map that `pf apply` writes. A map from a version before the digest does not tell the house lists from the other lists. Then a house list block reads as a security feed block. Run `sudo pf apply` one time after the upgrade.
+
 ## 5. Cable the agent
 
 **Direct cable.** Connect a cable directly from the agent port of the Pi to the network card of the agent machine. Or bridge the network card of a VM onto that port (step 7).

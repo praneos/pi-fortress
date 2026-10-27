@@ -76,7 +76,7 @@ func TestCompileEmitsFeedMaps(t *testing.T) {
 		}
 		return string(raw)
 	}
-	wantDomains := "evil.example\turlhaus-domains-online\nstale.example\tlocal\nmine.example\tlocal\nads.example\thagezi-pro\nhouse.example\tlocal\n"
+	wantDomains := "evil.example\turlhaus-domains-online\nstale.example\tlocal\nmine.example\tlocal\n" + MapHouseMark + "\nads.example\thagezi-pro\nhouse.example\tlocal\n"
 	if got := read(out.DomainMap); got != wantDomains {
 		t.Fatalf("domain map:\n%s", got)
 	}
@@ -138,7 +138,7 @@ func TestFeedMapsLabelOperatorEntriesLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	dm, _ := os.ReadFile(out.DomainMap)
-	if want := "both.example\tlocal\nfeed.example\turlhaus-domains-online\nads.example\tlocal\n"; string(dm) != want {
+	if want := "both.example\tlocal\nfeed.example\turlhaus-domains-online\n" + MapHouseMark + "\nads.example\tlocal\n"; string(dm) != want {
 		t.Fatalf("domain map:\n%s", dm)
 	}
 	im, _ := os.ReadFile(out.IPMap)

@@ -281,6 +281,10 @@ func runAlert(args []string, _, stderr io.Writer) int {
 	fs.Float64Var(&pr.LoadPerCPU, "pressure-load", pr.LoadPerCPU, "without PSI: load for each CPU that a busy CPU must also have")
 	fs.DurationVar(&pr.Repeat, "pressure-repeat", pr.Repeat, "minimum time between two posts while pressure stays")
 	fs.StringVar(&pr.StatePath, "pressure-state", pr.StatePath, "state file for the unclean-restart post; empty for none")
+	// The block digest of run (docs/user_guide/pi_setup.md "Block
+	// digest"). It is on when alert.url names a webhook.
+	digest := fs.Duration("digest", alert.DefaultDigestEvery, "run: post a digest of blocked requests a maximum of one time in this time; 0 disables it")
+	digestState := fs.String("digest-state", alert.DefaultDigestState, "state file of the open digest window; empty for none")
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}
@@ -290,6 +294,10 @@ func runAlert(args []string, _, stderr io.Writer) int {
 	}
 	if err := pr.Check(); err != nil {
 		fmt.Fprintln(stderr, "pf alert:", err)
+		return 2
+	}
+	if *digest != 0 && *digest < alert.MinDigestEvery {
+		fmt.Fprintf(stderr, "pf alert: -digest %v: use 0 to disable it, or %v or more\n", *digest, alert.MinDigestEvery)
 		return 2
 	}
 	a := alert.Defaults()
@@ -322,6 +330,9 @@ func runAlert(args []string, _, stderr io.Writer) int {
 			a.Pressure = pr
 			// Under MemoryMax=128M with GOMEMLIMIT=80MiB (alert.service).
 			fmt.Fprintln(stderr, "pressure: "+alert.LockMemory(80<<20))
+		}
+		if *digest > 0 {
+			a.Digest = &alert.Digest{Every: *digest, StatePath: *digestState, Stderr: stderr}
 		}
 		if err := a.Run(ctx); err != nil {
 			return fail(stderr, err)

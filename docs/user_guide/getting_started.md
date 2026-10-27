@@ -206,6 +206,8 @@ The webhook carries the host, the location, and the rule. It never carries the t
 
 On a Pi, the same webhook also gets a message when memory or CPU pressure is high, and after a restart without a clean shutdown. Refer to [Pressure alerts and the hardware watchdog](pi_setup.md#pressure-alerts-and-the-hardware-watchdog).
 
+The webhook also gets a digest of the blocked requests to listed destinations, a maximum of one each 30 minutes. Ad and tracker blocks on the house segment do not cause a digest. Refer to [Block digest](pi_setup.md#block-digest).
+
 ### 7. Look at what the agent actually hit
 
 ```

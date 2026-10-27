@@ -3359,6 +3359,8 @@ done
 grep -qx 'StateDirectory=pi-fortress/alert' "${here}/alert.service" || fail "alert.service has no state directory for pressure.json"
 grep -qF 'DefaultStatePath = "/var/lib/pi-fortress/alert/pressure.json"' "${here}/../../internal/alert/pressure.go" ||
   fail "pf alert keeps its pressure state outside the StateDirectory of alert.service"
+grep -qF 'DefaultDigestState = "/var/lib/pi-fortress/alert/digest.json"' "${here}/../../internal/alert/digest.go" ||
+  fail "pf alert keeps its block digest state outside the StateDirectory of alert.service"
 # apply makes the directory and the files before it starts the units.
 # provision.sh makes the directory too: it can start observe before the
 # first apply.
