@@ -76,7 +76,8 @@ func TestBlacklistIsNotUndoneByNeverBlock(t *testing.T) {
 
 // TestShippedNTPPassCompiles: each line of the shipped ntp_pass.ips
 // compiles, with no warning and no duplicate. The lab group ntp uses
-// 8.8.8.8 as a server that is not on the list, so it must stay off.
+// 216.239.32.10 as an address that is not on the list, so it must stay
+// off.
 func TestShippedNTPPassCompiles(t *testing.T) {
 	var warn []string
 	ips, err := loadOperator(filepath.Join("..", "..", "vm", "policy", NTPPassFile), "allow_ips", &warn)
@@ -93,7 +94,7 @@ func TestShippedNTPPassCompiles(t *testing.T) {
 		}
 		seen[ip] = true
 	}
-	for _, ip := range []string{"8.8.8.8", "8.8.8.8/32", "192.0.2.1"} {
+	for _, ip := range []string{"216.239.32.10", "216.239.32.0/24", "192.0.2.1"} {
 		if seen[ip] {
 			t.Errorf("%s must not be on the shipped list", ip)
 		}

@@ -91,10 +91,10 @@ func gwRefID(t *testing.T) string {
 }
 
 // ntpRedirects is the packet counter of the NTP redirect to gw in nat
-// prerouting.
+// prerouting. Under NTP=pass, the rule also keeps ntp_pass_v4 out.
 func ntpRedirects(t *testing.T, gw string) int {
 	t.Helper()
-	m := regexp.MustCompile(`udp dport 123 ip daddr != ` + regexp.QuoteMeta(gw) + ` counter packets (\d+) `).FindStringSubmatch(pi(t, "sudo nft list chain inet fortress prerouting"))
+	m := regexp.MustCompile(`udp dport 123 ip daddr != ` + regexp.QuoteMeta(gw) + ` (?:ip daddr != @ntp_pass_v4 )?counter packets (\d+) `).FindStringSubmatch(pi(t, "sudo nft list chain inet fortress prerouting"))
 	if m == nil {
 		t.Fatalf("no NTP redirect to %s in nat prerouting", gw)
 	}
@@ -232,6 +232,175 @@ func ntpTests(t *testing.T) {
 				}
 			}
 		}
+	})
+
+	t.Run("NTP=pass on the desk reaches ntp_pass.ips only", func(t *testing.T) {
+		ntpPassTests(t, probe, deskGW)
+	})
+}
+
+// deskNTPBackup is the desk segment file while ntpPassTests runs. It is
+// not the backup of deskInspectTests, so the two groups never restore the
+// file of the other.
+const deskNTPBackup = "/var/lib/pi-fortress/itest-desk-ntp.env"
+
+// ntpPassTests sets NTP=pass on the desk for its run. NTP to
+// 216.239.35.4 (time.google.com, in the shipped ntp_pass.ips) then leaves
+// the uplink and gets an answer that is not the clock of the gateway. NTS
+// key exchange to 162.159.200.1 (time.cloudflare.com, in the list) leaves
+// the uplink. 216.239.32.10 is a Google address that is not a time server
+// and not in the list (nor in doh.ips, whose raw drop would hide the
+// redirect): NTP to it still gets the answer of the gateway, and NTS key
+// exchange to it does not leave. NTS key exchange to example.com, which
+// the desk resolves, meets the strict egress drop. 192.0.2.1 is still
+// dropped by the blacklist. The cleanup puts the file back, applies, and
+// waits until the gateway answers the NTP of the desk to 216.239.35.4
+// again.
+func ntpPassTests(t *testing.T, probe func(string) string, gw string) {
+	arm := strings.Join([]string{
+		"set -e",
+		"[ -e " + deskNTPBackup + " ] || cp -p " + deskSegFile + " " + deskNTPBackup,
+		"grep -v '^NTP=' " + deskNTPBackup + " > " + deskSegFile,
+		"echo NTP=pass >> " + deskSegFile,
+	}, "; ")
+	pi(t, "sudo sh -c "+shellQuote(arm))
+	t.Cleanup(func() { restoreDeskNTP(t, probe) })
+	if out, err := ssh(t, 5*time.Minute, "pi", "sudo /usr/local/sbin/pf apply --local"); err != nil {
+		t.Fatalf("pf apply --local with NTP=pass: %v\n%s", err, out)
+	}
+	if set := pi(t, "sudo nft list set inet fortress ntp_pass_v4"); !strings.Contains(set, "216.239.35.4") || !strings.Contains(set, "162.159.200.1") || strings.Contains(set, "216.239.32.10") {
+		t.Fatalf("ntp_pass_v4 must hold 216.239.35.4 and 162.159.200.1, and not 216.239.32.10:\n%s", set)
+	}
+	if pre := pi(t, "sudo nft list chain inet fortress prerouting"); !strings.Contains(pre, "udp dport 123 ip daddr != "+gw+" ip daddr != @ntp_pass_v4 ") {
+		t.Fatalf("no NTP redirect of the desk that keeps ntp_pass_v4 out:\n%s", pre)
+	}
+	wan := ""
+	if f := strings.Fields(pi(t, "ip -4 route show default")); len(f) > 4 && f[3] == "dev" {
+		wan = f[4]
+	}
+	if wan == "" {
+		t.Fatal("no default route on the gateway")
+	}
+
+	t.Run("NTP to a listed server leaves and gets its answer", func(t *testing.T) {
+		var seen string
+		var capErr error
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			seen, capErr = sshNoSkip(t, 50*time.Second, "pi", "sudo timeout 35 tcpdump -i "+wan+" -n -l 'udp port 123 and host 216.239.35.4' 2>/dev/null | grep -c ' IP ' || true")
+		})
+		time.Sleep(3 * time.Second)
+		eventuallyEvery(t, 30*time.Second, 5*time.Second, func() string {
+			ref := gwRefID(t)
+			line := ntpQuery(t, probe, "desk", "216.239.35.4")
+			m := reNTPReply.FindStringSubmatch(line)
+			if m == nil {
+				return fmt.Sprintf("desk: no NTP reply for 216.239.35.4: %q", line)
+			}
+			if m[1] != "216.239.35.4:123" || m[2] == "3" || m[3] == "0" || m[3] == "16" {
+				return "desk: not a synced reply of 216.239.35.4: " + line
+			}
+			if m[3] != "1" && ref != "" && m[4] == ref {
+				return fmt.Sprintf("desk: the reply for 216.239.35.4 has the refid of the gateway (%s): %s", ref, line)
+			}
+			return ""
+		})
+		wg.Wait()
+		sudoSkip(t, "pi", "tcpdump", capErr)
+		if capErr != nil {
+			t.Fatalf("the uplink capture failed: %v", capErr)
+		}
+		if n, _ := strconv.Atoi(strings.TrimSpace(seen)); n < 2 {
+			t.Errorf("the uplink %s carried %q NTP packets to or from 216.239.35.4, want a query and its reply", wan, strings.TrimSpace(seen))
+		}
+	})
+
+	t.Run("NTP to an address not on the list still goes to the gateway", func(t *testing.T) {
+		before := ntpRedirects(t, gw)
+		eventuallyEvery(t, time.Minute, 5*time.Second, func() string {
+			ref := gwRefID(t)
+			line := ntpQuery(t, probe, "desk", "216.239.32.10")
+			m := reNTPReply.FindStringSubmatch(line)
+			if m == nil {
+				return fmt.Sprintf("desk: no NTP reply for 216.239.32.10: %q", line)
+			}
+			if m[1] != "216.239.32.10:123" || ref == "" || m[4] != ref {
+				return fmt.Sprintf("desk: the reply for 216.239.32.10 is not the gateway (refid %q): %s", ref, line)
+			}
+			return ""
+		})
+		if after := ntpRedirects(t, gw); after < before+1 {
+			t.Errorf("the NTP redirect to %s counted %d to %d packets, want 1 more at least", gw, before, after)
+		}
+	})
+
+	t.Run("NTP to a blacklisted address is still dropped", func(t *testing.T) {
+		since := piClock(t)
+		if line := ntpQuery(t, probe, "desk", "192.0.2.1"); reNTPReply.MatchString(line) {
+			t.Fatalf("desk: NTP to 192.0.2.1 got a reply: %q", line)
+		}
+		kernLog(t, since, "pi-fortress desk-blacklist: ", "DST=192.0.2.1 ", "DPT=123 ")
+	})
+
+	t.Run("NTS key exchange to a listed server leaves the gateway", func(t *testing.T) {
+		// Only the uplink of the gateway is checked: a network behind it can
+		// still drop TCP 4460.
+		var seen string
+		var capErr error
+		var wg sync.WaitGroup
+		wg.Go(func() {
+			seen, capErr = sshNoSkip(t, 30*time.Second, "pi", "sudo timeout 15 tcpdump -i "+wan+" -n -l 'tcp dst port 4460 and dst host 162.159.200.1' 2>/dev/null | grep -c ' IP ' || true")
+		})
+		time.Sleep(3 * time.Second)
+		_, _ = ssh(t, 20*time.Second, "desk", "nc -z -w5 162.159.200.1 4460")
+		wg.Wait()
+		sudoSkip(t, "pi", "tcpdump", capErr)
+		if capErr != nil {
+			t.Fatalf("the uplink capture failed: %v", capErr)
+		}
+		if n, _ := strconv.Atoi(strings.TrimSpace(seen)); n < 1 {
+			t.Errorf("the uplink %s carried no TCP 4460 to 162.159.200.1", wan)
+		}
+	})
+
+	t.Run("NTS key exchange to an address not on the list does not leave", func(t *testing.T) {
+		since := piClock(t)
+		mustFailOn(t, "desk", "nc -z -w3 216.239.32.10 4460")
+		kernLog(t, since, "pi-fortress desk-directip: ", "DST=216.239.32.10 ", "DPT=4460 ")
+		// example.com resolves on the desk, so the gate lets it pass. The
+		// strict egress of the desk drops it.
+		since = piClock(t)
+		mustFailOn(t, "desk", "nc -z -w3 example.com 4460")
+		kernLog(t, since, "pi-fortress desk-port: ", "DPT=4460 ")
+	})
+}
+
+// restoreDeskNTP puts the desk segment file back from deskNTPBackup and
+// applies. Then it waits until the gateway answers the NTP of the desk to
+// 216.239.35.4 again: the apply ends the NTP flows of the desk (its egress
+// fingerprint changed), and the next group must start with the redirect.
+func restoreDeskNTP(t *testing.T, probe func(string) string) {
+	t.Helper()
+	out, err := ssh(t, 15*time.Second, "pi", "sudo sh -c "+shellQuote("set -e; [ -e "+deskNTPBackup+" ] || exit 0; cat "+deskNTPBackup+" > "+deskSegFile+"; cmp -s "+deskNTPBackup+" "+deskSegFile+"; rm -f "+deskNTPBackup+"; echo restored"))
+	if err != nil {
+		t.Errorf("the desk segment file was not restored from %s: %v\n%s", deskNTPBackup, err, out)
+		return
+	}
+	if !contains(out, "restored") {
+		return
+	}
+	if out, err := ssh(t, 5*time.Minute, "pi", "sudo /usr/local/sbin/pf apply --local"); err != nil {
+		t.Errorf("pf apply --local after the desk restore: %v\n%s", err, out)
+		return
+	}
+	eventuallyEvery(t, 2*time.Minute, 5*time.Second, func() string {
+		ref := gwRefID(t)
+		line := ntpQuery(t, probe, "desk", "216.239.35.4")
+		m := reNTPReply.FindStringSubmatch(line)
+		if m == nil || ref == "" || m[4] != ref {
+			return fmt.Sprintf("after the restore, the gateway does not answer the desk for 216.239.35.4 (refid %q): %q", ref, line)
+		}
+		return ""
 	})
 }
 
