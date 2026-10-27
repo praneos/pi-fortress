@@ -89,7 +89,7 @@ SystemCallFilter=~@privileged
 # CAP_CHOWN, it can give the file only to a group that this user is in.
 SystemCallFilter=@chown
 ReadWritePaths=/etc/pi-fortress/broker /var/log/pi-fortress
-InaccessiblePaths=-/var/lib/pi-fortress/engine
+InaccessiblePaths=-/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www
 EnvironmentFile=-/etc/pi-fortress/broker.env
 EnvironmentFile=-/etc/pi-fortress/paranoid.flags
 # PF_FAKEIP_BROKER_FLAGS: -fakeip-net, -fakeip-journal and -resolver

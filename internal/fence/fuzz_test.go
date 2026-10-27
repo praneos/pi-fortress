@@ -3,6 +3,7 @@ package fence
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
@@ -46,6 +47,12 @@ func FuzzForeignNeverLeaks(f *testing.F) {
 			return
 		}
 		_, _, err = DecideStream(Ctx{SNI: "example.com", TokenRE: re}, req, pol, canarySlots())
+		if urlRefusal(err) {
+			// The fence refuses a target that it cannot decode to a stable
+			// form, or whose decoded form holds a value that the raw target
+			// does not show. A refused request writes nothing to the origin.
+			return
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -56,6 +63,21 @@ func FuzzForeignNeverLeaks(f *testing.F) {
 			}
 		}
 	})
+}
+
+// urlRefusal reports a refusal that holds only encoded_url_token rows for
+// the target. Each other error, and a refusal with any other row, is false.
+func urlRefusal(err error) bool {
+	var ref *RefusedError
+	if !errors.As(err, &ref) || len(ref.Refusals) == 0 {
+		return false
+	}
+	for _, r := range ref.Refusals {
+		if r.Cause != CauseEncodedURLToken || r.Where != "url" {
+			return false
+		}
+	}
+	return true
 }
 
 func FuzzTokenWindows(f *testing.F) {

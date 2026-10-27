@@ -162,9 +162,6 @@ func (e *RefusedError) Error() string { return "fence: substitution refused" }
 // A placeholder that is not exact (secrets.PlaceholderExact) has no slot:
 // the fence never substitutes it, and refuses it as slot_unknown.
 func (s *scanner) note(b []byte, span [2]int, where string) {
-	if s.quiet {
-		return
-	}
 	slot, kind := secrets.PlaceholderParts(b, span)
 	sl, ok := s.idx.ByDummy[secrets.Placeholder(slot, kind)]
 	ok = ok && secrets.PlaceholderExact(b, span)
@@ -218,10 +215,8 @@ func (s *scanner) noteNames(fields httpwire.Fields) {
 		s.refuse(CauseKeyInHeaderName, slot, kind, "header_name")
 	}
 	for _, f := range fields {
-		for _, sl := range s.idx.Lives {
-			if strings.Contains(f.Name, sl.Live) {
-				s.refuse(CauseKeyInHeaderName, sl.ID, sl.Kind, "header_name")
-			}
+		for _, sl := range livesIn(s.idx.Lives, f.Name) {
+			s.refuse(CauseKeyInHeaderName, sl.ID, sl.Kind, "header_name")
 		}
 	}
 	if s.all.match(b) {
@@ -270,19 +265,16 @@ func (s *scanner) noteMethod(method string) {
 
 // noteHost refuses the request when the Host holds a live value or a
 // token-prefix match. It checks every live value, also one of a kind that
-// this host injects, and every token rule, as noteNames does.
-func (s *scanner) noteHost(host string) {
-	s.noteLive(host, CauseLiveInHost, "header:Host")
+// this host injects, and every token rule, as noteNames does. The row
+// names the field as the agent wrote it, as each other header row does.
+func (s *scanner) noteHost(name, host string) {
+	s.noteLive(host, CauseLiveInHost, "header:"+name)
 }
 
 // noteConn refuses the request when a Connection or an Upgrade field holds
 // a live value or a token-prefix match, as noteHost does for the Host.
 func (s *scanner) noteConn(name, v string) {
-	where := "header:Connection"
-	if strings.EqualFold(name, "upgrade") {
-		where = "header:Upgrade"
-	}
-	s.noteLive(v, CauseLiveInConnection, where)
+	s.noteLive(v, CauseLiveInConnection, "header:"+name)
 }
 
 // noteLive refuses the request with cause when v holds a live value or a
@@ -296,11 +288,17 @@ func (s *scanner) noteLive(v string, cause RefusalCause, where string) {
 	}
 }
 
-// livesIn gives the live values that v holds.
+// livesIn gives the live values that v holds, in any letter case.
+//
+// The fence judges the Host, Connection, Upgrade and each field name, and
+// forwards them as the agent sent them. The judgement must read a field as
+// the origin reads it. The origin reads these fields without letter case.
+// Thus the scan here also ignores letter case.
 func livesIn(lives []secrets.Slot, v string) []secrets.Slot {
 	var in []secrets.Slot
+	lv := strings.ToLower(v)
 	for _, sl := range lives {
-		if httpwire.Contains([]byte(v), []byte(sl.Live)) {
+		if strings.Contains(lv, strings.ToLower(sl.Live)) {
 			in = append(in, sl)
 		}
 	}

@@ -14,7 +14,11 @@ type chunkedReader struct {
 	done    bool
 	err     error
 	started bool
+	excess  int64
 }
+
+// maxChunkExcess is the limit on the framing count of overhead.
+const maxChunkExcess = 16 * 1024
 
 func newChunkedReader(br *bufio.Reader) io.Reader {
 	return &chunkedReader{br: br}
@@ -41,13 +45,19 @@ func (c *chunkedReader) Read(p []byte) (int, error) {
 			}
 		}
 		c.started = true
-		line, err := c.framing()
+		// net/http reads the size line in a 4 KiB buffer and refuses a longer
+		// line. Before, this code read up to 8 KiB. Thus a long chunk
+		// extension framed here and the stdlib refused the body.
+		line, err := c.framingMax(maxChunkLine)
 		if err != nil {
 			return c.fail(err)
 		}
 		n, err := chunkSize(line)
 		if err != nil {
 			return c.fail(err)
+		}
+		if !c.overhead(len(line), n) {
+			return c.fail(ErrBadRequest)
 		}
 		if n == 0 {
 			return c.trailers()
@@ -68,6 +78,22 @@ func (c *chunkedReader) Read(p []byte) (int, error) {
 		return n, c.err
 	}
 	return n, nil
+}
+
+// overhead counts the framing of one chunk as net/http does: the size
+// line and the CRLF after the data, less 16 bytes and two per data byte.
+// The count does not go below zero. It returns false when the count
+// passes maxChunkExcess. net/http refuses that body, so this code refuses
+// it too. A chunk of 1 MiB or more always sets the count to zero. That
+// step also keeps 2*n in range.
+func (c *chunkedReader) overhead(line int, n int64) bool {
+	c.excess += int64(line) + 2
+	if n >= 1<<20 {
+		c.excess = 0
+	} else {
+		c.excess = max(c.excess-16-2*n, 0)
+	}
+	return c.excess <= maxChunkExcess
 }
 
 // trailers reads the trailer block after the last chunk, to the empty
@@ -100,7 +126,12 @@ func (c *chunkedReader) trailers() (int, error) {
 // io.EOF, it reaches io.ReadAll as a clean end, and a half-sent upload
 // then looks the same as a whole one.
 func (c *chunkedReader) framing() (string, error) {
-	line, err := readCRLF(c.br)
+	return c.framingMax(maxLineBytes)
+}
+
+// framingMax is framing with a different line limit.
+func (c *chunkedReader) framingMax(max int) (string, error) {
+	line, err := readLineMax(c.br, max)
 	if err == io.EOF {
 		err = io.ErrUnexpectedEOF
 	}

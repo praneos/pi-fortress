@@ -41,7 +41,7 @@ SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged
 ReadWritePaths=/var/log/pi-fortress
-InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www
 ExecStart=/usr/local/sbin/pf monitor run
 
 [Install]

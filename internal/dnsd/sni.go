@@ -285,8 +285,7 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 	// it is refused.
 	if syn {
 		if seq+1 != f.first {
-			c.mu.Unlock()
-			c.decide(key, f, sniBad, "SYN moves the start of the stream")
+			c.decideLocked(key, f, sniBad, "SYN moves the start of the stream")
 			c.verdict(p.ID, nfq.Drop, nil)
 			return
 		}
@@ -298,8 +297,7 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 		return
 	}
 	if len(f.held) >= sniMaxHeld || f.bytes+len(payload) > sniMaxBytes {
-		c.mu.Unlock()
-		c.decide(key, f, sniBad, "ClientHello too large")
+		c.decideLocked(key, f, sniBad, "ClientHello too large")
 		c.verdict(p.ID, nfq.Drop, nil)
 		return
 	}
@@ -308,8 +306,7 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 	// window the compare of two sequence numbers does not wrap. It wraps when
 	// they are 2^31 apart.
 	if off := seq - f.first; off >= sniMaxBytes || uint32(len(payload)) > sniMaxBytes-off {
-		c.mu.Unlock()
-		c.decide(key, f, sniBad, "segment outside the start of the stream")
+		c.decideLocked(key, f, sniBad, "segment outside the start of the stream")
 		c.verdict(p.ID, nfq.Drop, nil)
 		return
 	}
@@ -321,8 +318,7 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 	// one name and the server another. It is refused. Thus each byte of the
 	// stream has one value, whatever copy the check or the server reads.
 	if f.conflicts(seq, payload) {
-		c.mu.Unlock()
-		c.decide(key, f, sniBad, "segment changes data already held")
+		c.decideLocked(key, f, sniBad, "segment changes data already held")
 		c.verdict(p.ID, nfq.Drop, nil)
 		return
 	}
@@ -427,6 +423,16 @@ func (c *sniCheck) judge(ctx context.Context, key sniFlowKey, h tlssni.Hello) (u
 // and ports, not its own, and leaves it alone.
 func (c *sniCheck) decide(key sniFlowKey, f *sniFlow, mark uint32, why string) {
 	c.mu.Lock()
+	c.decideLocked(key, f, mark, why)
+}
+
+// decideLocked is decide for a caller that holds c.mu. It releases c.mu.
+// packet uses it when it refuses a flow that it found under the same lock.
+// If packet released the lock first, a judge of that flow could end it
+// with the ok mark in the gap. That verdict would then go to the packets
+// that come after the refused one, for example the data of a new
+// connection after a SYN that moves the start of the stream.
+func (c *sniCheck) decideLocked(key sniFlowKey, f *sniFlow, mark uint32, why string) {
 	if c.flows[key] != f || f == nil {
 		c.mu.Unlock()
 		return

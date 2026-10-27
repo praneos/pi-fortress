@@ -70,7 +70,7 @@ ReadWritePaths=-/var/lib/pi-fortress/alert.offset -/var/lib/pi-fortress/alert-no
 # owned by pf-sidecar, and makes it writable. The state is replaced with a
 # rename, and a rename needs a directory that the unit can write.
 StateDirectory=pi-fortress/alert
-InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www
 # PF_ALERT_FLAGS: the -pressure-* thresholds, or -pressure=false
 # (docs/user_guide/pi_setup.md "Pressure alerts"). apply does not write
 # this file. The operator does, and then restarts the unit.

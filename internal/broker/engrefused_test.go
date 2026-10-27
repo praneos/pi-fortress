@@ -91,3 +91,46 @@ func TestEngineSNIBlockedWritesARowThatDoesNotAlert(t *testing.T) {
 		}
 	}
 }
+
+// The engine already limits its rows. A refusal that the broker does not
+// write is still an error of Handle, and each error is a journal line. So
+// Handle reports each kind of such a refusal one time in a minute, not one
+// time for each connection.
+func TestEngineRefusedErrorOncePerMinute(t *testing.T) {
+	b, _ := testBroker(t)
+	b.Blocked = blocklist.New("phish.example")
+	b.AgentNet = netip.MustParsePrefix("10.77.0.0/24")
+	b.Logs = &jsonl.Writer{StripPath: filepath.Join(t.TempDir(), "strip.jsonl")}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	b.Now = func() time.Time { return now }
+	base := preamble.Preamble{
+		ConnID:  "c1",
+		Src:     netip.MustParseAddrPort("10.77.0.10:40000"),
+		OrigDst: netip.MustParseAddrPort("192.0.2.1:443"),
+		SNI:     "example.com",
+		Refused: preamble.RefusedSNIBlocked,
+	}
+	cause := base
+	cause.Refused = "made_up"
+	src := base
+	src.Src = netip.MustParseAddrPort("192.168.1.5:40000")
+	for _, p := range []preamble.Preamble{base, cause, src} {
+		if err := sendRefused(t, b, p); err == nil {
+			t.Fatalf("%+v: the first refusal gave no error", p)
+		}
+	}
+	for _, p := range []preamble.Preamble{base, cause, src} {
+		for range 3 {
+			if err := sendRefused(t, b, p); err != nil {
+				t.Fatalf("%+v: a repeat in the same minute gave %v", p, err)
+			}
+		}
+	}
+	now = now.Add(time.Minute)
+	if err := sendRefused(t, b, base); err == nil {
+		t.Fatal("no error after a minute")
+	}
+	if rows := stripRows(t, b.Logs.StripPath); rows != "" {
+		t.Fatalf("a row was written: %s", rows)
+	}
+}

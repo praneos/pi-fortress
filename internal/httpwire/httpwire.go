@@ -15,6 +15,7 @@ import (
 const (
 	maxHeaderBytes = 64 * 1024
 	maxLineBytes   = 8 * 1024
+	maxChunkLine   = 4 * 1024
 	maxHeaders     = 40
 	maxRespHeaders = 100
 	maxInterim     = 8
@@ -827,10 +828,16 @@ func threeDigitCode(s string) (int, bool) {
 // passes maxLineBytes. Thus a peer cannot pin memory with a line that
 // never ends.
 func readCRLF(br *bufio.Reader) (string, error) {
+	return readLineMax(br, maxLineBytes)
+}
+
+// readLineMax is readCRLF with a different limit. The limit includes the
+// CRLF.
+func readLineMax(br *bufio.Reader, max int) (string, error) {
 	var line []byte
 	for {
 		frag, err := br.ReadSlice('\n')
-		if len(line)+len(frag) > maxLineBytes {
+		if len(line)+len(frag) > max {
 			return "", ErrHeaderLimit
 		}
 		line = append(line, frag...)

@@ -432,24 +432,25 @@ func TestKeyInHeaderNameAlertsEachTime(t *testing.T) {
 	}
 }
 
-// The broker writes some rows before the fence runs: the target rules,
+// The broker has rules that refuse before the fence runs: the target rules,
 // the blocklist, the paranoid deny and a refused git push. A Host that
-// holds a live value or a token-prefix match must not go into these rows
-// either, because the alerter posts the host of a strip row to the
-// webhook. The row names the SNI instead.
+// holds a live value or a token-prefix match refuses as live_in_host
+// before each of them. The value must not go into a row, because the
+// alerter posts the host of a strip row to the webhook. The row names the
+// SNI instead.
 func TestLiveValueInHostStaysOutOfEarlyRows(t *testing.T) {
 	akia := "AKIA" + strings.Repeat("Q", 16)
 	for _, tc := range []struct {
 		name, sni, host, dst, target, live, want, where string
 		setup                                           func(*Broker)
 	}{
-		{name: "bad host", sni: "evil.example", host: "lab_fence_github@evil.example", live: "lab_fence_github", want: "evil.example", where: "target"},
-		{name: "port mismatch", sni: "evil.example", host: akia + ".evil.example:8443", live: akia, want: "evil.example", where: "target"},
-		{name: "blocklist", sni: "ok.example", host: akia + ".blocked.example", live: akia, want: "ok.example", where: "host",
+		{name: "bad host", sni: "evil.example", host: "lab_fence_github@evil.example", live: "lab_fence_github", want: "evil.example", where: "header:Host"},
+		{name: "port mismatch", sni: "evil.example", host: akia + ".evil.example:8443", live: akia, want: "evil.example", where: "header:Host"},
+		{name: "blocklist", sni: "ok.example", host: akia + ".blocked.example", live: akia, want: "ok.example", where: "header:Host",
 			setup: func(b *Broker) { b.Blocked = blocklist.New("blocked.example") }},
-		{name: "git push", sni: "github.com", host: akia + ".github.com", target: "/o/x.git/info/refs?service=git-receive-pack", live: akia, want: "github.com", where: "target",
+		{name: "git push", sni: "github.com", host: akia + ".github.com", target: "/o/x.git/info/refs?service=git-receive-pack", live: akia, want: "github.com", where: "header:Host",
 			setup: func(b *Broker) { b.GitPush = gitPushList(t, "github.com o/r\n") }},
-		{name: "paranoid", sni: "github.com", host: akia + ".evil.example", live: akia, want: "github.com", where: whereParanoid,
+		{name: "paranoid", sni: "github.com", host: akia + ".evil.example", live: akia, want: "github.com", where: "header:Host",
 			setup: func(b *Broker) {
 				pb := paranoidBroker(t)
 				b.Paranoid, b.Forward = pb.Paranoid, pb.Forward
@@ -491,6 +492,58 @@ func TestLiveValueInHostStaysOutOfEarlyRows(t *testing.T) {
 			}
 			if !found {
 				t.Fatalf("no %s row with host %q:\n%s", tc.where, tc.want, all)
+			}
+		})
+	}
+}
+
+// A live value in the Host refuses the request as live_in_host, through
+// the full serve path. This is also true when the value makes a label
+// longer than 63 bytes, when it is in a different letter case, and for a
+// git push that the list does not allow. The row names the slot and the
+// kind, alerts, and names the SNI. No row gives a different cause first.
+func TestLiveValueInHostRefusedOnServePath(t *testing.T) {
+	oat := "sk-ant-oat01-" + strings.Repeat("A", 64)
+	core := preamble.Preamble{SNI: "pf-core-echo.test", OrigDst: netip.MustParseAddrPort("192.0.2.3:443")}
+	gh := preamble.Preamble{SNI: "github.com", OrigDst: netip.MustParseAddrPort("8.8.8.8:443")}
+	for _, tc := range []struct {
+		name, live string
+		p          preamble.Preamble
+		line       string
+		slot, kind string
+	}{
+		{"long label", oat, core, "GET / HTTP/1.1\r\nHost: " + oat + ".pf-core-echo.test\r\n", "b0b1b2b3b4b5b6b7", "CLAUDE_OAT"},
+		{"long label, lower", oat, core, "GET / HTTP/1.1\r\nHost: " + strings.ToLower(oat) + ".pf-core-echo.test\r\n", "b0b1b2b3b4b5b6b7", "CLAUDE_OAT"},
+		{"long label, bad port", oat, core, "GET / HTTP/1.1\r\nHost: " + oat + ".pf-core-echo.test:8443\r\n", "b0b1b2b3b4b5b6b7", "CLAUDE_OAT"},
+		{"upper", "lab_fence_github", core, "GET / HTTP/1.1\r\nHost: LAB_FENCE_GITHUB.pf-core-echo.test\r\n", "a1b2c3d4e5f67890", "GITHUB_TOKEN"},
+		{"absolute form", "lab_fence_github", core, "GET http://x.test/ HTTP/1.1\r\nHost: lab_fence_github.pf-core-echo.test\r\n", "a1b2c3d4e5f67890", "GITHUB_TOKEN"},
+		{"git push", "lab_fence_github", gh, "GET /o/r.git/info/refs?service=git-receive-pack HTTP/1.1\r\nHost: lab_fence_github.github.com\r\n", "a1b2c3d4e5f67890", "GITHUB_TOKEN"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b, _ := testBroker(t)
+			b.GitPush = gitPushList(t, "")
+			b.Logs = &jsonl.Writer{StripPath: filepath.Join(t.TempDir(), "strip.jsonl")}
+			got := rawRoundtrip(t, b, tc.p, tc.line+"\r\n")
+			if !strings.Contains(got, "503 Service Unavailable") || !strings.HasSuffix(got, RefusedBody) {
+				t.Fatalf("not the one refusal: %q", got)
+			}
+			body := stripRows(t, b.Logs.StripPath)
+			if strings.Contains(strings.ToLower(body), strings.ToLower(tc.live)) {
+				t.Fatalf("the live value is in the log:\n%s", body)
+			}
+			found := false
+			for _, line := range strings.Split(strings.TrimSpace(body), "\n") {
+				var r jsonl.Refused
+				if err := json.Unmarshal([]byte(line), &r); err != nil {
+					t.Fatal(err)
+				}
+				if r.Cause != "live_in_host" {
+					t.Fatalf("a row with a different cause: %s", line)
+				}
+				found = found || r.Alert && r.Slot == tc.slot && r.Kind == tc.kind && r.Host == tc.p.SNI && r.Where == "header:Host"
+			}
+			if !found {
+				t.Fatalf("no live_in_host row for %s:\n%s", tc.slot, body)
 			}
 		})
 	}
