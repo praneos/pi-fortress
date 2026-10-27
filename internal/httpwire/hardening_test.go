@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net/http/httputil"
 	"strings"
 	"testing"
 )
@@ -203,6 +204,70 @@ func TestChunkedTrailerBlockCapped(t *testing.T) {
 	got, err := io.ReadAll(newChunkedReader(bufio.NewReader(strings.NewReader("2\r\nok\r\n0\r\nX-T: a\r\n\r\n"))))
 	if err != nil || string(got) != "ok" {
 		t.Fatalf("%v %q", err, got)
+	}
+}
+
+// A chunk-size line with its CRLF fits in 4 KiB, as in net/http. The
+// line at the limit decodes; one byte more is refused.
+func TestChunkSizeLineCappedAt4KiB(t *testing.T) {
+	line := func(n int) string {
+		// "1;" + extension + CRLF is n bytes.
+		return "1;" + strings.Repeat("x", n-4) + "\r\na\r\n0\r\n\r\n"
+	}
+	got, err := io.ReadAll(newChunkedReader(bufio.NewReader(strings.NewReader(line(maxChunkLine)))))
+	if err != nil || string(got) != "a" {
+		t.Fatalf("at the limit: %v %q", err, got)
+	}
+	_, err = io.ReadAll(newChunkedReader(bufio.NewReader(strings.NewReader(line(maxChunkLine + 1)))))
+	if !errors.Is(err, ErrHeaderLimit) {
+		t.Fatalf("over the limit: err=%v", err)
+	}
+	// The stdlib draws the line at the same byte.
+	if _, err := io.ReadAll(httputil.NewChunkedReader(strings.NewReader(line(maxChunkLine)))); err != nil {
+		t.Fatalf("stdlib at the limit: %v", err)
+	}
+	if _, err := io.ReadAll(httputil.NewChunkedReader(strings.NewReader(line(maxChunkLine + 1)))); err == nil {
+		t.Fatal("stdlib over the limit: no error")
+	}
+	// The response reader uses the same chunk reader.
+	resp := "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" + line(maxChunkLine+1)
+	r, err := ReadResponseHead(bufio.NewReader(strings.NewReader(resp)), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(r.Stream); !errors.Is(err, ErrHeaderLimit) {
+		t.Fatalf("response: err=%v", err)
+	}
+}
+
+// The framing bytes past 16 per chunk and two per data byte are counted,
+// as in net/http. A body where that count passes 16 KiB is refused.
+func TestChunkOverheadCapped(t *testing.T) {
+	ext := ";" + strings.Repeat("x", 4000)
+	body := func(chunks int) string {
+		return strings.Repeat("1"+ext+"\r\na\r\n", chunks) + "0\r\n\r\n"
+	}
+	// Four chunks are 4 * 3986 bytes of overhead: under the limit.
+	for _, c := range []struct {
+		chunks int
+		ok     bool
+	}{{4, true}, {5, false}} {
+		got, err := io.ReadAll(newChunkedReader(bufio.NewReader(strings.NewReader(body(c.chunks)))))
+		if c.ok && (err != nil || len(got) != c.chunks) {
+			t.Fatalf("%d chunks: %v %q", c.chunks, err, got)
+		}
+		if !c.ok && !errors.Is(err, ErrBadRequest) {
+			t.Fatalf("%d chunks: err=%v", c.chunks, err)
+		}
+		_, err = io.ReadAll(httputil.NewChunkedReader(strings.NewReader(body(c.chunks))))
+		if (err == nil) != c.ok {
+			t.Fatalf("stdlib %d chunks: err=%v", c.chunks, err)
+		}
+	}
+	// One byte per chunk is 5 bytes of framing per data byte, and passes.
+	got, err := io.ReadAll(newChunkedReader(bufio.NewReader(strings.NewReader(strings.Repeat("1\r\na\r\n", 50000) + "0\r\n\r\n"))))
+	if err != nil || len(got) != 50000 {
+		t.Fatalf("small chunks: %v %d", err, len(got))
 	}
 }
 
