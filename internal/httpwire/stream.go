@@ -41,7 +41,10 @@ func (c *chunkedReader) Read(p []byte) (int, error) {
 			}
 		}
 		c.started = true
-		line, err := c.framing()
+		// net/http reads the size line in a 4 KiB buffer and refuses a longer
+		// line. Before, this code read up to 8 KiB. Thus a long chunk
+		// extension framed here and the stdlib refused the body.
+		line, err := c.framingMax(maxChunkLine)
 		if err != nil {
 			return c.fail(err)
 		}
@@ -100,7 +103,12 @@ func (c *chunkedReader) trailers() (int, error) {
 // io.EOF, it reaches io.ReadAll as a clean end, and a half-sent upload
 // then looks the same as a whole one.
 func (c *chunkedReader) framing() (string, error) {
-	line, err := readCRLF(c.br)
+	return c.framingMax(maxLineBytes)
+}
+
+// framingMax is framing with a different line limit.
+func (c *chunkedReader) framingMax(max int) (string, error) {
+	line, err := readLineMax(c.br, max)
 	if err == io.EOF {
 		err = io.ErrUnexpectedEOF
 	}

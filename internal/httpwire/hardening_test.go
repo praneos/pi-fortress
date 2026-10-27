@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"net/http/httputil"
 	"strings"
 	"testing"
 )
@@ -203,6 +204,39 @@ func TestChunkedTrailerBlockCapped(t *testing.T) {
 	got, err := io.ReadAll(newChunkedReader(bufio.NewReader(strings.NewReader("2\r\nok\r\n0\r\nX-T: a\r\n\r\n"))))
 	if err != nil || string(got) != "ok" {
 		t.Fatalf("%v %q", err, got)
+	}
+}
+
+// A chunk-size line with its CRLF fits in 4 KiB, as in net/http. The
+// line at the limit decodes; one byte more is refused.
+func TestChunkSizeLineCappedAt4KiB(t *testing.T) {
+	line := func(n int) string {
+		// "1;" + extension + CRLF is n bytes.
+		return "1;" + strings.Repeat("x", n-4) + "\r\na\r\n0\r\n\r\n"
+	}
+	got, err := io.ReadAll(newChunkedReader(bufio.NewReader(strings.NewReader(line(maxChunkLine)))))
+	if err != nil || string(got) != "a" {
+		t.Fatalf("at the limit: %v %q", err, got)
+	}
+	_, err = io.ReadAll(newChunkedReader(bufio.NewReader(strings.NewReader(line(maxChunkLine + 1)))))
+	if !errors.Is(err, ErrHeaderLimit) {
+		t.Fatalf("over the limit: err=%v", err)
+	}
+	// The stdlib draws the line at the same byte.
+	if _, err := io.ReadAll(httputil.NewChunkedReader(strings.NewReader(line(maxChunkLine)))); err != nil {
+		t.Fatalf("stdlib at the limit: %v", err)
+	}
+	if _, err := io.ReadAll(httputil.NewChunkedReader(strings.NewReader(line(maxChunkLine + 1)))); err == nil {
+		t.Fatal("stdlib over the limit: no error")
+	}
+	// The response reader uses the same chunk reader.
+	resp := "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n" + line(maxChunkLine+1)
+	r, err := ReadResponseHead(bufio.NewReader(strings.NewReader(resp)), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(r.Stream); !errors.Is(err, ErrHeaderLimit) {
+		t.Fatalf("response: err=%v", err)
 	}
 }
 
