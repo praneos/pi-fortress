@@ -135,7 +135,7 @@ fi
 # key_prefixes.rules.local, doh.ips.local, doh.domains.local). apply and
 # pf compile add that file, and this step never writes it.
 for _f in blacklist.ips blacklist.domains never_block.ips never_block.domains direct_ip.allow sources.json \
-  allow.domains dns_types.allow git_push.allow; do
+  allow.domains dns_types.allow git_push.allow ntp_pass.ips; do
   if [[ ! -e "/etc/pi-fortress/${_f}" ]]; then
     install -m 0644 "${SRC}/vm/policy/${_f}" "/etc/pi-fortress/${_f}"
   fi

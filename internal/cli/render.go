@@ -28,13 +28,14 @@ func runRender(args []string, _, stderr io.Writer) int {
 	privElems := fs.String("house-private-dns-elements", "", "house_private_dns nft elements file")
 	waElems := fs.String("house-whatsapp-elements", "", "house_whatsapp nft elements file")
 	sshElems := fs.String("ssh-elements", "", "ssh_allow nft elements file")
+	ntpPassElems := fs.String("ntp-pass-elements", "", "ntp_pass nft elements file")
 	outNFT := fs.String("out-nft", "", "nftables.conf path")
 	outEnv := fs.String("out-env", "", "derived variables path, sourced by apply.sh")
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}
 	if *outNFT == "" || *outEnv == "" {
-		fmt.Fprintln(stderr, "usage: pf render --out-nft FILE --out-env FILE [--house-env FILE] [--segments-dir DIR] [--int-if IF --wan-if IF] [--live] [--paranoid] [--elements FILE] [--doh-elements FILE] [--direct-elements FILE] [--house-direct-elements FILE] [--house-private-dns-elements FILE] [--house-whatsapp-elements FILE] [--ssh-elements FILE]")
+		fmt.Fprintln(stderr, "usage: pf render --out-nft FILE --out-env FILE [--house-env FILE] [--segments-dir DIR] [--int-if IF --wan-if IF] [--live] [--paranoid] [--elements FILE] [--doh-elements FILE] [--direct-elements FILE] [--house-direct-elements FILE] [--house-private-dns-elements FILE] [--house-whatsapp-elements FILE] [--ssh-elements FILE] [--ntp-pass-elements FILE]")
 		return 2
 	}
 	refuse := func(err error) int {
@@ -47,7 +48,7 @@ func runRender(args []string, _, stderr io.Writer) int {
 	for _, x := range []struct {
 		path string
 		dst  *string
-	}{{*elems, &e.Blacklist}, {*dohElems, &e.DoH}, {*directElems, &e.DirectIP}, {*houseDirectElems, &e.HouseDirectIP}, {*privElems, &e.HousePrivateDNS}, {*waElems, &e.HouseWhatsApp}, {*sshElems, &e.SSHAllow}} {
+	}{{*elems, &e.Blacklist}, {*dohElems, &e.DoH}, {*directElems, &e.DirectIP}, {*houseDirectElems, &e.HouseDirectIP}, {*privElems, &e.HousePrivateDNS}, {*waElems, &e.HouseWhatsApp}, {*sshElems, &e.SSHAllow}, {*ntpPassElems, &e.NTPPass}} {
 		if x.path == "" {
 			continue
 		}

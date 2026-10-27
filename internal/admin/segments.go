@@ -65,7 +65,10 @@ var SegmentFixed = []string{"IF", "NET", "IP"}
 
 // SegmentKeys are the keys that a seat can write, in screen order. The
 // three DHCP keys come after PARANOID, and the connection keys come after
-// them, so the rows above them keep their positions.
+// them, so the rows above them keep their positions. EGRESS, ALLOW_PORTS,
+// INSPECT and NTP are not here: each one opens a path out of the segment,
+// so only an edit of the file changes it. SegmentEnv still shows them, and
+// the candidate render of an edit still checks them.
 var SegmentKeys = append([]string{"ADMIN", "SSH_TO", "BLOCK_DIRECT_IP", "PARANOID", "DHCP", "DHCP_START", "DHCP_END"}, SegmentConnKeys...)
 
 // SegmentConnKeys are the connection budget of one plain segment. Each key

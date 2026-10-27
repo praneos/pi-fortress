@@ -45,18 +45,28 @@ func (c *Config) houseEgressFP() string {
 		"udp="+c.HouseAllowUDP)
 }
 
-// segEgressFP covers EGRESS, ALLOW_PORTS, BLOCK_DIRECT_IP and INSPECT of a
-// plain segment, and the ssh_allow.ips elements, which open SSH from each
-// plain segment. INSPECT=on sends 443 to the engine. A flow that was open
-// before goes to the origin, so a change of INSPECT must cut it.
+// segEgressFP covers EGRESS, ALLOW_PORTS, BLOCK_DIRECT_IP, INSPECT and NTP
+// of a plain segment, and the ssh_allow.ips elements, which open SSH from
+// each plain segment. INSPECT=on sends 443 to the engine. A flow that was
+// open before goes to the origin, so a change of INSPECT must cut it. A
+// change of NTP, or of ntp_pass.ips under NTP=pass, must cut the NTP flows
+// too: an NTP flow to a server that is no longer allowed must end, and a
+// flow that nat sent to the gateway must end, so that the next query goes
+// out. The ntp fields are there only for pass, so the fingerprint of a
+// default segment does not change.
 func segEgressFP(s Segment, e Elements) string {
-	return egressFP("segment",
-		"egress="+orDefault(s.Egress, "strict"),
-		"block_direct_ip="+orDefault(s.BlockDirectIP, "on"),
-		"inspect="+orDefault(s.Inspect, "off"),
-		"tcp="+s.AllowTCP,
-		"udp="+s.AllowUDP,
-		"ssh_allow="+e.SSHAllow)
+	fields := []string{
+		"egress=" + orDefault(s.Egress, "strict"),
+		"block_direct_ip=" + orDefault(s.BlockDirectIP, "on"),
+		"inspect=" + orDefault(s.Inspect, "off"),
+		"tcp=" + s.AllowTCP,
+		"udp=" + s.AllowUDP,
+		"ssh_allow=" + e.SSHAllow,
+	}
+	if s.NTP == "pass" {
+		fields = append(fields, "ntp=pass", "ntp_pass="+e.NTPPass)
+	}
+	return egressFP("segment", fields...)
 }
 
 func orDefault(v, def string) string {

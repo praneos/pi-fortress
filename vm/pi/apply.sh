@@ -396,6 +396,7 @@ if [[ "${RENDER}" -eq 1 ]]; then
   printf '%s' "${PF_HOUSE_PRIVATE_DNS_ELEMENTS:-}" >"${WORKDIR}/house-private-dns.nft"
   printf '%s' "${PF_HOUSE_WHATSAPP_ELEMENTS:-}" >"${WORKDIR}/house-whatsapp.nft"
   printf '%s' "${PF_SSH_ELEMENTS:-}" >"${WORKDIR}/ssh.nft"
+  printf '%s' "${PF_NTP_PASS_ELEMENTS:-}" >"${WORKDIR}/ntp-pass.nft"
   PF="${PF_BIN:-}"
   if [[ -z "${PF}" ]]; then
     for _src in "$(dirname "$(readlink -f "$0")")/../../bin/pf" "${TREE:-/nonexistent}/bin/pf" "${TREE:-/nonexistent}/vm/pi/pf" "${PI_LIB}/pf" "$(command -v pf || true)"; do
@@ -453,6 +454,7 @@ else
     --out-house-direct-nft "${WORKDIR}/house-direct.nft" \
     --out-house-whatsapp-nft "${WORKDIR}/house-whatsapp.nft" \
     --out-ssh-nft "${WORKDIR}/ssh.nft" \
+    --out-ntp-pass-nft "${WORKDIR}/ntp-pass.nft" \
     --out-domain-map "${WORKDIR}/blocked-domains.map" \
     --out-ip-map "${WORKDIR}/blocked-ips.map" |
     tee "${WORKDIR}/compile.out"
@@ -563,6 +565,7 @@ render_args=(
   --house-private-dns-elements "${WORKDIR}/house-private-dns.nft"
   --house-whatsapp-elements "${WORKDIR}/house-whatsapp.nft"
   --ssh-elements "${WORKDIR}/ssh.nft"
+  --ntp-pass-elements "${WORKDIR}/ntp-pass.nft"
   --out-nft "${WORKDIR}/nftables.conf"
   --out-env "${WORKDIR}/apply.env"
 )

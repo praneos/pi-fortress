@@ -131,6 +131,10 @@ type Out struct {
 	// that an agent segment can reach on TCP 22. It is empty by default. For
 	// an empty list, pf render emits no set and no accept.
 	SSHAllowNFT string
+	// NTPPassNFT receives the coalesced ntp_pass.ips (NTPPassFile): the NTP
+	// and NTS servers that a plain segment with NTP=pass can reach. pf
+	// render emits the set only when a segment has NTP=pass.
+	NTPPassNFT string
 	// DomainMap and IPMap receive one "<item>\t<feed>" line for each compiled
 	// sinkhole name (agent, then house) and for each blacklist prefix before
 	// coalescence. The feed comes from generated/feeds.map. It is "local" when
@@ -151,6 +155,7 @@ type Summary struct {
 	DirectIPs       int
 	HouseDirectIPs  int
 	SSHAllows       int
+	NTPPass         int
 	GitPushes       int
 	// Warnings are the lines of the operator's lists that did not compile:
 	// each line that the parser of the list skipped (loadOperator), and each
@@ -193,6 +198,9 @@ func (s Summary) Line() string {
 	}
 	if s.SSHAllows > 0 {
 		line += fmt.Sprintf(", %d ssh_allows", s.SSHAllows)
+	}
+	if s.NTPPass > 0 {
+		line += fmt.Sprintf(", %d ntp_pass", s.NTPPass)
 	}
 	if s.GitPushes > 0 {
 		line += fmt.Sprintf(", %d git_pushes", s.GitPushes)
@@ -1359,6 +1367,12 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
+	// ntp_pass.ips opens time ports past the gate of an NTP=pass segment.
+	// Thus it uses the rule of an allow list: public, /24 or narrower.
+	ntpPassFinal, err := compileOperatorIPs(filepath.Join(policyDir, NTPPassFile), "allow_ips", &warnings, out.NTPPassNFT)
+	if err != nil {
+		return Summary{}, err
+	}
 	// git_push.allow is for the broker and compiles to nothing. Its load here
 	// makes a malformed line stop an apply before anything installs.
 	gitPush, err := corepolicy.LoadGitPush(filepath.Join(policyDir, "git_push.allow"))
@@ -1416,6 +1430,7 @@ func Compile(policyDir string, out Out) (Summary, error) {
 		DirectIPs:       len(directFinal),
 		HouseDirectIPs:  len(houseDirectFinal),
 		SSHAllows:       len(sshFinal),
+		NTPPass:         len(ntpPassFinal),
 		GitPushes:       gitPush.Len(),
 		Warnings:        warnings,
 		SharedParents:   sorted(sharedDropped),

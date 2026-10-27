@@ -18,6 +18,9 @@ type Elements struct {
 	// HouseWhatsApp is house_whatsapp.ips, rendered unless
 	// HOUSE_ALLOW_WHATSAPP=off.
 	HouseWhatsApp string
+	// NTPPass is ntp_pass.ips, the NTP and NTS servers that a segment with
+	// NTP=pass can reach. It is rendered only when a segment has NTP=pass.
+	NTPPass string
 }
 
 type fragments struct {
@@ -32,7 +35,9 @@ type fragments struct {
 	SegPrerouting string
 	// NTPRedirect is the NTP redirect of the house and of each plain segment,
 	// in nat prerouting (ntpRedirect).
-	NTPRedirect            string
+	NTPRedirect string
+	// NTPPassSet is the ntp_pass_v4 set, only when a segment has NTP=pass.
+	NTPPassSet             string
 	SSHSet, SSHRaw, SSHFwd string
 	DoTOutput              string
 	// DoTOutputCT is before the conntrack accept in output. It holds
@@ -117,6 +122,7 @@ func (c *Config) Ruleset(e Elements) string {
 	f.segments()
 	f.isolateCT()
 	f.sshAllow()
+	f.ntpPassSet()
 	f.uplink()
 	f.connLimits()
 	f.AgentPing = pingMeter("\n    iifname \""+c.IntIF+"\" ", "agent")
@@ -651,14 +657,58 @@ func (f *fragments) dnsNoTrack() {
 // accepts UDP 123 only to ip on the interface of that network. The agent
 // network gets no redirect and no accept: its clock comes from the HTTP
 // Date header of the gateway (vm/agent/setup.sh).
+//
+// NTP=pass on a segment is for a device that needs NTS end to end, for
+// example a second gateway. It cannot sync through a plain NTP server. NTP
+// of that segment to an address in ntp_pass.ips (@ntp_pass_v4, the
+// well-known NTP and NTS servers) is not redirected and not dropped. NTP to
+// each other address still goes to the gateway. The blacklist in raw still
+// runs first. The gate lets UDP 123 and 4123 and TCP 4460 to the set
+// through, as it lets ssh_allow.ips through: the set holds addresses, not
+// names. Strict egress returns the same three ports to the set only
+// (segEgress). Input still accepts UDP 123 to ip, and chrony still serves
+// the segment.
+//
 // ntpForwardDrop is the guard behind ntpRedirect: NTP from the house or a
-// segment never goes out, whatever EGRESS says.
-func ntpForwardDrop(in func(string) string) string {
-	return in("udp dport 123 counter drop")
+// segment never goes out, whatever EGRESS says. Under NTP=pass, NTP to
+// @ntp_pass_v4 is the one exception.
+func ntpForwardDrop(in func(string) string, pass bool) string {
+	return in("udp dport 123" + ntpPassExcept(pass) + " counter drop")
 }
 
-func ntpRedirect(in func(string) string, ip string) string {
-	return in("udp dport 123 ip daddr != " + ip + " counter dnat ip to " + ip)
+func ntpRedirect(in func(string) string, ip string, pass bool) string {
+	return in("udp dport 123 ip daddr != " + ip + ntpPassExcept(pass) + " counter dnat ip to " + ip)
+}
+
+// ntpPassExcept is the match that keeps the NTP=pass servers out of the
+// redirect and of the forward drop. It is empty for each other network.
+func ntpPassExcept(pass bool) string {
+	if pass {
+		return " ip daddr != @ntp_pass_v4"
+	}
+	return ""
+}
+
+// ntpPassMatches are the time flows that NTP=pass lets go to
+// @ntp_pass_v4: NTP (UDP 123), NTP on a port that an NTS server can give
+// in its key exchange (UDP 4123), and NTS key exchange (TCP 4460).
+var ntpPassMatches = []string{"udp dport { 123, 4123 } ip daddr @ntp_pass_v4", "tcp dport 4460 ip daddr @ntp_pass_v4"}
+
+// ntpPassSet declares ntp_pass_v4 when a segment has NTP=pass. Without
+// one, it is empty, so the ruleset of a box without NTP=pass does not
+// change. An empty list gives an empty set: the rules still load, and no
+// time flow goes out.
+func (f *fragments) ntpPassSet() {
+	for _, s := range f.Segments {
+		if s.NTP == "pass" {
+			elems := ""
+			if f.NTPPass != "" {
+				elems = "\n    " + f.NTPPass
+			}
+			f.NTPPassSet = "\n\n  set ntp_pass_v4 {\n    type ipv4_addr\n    flags interval" + elems + "\n  }"
+			return
+		}
+	}
 }
 
 func (f *fragments) house() {
@@ -733,7 +783,7 @@ func (f *fragments) house() {
 	// and skip the meter.
 	f.HouseDNSFlood = in("tcp dport 53 meter house_dnsflood_tcp { ip saddr limit rate over 200/second burst 400 packets } counter drop") +
 		in("udp dport 53 meter house_dnsflood_udp { ip saddr limit rate over 200/second burst 400 packets } counter drop")
-	f.NTPRedirect += ntpRedirect(in, f.HouseIP)
+	f.NTPRedirect += ntpRedirect(in, f.HouseIP, false)
 	f.HouseInput = in("tcp dport 53 accept") +
 		in("udp dport 53 accept") + in("udp sport 68 udp dport 67 accept") + in("ip daddr "+f.HouseIP+" udp dport 123 accept") +
 		pingMeter("\n    iifname \""+h+"\" ", "house") + in("icmp type echo-request accept")
@@ -758,7 +808,7 @@ func (f *fragments) house() {
 		f.ctHole("\""+h+"\"", "\""+f.IntIF+"\"", f.HouseAdminIP, sshTo)
 	}
 	f.HouseIsolate += in("oifname \"" + f.IntIF + "\" counter drop")
-	f.HouseForward = in("meta nfproto ipv6 counter drop") + ntpForwardDrop(in) + in("udp dport 53 reject with icmp type port-unreachable") + in("tcp dport 53 reject with tcp reset")
+	f.HouseForward = in("meta nfproto ipv6 counter drop") + ntpForwardDrop(in, false) + in("udp dport 53 reject with icmp type port-unreachable") + in("tcp dport 53 reject with tcp reset")
 	if f.HouseBlockHTTP == "on" {
 		// A reset, not a drop: the browser fails at once, and an HTTPS-first
 		// browser continues and does not wait on port 80.
@@ -936,8 +986,17 @@ func (f *fragments) segments() {
 			}
 			// NTP to any address goes to the gateway (ntpRedirect). This chain
 			// runs before nat prerouting, and the resolver gave no NTP
-			// address. The accept ends only this chain.
+			// address. The accept ends only this chain. Under NTP=pass, it
+			// is still for NTP to each address outside @ntp_pass_v4: nat
+			// sends it to the gateway.
 			f.SegGate += in("udp dport 123 accept")
+			// NTP=pass: ntp_pass.ips is a list of addresses, as ssh_allow.ips
+			// is. Only the time ports to it get past the gate.
+			if s.NTP == "pass" {
+				for _, m := range ntpPassMatches {
+					f.SegGate += in(m + " accept")
+				}
+			}
 			// ssh_allow.ips is a list of addresses, not names. Thus the resolver
 			// did not give them, and the gate would drop them. The accept is for
 			// TCP 22 only and ends only this chain. forward then accepts it
@@ -981,7 +1040,7 @@ func (f *fragments) segments() {
 			f.ConnChains += chain
 			f.SegInput += rules + in("tcp dport 8080 accept")
 		}
-		f.NTPRedirect += ntpRedirect(in, s.IP)
+		f.NTPRedirect += ntpRedirect(in, s.IP, s.NTP == "pass")
 		f.SegInput += in("tcp dport 53 accept") + in("udp dport 53 accept") + in("ip daddr "+s.IP+" udp dport 123 accept")
 		if s.DHCP == "on" {
 			f.SegInput += in("udp sport 68 udp dport 67 accept")
@@ -1013,7 +1072,7 @@ func (f *fragments) segments() {
 		// web. Reject, not drop, as the house does: a client that ignores its
 		// configured server learns this at once, and does not wait
 		// for a timeout.
-		f.SegForward += in("meta nfproto ipv6 counter drop") + ntpForwardDrop(in) +
+		f.SegForward += in("meta nfproto ipv6 counter drop") + ntpForwardDrop(in, s.NTP == "pass") +
 			in("udp dport 53 reject with icmp type port-unreachable") + in("tcp dport 53 reject with tcp reset")
 		// Local addresses (RFC 1918, CGNAT, the LAN of the uplink) are never a
 		// segment destination, as in the house rule. A compromised desk must not
@@ -1115,15 +1174,22 @@ func (f *fragments) ctDrop(iif, oif string) {
 
 // segEgress is the port policy of a plain segment: the strict set of the
 // house (web, the mail and push ports, ping) plus ALLOW_PORTS. Time is not
-// here: NTP goes to the gateway (ntpRedirect). No
+// here: NTP goes to the gateway (ntpRedirect). NTP=pass is the exception:
+// the time ports to @ntp_pass_v4 return (ntpPassMatches). They come before
+// the log, so audit does not log them. No
 // WhatsApp, Wi-Fi calling or call-media switches: a desk that needs one
 // names the ports.
 func segEgress(chain string, s Segment) string {
 	r := func(x string) string { return "\n    " + x }
 	body := r("tcp dport 80 return") +
 		r("tcp dport { "+strings.Join(houseTLSPorts, ", ")+" } return") +
-		r("tcp dport { "+houseSTARTTLSPorts+" } return") +
-		r("icmp type echo-request limit rate 10/second burst 20 packets return")
+		r("tcp dport { "+houseSTARTTLSPorts+" } return")
+	if s.NTP == "pass" {
+		for _, m := range ntpPassMatches {
+			body += r(m + " return")
+		}
+	}
+	body += r("icmp type echo-request limit rate 10/second burst 20 packets return")
 	if s.AllowTCP != "" {
 		body += r("tcp dport { " + s.AllowTCP + " } return")
 	}
@@ -1182,7 +1248,7 @@ table inet fortress {
     type ipv4_addr
     flags interval
     {{.DirectIP}}
-  }{{.SSHSet}}{{.HouseSet}}{{.SegSet}}{{.ConnSets}}
+  }{{.SSHSet}}{{.NTPPassSet}}{{.HouseSet}}{{.SegSet}}{{.ConnSets}}
 
   set reserved_v4 {
     type ipv4_addr

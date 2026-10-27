@@ -67,6 +67,10 @@ if nft list set inet fortress ssh_allow_v4 >/dev/null 2>&1; then
 else
   echo "ssh_allow.ips: (no set)"
 fi
+# The set exists only when a plain segment has NTP=pass.
+if nft list set inet fortress ntp_pass_v4 >/dev/null 2>&1; then
+  echo "ntp_pass.ips: $(nft list set inet fortress ntp_pass_v4 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+){3}(/[0-9]+)?' | wc -l) prefixes"
+fi
 if [[ -f /etc/pi-fortress/git_push.allow ]]; then
   echo "git_push.allow: $(grep -vcE '^[[:space:]]*(#|$)' /etc/pi-fortress/git_push.allow || true) repos"
 else
@@ -252,7 +256,7 @@ if compgen -G "/etc/pi-fortress/segments.d/*.env" >/dev/null 2>&1; then
     _name="${_name%.env}"
     _if="$(seg_val "${_f}" IF)"
     _par="$(seg_val "${_f}" PARANOID)"
-    echo "${_name}: IF=${_if:-?} IP=$(seg_val "${_f}" IP) NET=$(seg_val "${_f}" NET) admin=$(seg_val "${_f}" ADMIN) ssh_to=$(seg_val "${_f}" SSH_TO) block_direct_ip=$(seg_val "${_f}" BLOCK_DIRECT_IP) egress=$(seg_val "${_f}" EGRESS) ssh_from=$(seg_val "${_f}" SSH_FROM) paranoid=${_par:-off}"
+    echo "${_name}: IF=${_if:-?} IP=$(seg_val "${_f}" IP) NET=$(seg_val "${_f}" NET) admin=$(seg_val "${_f}" ADMIN) ssh_to=$(seg_val "${_f}" SSH_TO) block_direct_ip=$(seg_val "${_f}" BLOCK_DIRECT_IP) egress=$(seg_val "${_f}" EGRESS) ssh_from=$(seg_val "${_f}" SSH_FROM) paranoid=${_par:-off} ntp=$(_ntp="$(seg_val "${_f}" NTP)"; echo "${_ntp:-redirect}")"
     # When armed, the segment reaches only its own allowlist. pf dns gives the
     # name count (paranoid=N on the line of this segment in the pf dns section).
     if [[ "${_par}" == on ]]; then
