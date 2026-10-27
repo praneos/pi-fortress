@@ -236,7 +236,9 @@ PF_E2E_REBOOT=1 vm/cloudlab/lab.sh test -v -run 'TestLab/ops'
 | `seg-dhcp` | gateway, house | A temporary `DHCP=on` segment on a VLAN of the house cable gives a lease and a reservation. Cloud lab only. |
 | `desk` | desk | Desk setup and lock (no forwarding, survives a reboot). Default route and internet through the gateway. SSH to the gateway and agents, and nothing else to the agents. Only the resolver of the gateway: the gateway sinkholes a listed name and logs it in `dns-desk.jsonl`, and refuses a different resolver. The gateway drops and logs a blocklisted address and an unresolved 443 address. A `PARANOID=on` desk resolves only its allowlist (skipped unless armed). No SSH to the house device. |
 | `desk-inspect` | desk, gateway | For its run, sets `INSPECT=on` on the desk and installs the CA there, then sets both back ([`lab.md`](lab.md)). Lab only. |
-| `uplink` | gateway | The gateway drops IPv6 on the uplink. ARP answers only for the interface in the request. An untrusted uplink closes SSH and ping. |
+| `ntp` | house, desk, agent, gateway | chrony on the gateway answers NTP from the house and the desk, for any destination (`192.0.2.1`, `time.google.com`, the gateway). The uplink carries none of it. NTS key exchange does not leave. The agent gets no NTP answer, and the gateway logs the drop. Lab only. |
+| `ntp-fuzz` | house, gateway | Opt-in (`PF_E2E_FUZZ_NTP=1`). A black-box fuzz of chrony on the house address of the gateway: 5 minutes at 2000 malformed packets a second (`PF_NTP_FUZZ_DURATION`, `PF_NTP_FUZZ_RATE`). chronyd stays the same process, logs no warning, answers no mode 6 or mode 7 packet, sends no reply larger than its request, and keeps its memory. Lab gateway only. |
+| `uplink` | gateway | The gateway drops IPv6 on the uplink. ARP answers only for the interface in the request. No DNS or NTP answer on the uplink. An untrusted uplink closes SSH and ping. |
 | `tui` | gateway | `sudo pf tui` on a real pty paints the menu and each view. Lab only. |
 | `ops` | gateway, agent | feeds fail safely, log rotation, no extra network listener, reboot |
 | `lifecycle` | gateway | Ships a bundle N-1, then N. The post-upgrade doctor passes. `pf rollback` returns to N-1. The `/etc/pi-fortress` state stays intact, and a list edit made after N stays. A bundle rigged to break DNS reverts on its own. An unconfirmed upgrade reverts after the dead-man deadline. `pf ship confirm` clears the pending state. |
@@ -246,6 +248,12 @@ Tests that reboot a VM run only with `PF_E2E_REBOOT=1`. Run `ops` last, because 
 PF_E2E_LIFECYCLE=1 vm/cloudlab/lab.sh test -v -run 'TestLab/lifecycle' -timeout 20m
 ```
 The same group runs against a real Pi with `PF_TARGET=pi PF_E2E_LIFECYCLE=1 make e2e RUN=TestLab/lifecycle`. The arch of the bundle follows the target: amd64 in the lab, arm64 on the Pi.
+
+`ntp-fuzz` runs only with `PF_E2E_FUZZ_NTP=1`, and never against a real Pi. Run it after a change to chrony or to its configuration:
+```sh
+PF_E2E_FUZZ_NTP=1 vm/cloudlab/lab.sh test -v -run 'TestLab/ntp-fuzz$'
+```
+The log of the run gives the packets sent, the replies, the largest reply over its request, and the memory of chronyd during the run.
 
 `make cloudlab-up`, `make cloudlab-test` and so on run the matching `lab.sh` command with no extra arguments.
 

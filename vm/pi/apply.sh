@@ -1656,7 +1656,31 @@ fi
 # file when chrony stops, because timesyncd no longer does. The output
 # chain policy is accept, and no rule drops 4460 or 123 for the _chrony
 # user. Thus the firewall needs nothing (render TestPiOwnTimeSyncIsNotDropped).
-if command -v chronyd >/dev/null 2>&1; then
+#
+# chrony is also the NTP server of the house and of each plain segment.
+# The ruleset sends each NTP packet of these networks to the gateway
+# (render ntpRedirect). NTP to a server of the device could carry data, so
+# it never leaves. allow names only these networks: never the agent
+# network, which has no NTP (vm/agent/setup.sh), and never the uplink.
+# Input drops NTP on those interfaces too. The gateway serves plain NTP,
+# not NTS: it has no NTS server key. It has no local directive, so it
+# never serves a clock that it did not sync: an unsynced chrony answers
+# with the leap bits of an unsynchronised server, and clients ignore it.
+#
+# ratelimit: a client address gets an answer for one request each 2 s on
+# average (interval 1), with bursts of 8. iburst sends 4 to 8 requests
+# 2 s apart, and a client then asks each 64 s or slower. A flood gets no
+# answer above that, except the leak of chrony (1 in 4 by default), which
+# tells a real client that the server is still there. chrony keeps this
+# state in its client log, which has a fixed size (clientloglimit, 512 KiB
+# by default). Thus the memory of chronyd does not grow with the number
+# of clients. The command port stays off (cmdport 0). chronyc uses the
+# Unix socket. bindcmdaddress keeps it on localhost if the port is ever
+# on.
+# chrony_conf writes chrony.conf on stdout: NTS sources, and an allow line
+# for HOUSE_NET (when HOUSE_IF is set) and for each SEG_NET.
+chrony_conf() {
+  local n
   printf '%s\n' \
     '# Written by pi-fortress apply.sh; edits here are replaced on the next apply.' \
     'server time.cloudflare.com iburst nts' \
@@ -1670,7 +1694,18 @@ if command -v chronyd >/dev/null 2>&1; then
     'rtcsync' \
     'maxupdateskew 100.0' \
     'cmdport 0' \
-    'logdir /var/log/chrony' >"${WORKDIR}/chrony.conf"
+    'bindcmdaddress 127.0.0.1' \
+    'logdir /var/log/chrony'
+  if [[ -n "${HOUSE_IF:-}" && -n "${HOUSE_NET:-}" ]]; then
+    printf 'allow %s\n' "${HOUSE_NET}"
+  fi
+  for n in "${SEG_NET[@]}"; do
+    [[ -n "${n}" ]] && printf 'allow %s\n' "${n}"
+  done
+  printf '%s\n' 'ratelimit interval 1 burst 8'
+}
+if command -v chronyd >/dev/null 2>&1; then
+  chrony_conf >"${WORKDIR}/chrony.conf"
   printf '%s\n' '[Service]' 'ExecStopPost=-/usr/bin/touch /var/lib/systemd/timesync/clock' >"${WORKDIR}/chrony-dropin.conf"
   install -d -m 0755 /etc/chrony /etc/systemd/system/chrony.service.d /var/lib/systemd/timesync
   _chrony_changed=0
@@ -1988,6 +2023,8 @@ if [[ -n "${HOUSE_IF}" ]]; then
   #
   # dhcp-option:dns-server still gives HOUSE_IP: the address did not
   # change. Only the daemon that answers on it changed.
+  # dhcp-option:ntp-server gives HOUSE_IP too: chrony answers there, and
+  # the ruleset sends all other NTP of the house there.
   #
   # The DHCP log is a separate file. pf dns owns dns-house.jsonl and
   # rotates it (internal/dnsd sweepLogs). A dnsmasq with an fd to
@@ -2002,6 +2039,7 @@ dhcp-range=${HOUSE_DHCP_START},${HOUSE_DHCP_END},12h
 dhcp-authoritative
 dhcp-option=option:router,${HOUSE_IP}
 dhcp-option=option:dns-server,${HOUSE_IP}
+dhcp-option=option:ntp-server,${HOUSE_IP}
 dhcp-hostsfile=/etc/pi-fortress/house.hosts
 dhcp-leasefile=/var/lib/pi-fortress/house.leases
 log-dhcp

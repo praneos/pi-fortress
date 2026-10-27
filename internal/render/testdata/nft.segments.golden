@@ -130,6 +130,7 @@ table inet fortress {
     type filter hook prerouting priority -150; policy accept;
     iifname "eth0" tcp dport 443 ct state new ip daddr != 10.77.0.1 ip daddr != 192.0.2.0/24 ip daddr != @direct_ip_v4 ip daddr != 198.18.0.0/16 limit rate 10/second burst 20 packets log prefix "pi-fortress agent-directip: " level info
     iifname "eth0" tcp dport 443 ct state new ip daddr != 10.77.0.1 ip daddr != 192.0.2.0/24 ip daddr != @direct_ip_v4 ip daddr != 198.18.0.0/16 counter drop
+    iifname "eth0.79" udp dport 123 accept
     iifname "eth0.79" meta l4proto { tcp, udp } th dport != 53 ct state new ip daddr != 10.79.0.1 ip daddr != @resolved_desk_v4 ip daddr != 10.77.0.10-10.77.0.12 limit rate 10/second burst 20 packets log prefix "pi-fortress desk-directip: " level info
     iifname "eth0.79" meta l4proto { tcp, udp } th dport != 53 ct state new ip daddr != 10.79.0.1 ip daddr != @resolved_desk_v4 ip daddr != 10.77.0.10-10.77.0.12 counter drop
     iifname "eth0.79" icmp type echo-request ct state new ip daddr != 10.79.0.1 ip daddr != @resolved_desk_v4 ip daddr != 10.77.0.10-10.77.0.12 limit rate 10/second burst 20 packets log prefix "pi-fortress desk-directip: " level info
@@ -143,6 +144,8 @@ table inet fortress {
   chain prerouting {
     type nat hook prerouting priority dstnat; policy accept;
     iifname "eth0" tcp dport 443 redirect to :8080
+    iifname "eth0.79" udp dport 123 ip daddr != 10.79.0.1 counter dnat ip to 10.79.0.1
+    iifname "eth2" udp dport 123 ip daddr != 10.80.0.1 counter dnat ip to 10.80.0.1
   }
 
   chain input {
@@ -173,12 +176,14 @@ table inet fortress {
     iifname "eth0.79" tcp dport 22 ct state new accept
     iifname "eth0.79" tcp dport 53 accept
     iifname "eth0.79" udp dport 53 accept
+    iifname "eth0.79" ip daddr 10.79.0.1 udp dport 123 accept
     iifname "eth0.79" icmp type echo-request meter seg_desk_ping { ip saddr limit rate over 10/second burst 20 packets } counter drop
     iifname "eth0.79" icmp type echo-request accept
     iifname "eth0.79" limit rate 10/minute burst 20 packets log prefix "pi-fortress desk-drop: " level warn
     iifname "eth0.79" counter drop
     iifname "eth2" tcp dport 53 accept
     iifname "eth2" udp dport 53 accept
+    iifname "eth2" ip daddr 10.80.0.1 udp dport 123 accept
     iifname "eth2" icmp type echo-request meter seg_guest_ping { ip saddr limit rate over 10/second burst 20 packets } counter drop
     iifname "eth2" icmp type echo-request accept
     iifname "eth2" limit rate 10/minute burst 20 packets log prefix "pi-fortress guest-drop: " level warn
@@ -238,6 +243,7 @@ table inet fortress {
     iifname "eth0" tcp dport 22 counter drop
     iifname "eth0" counter drop
     iifname "eth0.79" meta nfproto ipv6 counter drop
+    iifname "eth0.79" udp dport 123 counter drop
     iifname "eth0.79" udp dport 53 reject with icmp type port-unreachable
     iifname "eth0.79" tcp dport 53 reject with tcp reset
     iifname "eth0.79" ip daddr @reserved_v4 limit rate 10/second burst 20 packets log prefix "pi-fortress desk-local: " level info
@@ -246,6 +252,7 @@ table inet fortress {
     iifname "eth0.79" oifname "wlan0" accept
     iifname "eth0.79" counter drop
     iifname "eth2" meta nfproto ipv6 counter drop
+    iifname "eth2" udp dport 123 counter drop
     iifname "eth2" udp dport 53 reject with icmp type port-unreachable
     iifname "eth2" tcp dport 53 reject with tcp reset
     iifname "eth2" ip daddr @reserved_v4 limit rate 10/second burst 20 packets log prefix "pi-fortress guest-local: " level info
@@ -270,7 +277,6 @@ table inet fortress {
     tcp dport 80 return
     tcp dport { 443, 465, 993, 5223, 5228, 8443 } return
     tcp dport { 143, 587 } return
-    udp dport 123 return
     icmp type echo-request limit rate 10/second burst 20 packets return
     limit rate 10/second burst 20 packets log prefix "pi-fortress desk-port: " level info
     counter drop
@@ -280,7 +286,6 @@ table inet fortress {
     tcp dport 80 return
     tcp dport { 443, 465, 993, 5223, 5228, 8443 } return
     tcp dport { 143, 587 } return
-    udp dport 123 return
     icmp type echo-request limit rate 10/second burst 20 packets return
     limit rate 10/second burst 20 packets log prefix "pi-fortress guest-port: " level info
     counter drop

@@ -203,10 +203,11 @@ func TestHouseVLANSegmentIsIsolated(t *testing.T) {
 	}
 	for _, l := range iot {
 		ok := strings.Contains(l, "dport 53") || strings.Contains(l, "echo-request") ||
+			strings.Contains(l, `ip daddr 10.30.0.1 udp dport 123 accept`) ||
 			strings.HasSuffix(l, "counter drop") || strings.Contains(l, "log prefix") ||
 			strings.Contains(l, "jump seg_iot_")
 		if !ok || (strings.Contains(l, "accept") && strings.Contains(l, "dport 22")) {
-			t.Errorf("input opens more than DNS and ping to the house VLAN: %s", l)
+			t.Errorf("input opens more than DNS, NTP and ping to the house VLAN: %s", l)
 		}
 	}
 	if len(iot) == 0 || iot[len(iot)-1] != `iifname "eth2.30" counter drop` {

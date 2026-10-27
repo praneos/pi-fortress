@@ -26,6 +26,9 @@ func TestLab(t *testing.T) {
 	runGroup(t, "seg-dhcp", labOnly(segDHCPTests))
 	runGroup(t, "desk", deskTests)
 	runGroup(t, "desk-inspect", labOnly(deskInspectTests))
+	runGroup(t, "ntp", labOnly(ntpTests))
+	// Opt-in: PF_E2E_FUZZ_NTP=1, a lab gateway only.
+	runGroup(t, "ntp-fuzz", ntpFuzzOptIn(ntpFuzzTests))
 	runGroup(t, "uplink", uplinkTests)
 	// Last: with PF_E2E_REBOOT=1 it reboots the Pi.
 	runGroup(t, "tui", labOnly(tuiTests))

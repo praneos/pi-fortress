@@ -1517,7 +1517,6 @@ func TestHouseEgress(t *testing.T) {
 		"tcp dport 80 return",
 		"tcp dport { 443, 465, 993, 5223, 5228, 8443 } return",
 		"tcp dport { 143, 587 } return",
-		"udp dport 123 return",
 		"icmp type echo-request limit rate 10/second burst 20 packets return",
 		`log prefix "pi-fortress house-port: "`,
 		"counter drop")

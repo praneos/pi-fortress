@@ -146,7 +146,7 @@ func segDHCPTests(t *testing.T) {
 			t.Errorf("pf doctor has no dhcp rung for %s:\n%s", name, d)
 		}
 	})
-	t.Run("a tagged client gets a lease, the Pi as router and DNS, and nothing else", func(t *testing.T) {
+	t.Run("a tagged client gets a lease, the Pi as router, DNS and NTP, and nothing else", func(t *testing.T) {
 		mustSSH(t, "house", "sudo sh -c 'ip netns add "+ns+" && install -d -m 0755 /etc/netns/"+ns+" && touch /etc/netns/"+ns+"/resolv.conf && ip link add link "+hostIF+" name "+dev+" type vlan id "+vlan+" && ip link set "+dev+" netns "+ns+" && ip -n "+ns+" link set lo up && ip -n "+ns+" link set "+dev+" up'")
 		if o, err := ssh(t, 60*time.Second, "house", "sudo ip netns exec "+ns+" /sbin/dhclient -4 -1 -pf "+pidf+" -lf "+leasef+" "+dev+" 2>&1"); err != nil {
 			t.Fatalf("dhclient on VLAN %s: %v\n%s", vlan, err, o)
@@ -159,12 +159,12 @@ func segDHCPTests(t *testing.T) {
 		if n, _ := strconv.Atoi(m[1]); n < 100 || n > 109 {
 			t.Errorf("10.36.0.%s is outside DHCP_START=10.36.0.100 to DHCP_END=10.36.0.109", m[1])
 		}
-		for _, want := range []string{"option routers " + segIP + ";", "option domain-name-servers " + segIP + ";", "option dhcp-lease-time 43200;"} {
+		for _, want := range []string{"option routers " + segIP + ";", "option domain-name-servers " + segIP + ";", "option ntp-servers " + segIP + ";", "option dhcp-lease-time 43200;"} {
 			if !contains(lease, want) {
 				t.Errorf("lease lacks %q:\n%s", want, lease)
 			}
 		}
-		for _, bad := range []string{"domain-name ", "domain-search", "wpad", "ntp-servers"} {
+		for _, bad := range []string{"domain-name ", "domain-search", "wpad"} {
 			if contains(lease, "option "+bad) {
 				t.Errorf("the lease hands out %s:\n%s", bad, lease)
 			}

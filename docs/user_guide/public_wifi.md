@@ -133,7 +133,7 @@ the network, run `sudo nmcli con delete public`.
 | IPv6 dropped on the uplink | `sudo nft list ruleset \| grep '"wlan0" meta nfproto ipv6'` | 2 lines, one incoming, one outgoing |
 | No IPv6 address | `ip -6 addr show dev wlan0` | empty |
 | ARP settings | `sysctl net.ipv4.conf.all.arp_ignore net.ipv4.conf.all.arp_announce` | `1` and `2` |
-| Listeners | `sudo ss -tulpn` | only SSH on all addresses |
+| Listeners | `sudo ss -tulpn` | only SSH on all addresses, and chronyd on UDP 123 when the Pi has a house or a plain segment. The input chain drops UDP 123 from the uplink |
 | SSH is keys only | `sudo sshd -T \| grep -Ei '^(passwordauthentication\|kbdinteractiveauthentication\|permitrootlogin) '` | all `no` |
 | Uplink closed | `sudo nft list chain inet fortress input \| grep wlan0` | no `dport 22`, no `icmp` |
 
@@ -152,7 +152,7 @@ These are known gaps. The firewall cannot fix them.
 |---|---|---|
 | Plain DNS to your upstream resolver | See each name that the Pi resolves. Send false answers. HTTPS still examines certificates. Thus an HTTPS connection to a false address fails the certificate check and sends no data. | Enable DNS over TLS (`DOT_AUTH_NAME` and `DOT_IPS` in [pi_setup.md](pi_setup.md), step 4). |
 | Traffic metadata | See the addresses that the Pi connects to. See the server names in its TLS connections. | Use a trusted network for sensitive work. The WireGuard option (`WG_IF`) applies only to the house segment. It does not apply to the traffic of the Pi or of the agent. |
-| Plain NTP (the clock-sync protocol) | Change the clock of the Pi. This can break certificate checks. | If sites suddenly fail certificate checks, examine the clock of the Pi with `timedatectl`. |
+| Time sync (NTS, the authenticated clock-sync protocol) | Block it. The Pi then keeps the clock of its RTC, and the clock slowly drifts. The network cannot set a false time, because NTS authenticates each answer. | If sites suddenly fail certificate checks, examine the clock of the Pi with `timedatectl` and `chronyc sources`. |
 | A captive portal login page (the page that a public Wi-Fi shows before it gives access) | The Pi cannot open the login page itself. | Log in from the browser of the desktop. Its traffic goes out through the Pi, with the hardware address of the Pi. |
 | A fake access point with the same name | Get in the middle of your connection. | The items above limit the damage. Use networks that need a password, when possible. |
 | A stolen Pi | Read the storage card. | This page does not cover this gap. By default, the SD card is not encrypted. Refer to `pf enroll seal` in [faq.md](faq.md). |

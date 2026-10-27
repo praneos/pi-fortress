@@ -29,7 +29,10 @@ type fragments struct {
 	SegSet, SegDNSFlood, SegGate, SegEgressChains                                   string
 	// SegPrerouting is the 443 redirect of each INSPECT=on segment, in nat
 	// prerouting next to the redirect of the agent network.
-	SegPrerouting          string
+	SegPrerouting string
+	// NTPRedirect is the NTP redirect of the house and of each plain segment,
+	// in nat prerouting (ntpRedirect).
+	NTPRedirect            string
 	SSHSet, SSHRaw, SSHFwd string
 	DoTOutput              string
 	// DoTOutputCT is before the conntrack accept in output. It holds
@@ -440,12 +443,12 @@ const houseCallUDP = "3478-3497, 8801-8810, 16384-16403, 19302-19309"
 // not change. Allowed traffic returns to forward. Strict drops the rest.
 // Audit logs it under its own prefix and returns. Thus the log shows what
 // strict would break before an operator enables strict.
+// It has no time port: NTP never comes here (ntpRedirect).
 func (f *fragments) houseEgress() string {
 	r := func(s string) string { return "\n    " + s }
 	body := r("tcp dport 80 return") +
 		r("tcp dport { "+strings.Join(houseTLSPorts, ", ")+" } return") +
 		r("tcp dport { "+houseSTARTTLSPorts+" } return") +
-		r("udp dport 123 return") +
 		r("icmp type echo-request limit rate 10/second burst 20 packets return")
 	if f.HouseAllowWiFiCalling == "on" {
 		body += r("udp dport { 500, 4500 } return") + r("meta l4proto esp return")
@@ -629,6 +632,35 @@ func (f *fragments) dnsNoTrack() {
 	}
 }
 
+// ntpRedirect sends NTP (UDP 123) of the house or of a plain segment to
+// chrony on the gateway address ip of that network (apply.sh). NTP to a
+// server of the device can carry data (the transmit timestamp, the
+// extension fields), so it never leaves. The device keeps its own server
+// name: conntrack changes the source of the reply back to the address
+// that the device asked. A device that asks the gateway itself is not
+// changed. It is the first packet of a flow that nat sees. Thus each flow
+// that starts after this ruleset goes to the gateway.
+//
+// The blacklist in raw prerouting runs before nat, so a query to a
+// blacklisted address is dropped there and never redirected. The resolver
+// gate of a segment runs before nat too, so it has an accept for UDP 123:
+// nat then sends the flow to the gateway. The redirect is in all modes of
+// EGRESS, so no new NTP flow reaches forward. Forward drops UDP 123 from the
+// house and the segments all the same (ntpForwardDrop), so a later change
+// to nat cannot let NTP out. Input
+// accepts UDP 123 only to ip on the interface of that network. The agent
+// network gets no redirect and no accept: its clock comes from the HTTP
+// Date header of the gateway (vm/agent/setup.sh).
+// ntpForwardDrop is the guard behind ntpRedirect: NTP from the house or a
+// segment never goes out, whatever EGRESS says.
+func ntpForwardDrop(in func(string) string) string {
+	return in("udp dport 123 counter drop")
+}
+
+func ntpRedirect(in func(string) string, ip string) string {
+	return in("udp dport 123 ip daddr != " + ip + " counter dnat ip to " + ip)
+}
+
 func (f *fragments) house() {
 	h := f.HouseIF
 	if h == "" {
@@ -701,8 +733,9 @@ func (f *fragments) house() {
 	// and skip the meter.
 	f.HouseDNSFlood = in("tcp dport 53 meter house_dnsflood_tcp { ip saddr limit rate over 200/second burst 400 packets } counter drop") +
 		in("udp dport 53 meter house_dnsflood_udp { ip saddr limit rate over 200/second burst 400 packets } counter drop")
+	f.NTPRedirect += ntpRedirect(in, f.HouseIP)
 	f.HouseInput = in("tcp dport 53 accept") +
-		in("udp dport 53 accept") + in("udp sport 68 udp dport 67 accept") +
+		in("udp dport 53 accept") + in("udp sport 68 udp dport 67 accept") + in("ip daddr "+f.HouseIP+" udp dport 123 accept") +
 		pingMeter("\n    iifname \""+h+"\" ", "house") + in("icmp type echo-request accept")
 	if f.HouseAdminIP != "" {
 		f.HouseInput += in("ip saddr " + f.HouseAdminIP + " tcp dport 22 ct state new limit rate 30/minute burst 60 packets accept")
@@ -725,7 +758,7 @@ func (f *fragments) house() {
 		f.ctHole("\""+h+"\"", "\""+f.IntIF+"\"", f.HouseAdminIP, sshTo)
 	}
 	f.HouseIsolate += in("oifname \"" + f.IntIF + "\" counter drop")
-	f.HouseForward = in("meta nfproto ipv6 counter drop") + in("udp dport 53 reject with icmp type port-unreachable") + in("tcp dport 53 reject with tcp reset")
+	f.HouseForward = in("meta nfproto ipv6 counter drop") + ntpForwardDrop(in) + in("udp dport 53 reject with icmp type port-unreachable") + in("tcp dport 53 reject with tcp reset")
 	if f.HouseBlockHTTP == "on" {
 		// A reset, not a drop: the browser fails at once, and an HTTPS-first
 		// browser continues and does not wait on port 80.
@@ -901,6 +934,10 @@ func (f *fragments) segments() {
 			if s.DHCP == "on" {
 				f.SegGate += in("ip daddr 255.255.255.255 udp sport 68 udp dport 67 accept")
 			}
+			// NTP to any address goes to the gateway (ntpRedirect). This chain
+			// runs before nat prerouting, and the resolver gave no NTP
+			// address. The accept ends only this chain.
+			f.SegGate += in("udp dport 123 accept")
 			// ssh_allow.ips is a list of addresses, not names. Thus the resolver
 			// did not give them, and the gate would drop them. The accept is for
 			// TCP 22 only and ends only this chain. forward then accepts it
@@ -944,7 +981,8 @@ func (f *fragments) segments() {
 			f.ConnChains += chain
 			f.SegInput += rules + in("tcp dport 8080 accept")
 		}
-		f.SegInput += in("tcp dport 53 accept") + in("udp dport 53 accept")
+		f.NTPRedirect += ntpRedirect(in, s.IP)
+		f.SegInput += in("tcp dport 53 accept") + in("udp dport 53 accept") + in("ip daddr "+s.IP+" udp dport 123 accept")
 		if s.DHCP == "on" {
 			f.SegInput += in("udp sport 68 udp dport 67 accept")
 		}
@@ -975,7 +1013,7 @@ func (f *fragments) segments() {
 		// web. Reject, not drop, as the house does: a client that ignores its
 		// configured server learns this at once, and does not wait
 		// for a timeout.
-		f.SegForward += in("meta nfproto ipv6 counter drop") +
+		f.SegForward += in("meta nfproto ipv6 counter drop") + ntpForwardDrop(in) +
 			in("udp dport 53 reject with icmp type port-unreachable") + in("tcp dport 53 reject with tcp reset")
 		// Local addresses (RFC 1918, CGNAT, the LAN of the uplink) are never a
 		// segment destination, as in the house rule. A compromised desk must not
@@ -1076,7 +1114,8 @@ func (f *fragments) ctDrop(iif, oif string) {
 }
 
 // segEgress is the port policy of a plain segment: the strict set of the
-// house (web, the mail and push ports, time, ping) plus ALLOW_PORTS. No
+// house (web, the mail and push ports, ping) plus ALLOW_PORTS. Time is not
+// here: NTP goes to the gateway (ntpRedirect). No
 // WhatsApp, Wi-Fi calling or call-media switches: a desk that needs one
 // names the ports.
 func segEgress(chain string, s Segment) string {
@@ -1084,7 +1123,6 @@ func segEgress(chain string, s Segment) string {
 	body := r("tcp dport 80 return") +
 		r("tcp dport { "+strings.Join(houseTLSPorts, ", ")+" } return") +
 		r("tcp dport { "+houseSTARTTLSPorts+" } return") +
-		r("udp dport 123 return") +
 		r("icmp type echo-request limit rate 10/second burst 20 packets return")
 	if s.AllowTCP != "" {
 		body += r("tcp dport { " + s.AllowTCP + " } return")
@@ -1187,7 +1225,7 @@ table inet fortress {
 
   chain prerouting {
     type nat hook prerouting priority dstnat; policy accept;
-    iifname "{{.IntIF}}" tcp dport 443 redirect to :8080{{.SegPrerouting}}
+    iifname "{{.IntIF}}" tcp dport 443 redirect to :8080{{.SegPrerouting}}{{.NTPRedirect}}
   }
 
   chain input {

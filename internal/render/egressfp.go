@@ -67,8 +67,12 @@ func orDefault(v, def string) string {
 }
 
 // egressFP is a short hash of the fields, one per line, after a version
-// line. A different set of fields gets a different version.
+// line. A different set of fields gets a different version. A change of
+// the code that removes a permission also gets a different version. Thus
+// the first apply of that code ends the flows that had the permission.
+// v2: strict has no NTP. NTP goes to the gateway (ntpRedirect). An open
+// NTP flow to a server outside (ntpd keeps one source port) must end.
 func egressFP(kind string, fields ...string) string {
-	sum := sha256.Sum256([]byte("egress-v1 " + kind + "\n" + strings.Join(fields, "\n") + "\n"))
+	sum := sha256.Sum256([]byte("egress-v2 " + kind + "\n" + strings.Join(fields, "\n") + "\n"))
 	return hex.EncodeToString(sum[:8])
 }

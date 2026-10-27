@@ -55,6 +55,24 @@ and nowhere else. Forwarded traffic is still pinned to the `NET` of the
 segment. This is the DHCP surface of the house, one time for each segment
 that asks for it.
 
+The Pi is the NTP server of the house and of each plain segment. chrony
+listens on UDP 123 when the Pi has a house or a plain segment:
+
+- Its `allow` lines name only the house network and the plain segment
+  networks. Input accepts UDP 123 only to the address of the Pi on those
+  interfaces. The uplink and the agent network get no NTP.
+- nat prerouting sends each NTP packet of the house and of a segment to
+  the Pi, whatever its destination. Thus NTP, which can carry hidden data
+  in its timestamps and extension fields, never leaves those networks.
+  Under strict, NTS key exchange (TCP 4460) does not leave either.
+- chrony has a rate limit for each client address, no command port on the
+  network, and no `local` line. Thus it serves only a clock that it
+  synchronized over NTS.
+
+chrony is C code that this project does not own. The lab has an opt-in
+black-box fuzz of it (`PF_E2E_FUZZ_NTP=1`, the `ntp-fuzz` group in
+[cloud_lab.md](cloud_lab.md)).
+
 In the VirtualBox lab, Pi Fortress does not change the host firewall, DNS, or
 default route. On a real Pi, the desktop goes out through the Pi as a plain
 segment (`segments.d/<name>.env`). Pi Fortress treats the desktop as a
