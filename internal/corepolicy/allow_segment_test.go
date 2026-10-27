@@ -3,6 +3,7 @@ package corepolicy
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -65,5 +66,25 @@ func TestLoadAllowEmptyFileHasNoNames(t *testing.T) {
 	}
 	if n := f.Names(); len(n) != 0 {
 		t.Fatalf("Names() = %v, want none", n)
+	}
+}
+
+// An allow list line with an empty label or over the DNS length limits
+// allows nothing. AllowEntry gives "" for it, so the set does not hold a
+// key that no query can match.
+func TestAllowEntryRefusesEmptyLabelAndLongNames(t *testing.T) {
+	long := strings.Repeat(strings.Repeat("a", 63)+".", 4) + "test"
+	for _, tok := range []string{".example.com", "..example.com", "x..example.com", strings.Repeat("a", 64) + ".example.com", long, "*." + long} {
+		if name, _, oneLabel := AllowEntry(tok); name != "" || oneLabel {
+			t.Errorf("AllowEntry(%.20q) = %q, %v; want nothing", tok, name, oneLabel)
+		}
+		if AllowProblem(tok) == "" {
+			t.Errorf("AllowProblem(%.20q) gives no reason", tok)
+		}
+	}
+	for _, tok := range []string{"example.com", "*.example.com", "Example.COM.", "com", "münchen.de"} {
+		if AllowProblem(tok) != "" {
+			t.Errorf("AllowProblem(%q) = %q, want none", tok, AllowProblem(tok))
+		}
 	}
 }

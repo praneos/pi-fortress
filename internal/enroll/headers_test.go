@@ -124,6 +124,7 @@ func TestMintHeaderRefusals(t *testing.T) {
 		{"empty", "gitlab.com GITLAB_TOKEN\n", "GITLAB_TOKEN", "", 2, []string{"empty"}},
 		{"unbound kind", "gitlab.com GITLAB_TOKEN\npf-core-echo.test *\n", "NOPE_TOKEN", "X-Tok", 1, []string{"core.hosts.local", "`<host> NOPE_TOKEN`"}},
 		{"bad local", "gitlab.com GITLAB_TOKEN:Via\n", "GITLAB_TOKEN", "X-Tok", 1, []string{"core.hosts:1:"}},
+		{"empty label host", "..gitlab.example GITLAB_TOKEN\n", "GITLAB_TOKEN", "X-Tok", 1, []string{"`<host> GITLAB_TOKEN`"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			dir := headerDir(t, c.core, "")

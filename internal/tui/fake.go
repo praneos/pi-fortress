@@ -2,9 +2,11 @@ package tui
 
 import (
 	"io"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Fake is an in-memory Terminal. Keys come from a script, and it keeps
@@ -62,6 +64,23 @@ func (f *Fake) Paste(s string) *Fake {
 	return f
 }
 
+// fakeShownCode is a script step of Fake, not a key. ReadKey changes it
+// into the keys of the confirm code on the last frame, as an operator types
+// the code that the screen shows.
+const fakeShownCode KeyKind = -1
+
+// shownCode finds the code that a typed confirm shows.
+var shownCode = regexp.MustCompile(`\(type ([A-Z]{3})\)`)
+
+// TypeShownCode queues the typed keys of the confirm code that is on the
+// screen at that point of the script.
+func (f *Fake) TypeShownCode() *Fake {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.keys = append(f.keys, Key{Kind: fakeShownCode})
+	return f
+}
+
 func (f *Fake) Press(kinds ...KeyKind) *Fake {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -102,6 +121,27 @@ func (f *Fake) ReadKey() (Key, error) {
 	}
 	k := f.keys[0]
 	f.keys = f.keys[1:]
+	if k.Kind == fakeShownCode {
+		// The app reads keys ahead of its draw. Thus wait for the frame with
+		// the code, as the operator does.
+		var code []Key
+		for end := time.Now().Add(2 * time.Second); code == nil && time.Now().Before(end); {
+			if n := len(f.Frames); n > 0 {
+				if m := shownCode.FindStringSubmatch(stripANSI(f.Frames[n-1])); m != nil {
+					for _, r := range m[1] {
+						code = append(code, Key{Kind: KeyRune, Rune: r})
+					}
+					break
+				}
+			}
+			f.mu.Unlock()
+			time.Sleep(time.Millisecond)
+			f.mu.Lock()
+		}
+		f.keys = append(code, f.keys...)
+		f.mu.Unlock()
+		return f.ReadKey()
+	}
 	f.mu.Unlock()
 	return k, nil
 }

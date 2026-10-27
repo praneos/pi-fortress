@@ -193,22 +193,42 @@ cat >/usr/local/lib/pi-fortress/clock.sh <<'EOF'
 set -euo pipefail
 # shellcheck source=/dev/null
 source /etc/pi-fortress/net.env
-# The Date header has no signature. So after the first sync of a boot, the
-# script refuses a step over 24 hours. Then a device that answers for the
-# Pi cannot move the clock outside the validity of the CA in one poll. The
-# first run of a boot can take any step: a new VM or a box with a flat
-# clock battery can start days or years off. The state file is in /run, so
-# a reboot also recovers a clock that is more than 24 hours off.
+# The Date header has no signature. So after the first sync of a boot, one
+# poll cannot step the clock more than 24 hours. Then a device that answers
+# for the Pi cannot move the clock outside the validity of the CA in one
+# poll. A larger step needs two polls, 10 to 30 minutes apart, that give
+# the same offset within 5 seconds. The Date header has a resolution of 1
+# second on each of the two polls, and the request takes some time, so 5
+# seconds is enough. A host suspend of more than a day gives such a pair,
+# and the next poll of the timer takes it. A device that answers for the
+# Pi must do so for two polls. The first run of a boot can take any step: a
+# new VM or a box with a flat clock battery can start days or years off.
+# The state files are in /run, so a reboot also recovers the clock.
 synced=/run/pi-fortress-agent-clock.synced
+# pending holds the offset and the time of a poll that was over max.
+pending="${synced%.synced}.pending"
 max=86400
+tol=5
 stamp="$(curl -fsSI --max-time 5 "http://${PI_IP}/ca.pem" | sed -n 's/^[Dd]ate: //p' | tr -d '\r')"
 [[ -n "${stamp}" ]] || { echo "agent clock: no Date header from ${PI_IP}" >&2; exit 1; }
 want="$(date -d "${stamp}" +%s)"
-off=$(( want - $(date +%s) ))
+now="$(date +%s)"
+off=$(( want - now ))
 if [[ -e "${synced}" ]] && (( off > max || off < -max )); then
-  echo "agent clock: refused a step of ${off}s from ${PI_IP}: over ${max}s after the first sync of this boot; reboot to take it" >&2
+  poff="" pat=""
+  [[ ! -s "${pending}" ]] || read -r poff pat <"${pending}" || true
+  if [[ "${poff}" =~ ^-?[0-9]+$ && "${pat}" =~ ^[0-9]+$ ]] &&
+    (( off - poff <= tol && poff - off <= tol && now - pat >= 600 && now - pat <= 1800 )); then
+    : >"${pending}"
+    date -s "@${want}" >/dev/null
+    echo "agent clock: stepped ${off}s to the gateway's: two polls $(( now - pat ))s apart gave this offset"
+    exit 0
+  fi
+  echo "${off} ${now}" >"${pending}"
+  echo "agent clock: refused a step of ${off}s from ${PI_IP}: over ${max}s after the first sync of this boot; the next poll takes it if it gives the same offset" >&2
   exit 0
 fi
+[[ ! -s "${pending}" ]] || : >"${pending}"
 if (( off > 2 || off < -2 )); then
   date -s "@${want}" >/dev/null
   echo "agent clock: stepped ${off}s to the gateway's"

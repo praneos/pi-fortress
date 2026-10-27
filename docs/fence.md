@@ -49,7 +49,9 @@ host". `vm/policy/core.hosts` lists `host KIND…` (`*` = lab echo). A name
 matches exactly, unless it is written as `*.name`. `*.name` matches the name
 and each subdomain of it. `pf compile` and `pf apply` refuse some host forms:
 a host with one label (`localhost`), a host with `_`, a bare `*`, a `*` after
-the first `*.` (`*.*.example.com`), and a non-ASCII host. They print a warning,
+the first `*.` (`*.*.example.com`), a host with an empty label
+(`..example.com`), a label over 63 bytes, a host over 253 bytes, and a
+non-ASCII host. They print a warning,
 skip that line, and change nothing else. For a non-ASCII host, the warning
 gives the `xn--` form to write. `*` as a kind (the lab echo) is not
 changed. A Claude placeholder
@@ -410,8 +412,12 @@ line.
 Each domain list (for example `blacklist.domains`, `never_block.domains`,
 `allow.domains` and the house lists) refuses a non-ASCII name. `pf compile`
 and `pf apply` print a warning, skip that line, and give the `xn--` form to
-write. An IPv4 address on a domain list of the agent blocks that address
-(an nft `/32`), not a name.
+write. An IPv4 address or range on a domain block list of the agent blocks
+as it does on `blacklist.ips` (an nft `/32` or the range), not as a name. A
+private or reserved address, or a range wider than `/8`, does not compile.
+Each line of an operator list that does not compile, or that a shield
+removes, gets a warning from `pf compile` and `pf apply`. The warning gives
+the file and the reason.
 
 **A blocked name resolves to `0.0.0.0`.** The resolver answers a listed
 name with `NOERROR` and one A record, `0.0.0.0`, with a TTL of 0. It does
@@ -468,7 +474,9 @@ parent that the list does not name still blocks its subtree.
 
 The guard is curation: `blacklist.domains` is Pi-owned, and `make pi-ship`
 never overwrites it. The escape hatch is `never_block.domains`. It drops
-every compiled entry at or under a name that it lists. The escape hatch is as
+every compiled entry at or under a name that it lists. An IPv4 address on
+it shields as on `never_block.ips`: it drops each address or range entry
+that holds the address. The escape hatch is as
 coarse as the hazard. To open `myapp.herokuapp.com` again under a listed
 `herokuapp.com`, the shield must name `herokuapp.com` itself. Reason: a
 shield below a listed parent leaves the entry of the parent in place. A
@@ -480,7 +488,8 @@ would block a host that `core.hosts` or `core.hosts.local` binds
 credentials to does not compile: the host itself, a parent of it, or a name
 under a `*.` entry. A feed line for `anthropic.com` must not cut the agent
 off from the service that holds its credentials. An entry under an exact
-core host stays, because it does not block the host.
+core host stays, because it does not block the host. A core host that is
+an IPv4 address drops each address or range entry that holds it.
 
 **An IP feed adds no prefix wider than `/12`.** One feed line with a `/8`
 would drop 16M addresses. `pf compile` drops a feed prefix that is wider
@@ -585,7 +594,8 @@ fixtures, no-dot and bogus-priv, and paranoid. If the query passes, `pf dns`
 answers with an address from `FAKEIP_NET` (default `198.18.0.0/16`). There is
 one name for each address, and the TTL is 60 s. `pf dns` forwards no A
 query: no upstream, no cache, no `resolved_v4` write. A type that
-`dns_types.allow` permits still goes upstream.
+`dns_types.allow` permits still goes upstream. AAAA, HTTPS and SVCB never
+go upstream: an entry for them in `dns_types.allow` has no effect.
 
 Each assignment is a line in `/var/lib/pi-fortress/dns/fakeip.journal`
 (`internal/fakeip`), written before the answer. A name keeps its address
@@ -611,7 +621,8 @@ the broker alone.
 
 What fake-IP closes: DNS as a silent channel in both directions. A lookup no
 longer goes out of the Pi, and nothing but a pool address comes back. The
-exception is a type that the operator permits in `dns_types.allow`.
+exception is a type that the operator permits in `dns_types.allow`. That
+exception is never AAAA, HTTPS or SVCB.
 
 What fake-IP does not close: a TLS connection to a name that the attacker
 selects still makes the Pi resolve that name upstream, one time for each

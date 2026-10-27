@@ -55,6 +55,11 @@ type Terminal interface {
 
 const escWait = 40 * time.Millisecond
 
+// pasteGap is the longest stop in a paste. A terminal sends a paste as
+// one fast stream. When no byte comes for this time, the paste is over,
+// also if the end bracket did not come.
+const pasteGap = time.Second
+
 var escSeqs = map[string]KeyKind{
 	"[A": KeyUp, "[B": KeyDown, "[C": KeyRight, "[D": KeyLeft,
 	"OA": KeyUp, "OB": KeyDown, "OC": KeyRight, "OD": KeyLeft,
@@ -201,6 +206,17 @@ func (s *byteSource) key(b byte) (Key, bool) {
 	}
 	k.Paste = s.pasting
 	return k, true
+}
+
+// pasteWait returns a channel that fires after pasteGap while a paste is
+// open, and nil when no paste is open. A paste start with no end bracket
+// (an aborted paste, a lost byte) made every later key a paste. Then q,
+// Ctrl-C and a typed confirm did nothing until the idle timer.
+func (s *byteSource) pasteWait() <-chan time.Time {
+	if !s.pasting {
+		return nil
+	}
+	return time.After(pasteGap)
 }
 
 func (s *byteSource) unread(b byte) { s.back = append(s.back, b) }

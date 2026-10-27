@@ -158,7 +158,8 @@ func hostEntry(tok string) (string, bool) {
 // hostProblem says why the host column tok, read as host by hostEntry,
 // can never get a credential, or it gives "". Load and LoadForward skip
 // such a line. The fence refuses a Host that is not a name (validName).
-// Thus a host with one label or with "_" never gets a credential. hostEntry
+// Thus a host with one label, with "_", with an empty label, or over the
+// DNS length limits never gets a credential. hostEntry
 // removes one "*." only. A "*" that is left (a bare "*", "*.*.name") is a
 // literal byte of the host, and it matches no name. It is not a match-all.
 func hostProblem(tok, host string) string {
@@ -171,6 +172,24 @@ func hostProblem(tok, host string) string {
 		return "a host with one label is not a name that the fence accepts"
 	case strings.Contains(host, "_"):
 		return `a host with "_" is not a name that the fence accepts`
+	}
+	return lengthProblem(host)
+}
+
+// lengthProblem says why name breaks the DNS form that validName holds a
+// name to: an empty label, a label over 63 bytes, or a name over 253
+// bytes. Else it gives "".
+func lengthProblem(name string) string {
+	if len(name) > 253 {
+		return "a name over 253 bytes is not a name that the fence accepts"
+	}
+	for label := range strings.SplitSeq(name, ".") {
+		switch {
+		case label == "":
+			return "a name with an empty label (a leading dot or two dots) is not a name that the fence accepts"
+		case len(label) > 63:
+			return "a label over 63 bytes is not a name that the fence accepts"
+		}
 	}
 	return ""
 }
@@ -316,7 +335,10 @@ func LoadDomains(path string) (map[string]struct{}, error) {
 // One "*." goes, and only before a name with a dot. If a "*" is left
 // ("*.*.name"), it gives "": the line allows nothing. A line with no dot
 // ("com", or "*.com" after the "*." goes) also gives "". It would allow
-// all names below it, all of .com. core.hosts refuses such a host too.
+// all names below it, all of .com. core.hosts refuses such a host too. A
+// line with an empty label, as ".name", or over the DNS length limits
+// gives "" (AllowProblem): no query can match it. So does each other line
+// that is not a name (validName): the resolver conf does not carry it.
 func AllowEntry(tok string) (name string, star, oneLabel bool) {
 	host := normHost(tok)
 	if star = strings.HasPrefix(host, "*."); star {
@@ -328,7 +350,22 @@ func AllowEntry(tok string) (name string, star, oneLabel bool) {
 	if !strings.Contains(host, ".") {
 		return "", false, isLabel(host)
 	}
+	if !validName(host) {
+		return "", false, false
+	}
 	return host, false, false
+}
+
+// AllowProblem says why the allow list token tok allows nothing for its
+// DNS form: an empty label (".name", "a..name"), a label over 63 bytes, or
+// a name over 253 bytes. Else it gives "". A line that is not ASCII gets
+// its own warning (ASCIIHint), so it gives "" for it.
+func AllowProblem(tok string) string {
+	host := strings.TrimPrefix(normHost(tok), "*.")
+	if !IsASCII(host) || !strings.Contains(host, ".") {
+		return ""
+	}
+	return lengthProblem(host)
 }
 
 // isLabel says if s is one label that a name can hold: s and a dot and a

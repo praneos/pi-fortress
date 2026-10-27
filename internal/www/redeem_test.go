@@ -139,3 +139,33 @@ func TestClaimScriptTakesThePiFromTheBind(t *testing.T) {
 		t.Fatalf("status %d; script for Host 10.9.9.9 does not match the command for %s:\n%s", w.Code, s.Bind, w.Body.String())
 	}
 }
+
+// With no setup.sh or no ca.pem to serve, a claim can enrol nothing. So
+// the gateway does not issue it. Before, the code was issued, and the
+// redeem spent it to serve only a script that said "issue another".
+func TestNoClaimWithoutSetupOrCA(t *testing.T) {
+	if _, err := os.Stat("/vagrant/vm/agent/setup.sh"); err == nil {
+		t.Skip("a lab VM serves /vagrant's setup.sh, not the test's")
+	}
+	old := caFallbacks
+	caFallbacks = []string{filepath.Join(t.TempDir(), "none.pem")}
+	t.Cleanup(func() { caFallbacks = old })
+	for _, missing := range []string{"setup.sh", "ca.pem"} {
+		s, _ := testServer(t)
+		if err := os.Remove(filepath.Join(s.Dir, missing)); err != nil {
+			t.Fatal(err)
+		}
+		claims := ClaimsDir(s.Dir)
+		if err := os.MkdirAll(claims, 0770); err != nil {
+			t.Fatal(err)
+		}
+		c, err := IssueClaim(claims, "a1b2c3d4e5f67890", []string{"GITHUB_TOKEN"})
+		if err == nil {
+			_, rerr := RedeemClaim(claims, c.Code)
+			t.Fatalf("no %s: claim %s issued (redeem err %v, spent %v)", missing, c.Code, rerr, spent(claims, c.Code))
+		}
+		if !strings.Contains(err.Error(), "pf apply") {
+			t.Fatalf("no %s: the error does not say what to do: %v", missing, err)
+		}
+	}
+}

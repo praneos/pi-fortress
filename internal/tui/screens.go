@@ -797,7 +797,7 @@ func (a *App) secretsKey(k Key, i int) {
 		a.confirmTyped("purge slot "+slot, func() { a.do("slot.purge", args, "purged "+slot) })
 	case 'd':
 		// Delete removes the credentials at once, and nothing restores
-		// them. Thus it asks for the typed yes, as purge does. x and R are
+		// them. Thus it asks for the typed code, as purge does. x and R are
 		// reversible and stay on one y.
 		a.confirmTyped("delete slot "+slot+"; its credentials go away at once", func() { a.do("slot.delete", args, "deleted "+slot) })
 	}

@@ -93,6 +93,36 @@ for copy in setup provision; do
   run 2
   [[ "${status}" -eq 0 && -z "${set}" ]] || fail "${copy}: stepped for 2s: ${out}"
 
+  # A step over 24 hours goes through when a second poll about 15 minutes
+  # later gives the same offset, within 5 seconds. A host suspend of more
+  # than a day gives that. One poll alone changes nothing.
+  big=$((2 * 86400))
+  base="${now}"
+  run "${big}"
+  [[ -z "${set}" && "${out}" == *"refused"* ]] || fail "${copy}: one poll took a step of ${big}s: ${out}"
+  now=$((base + 900))
+  run $((big + 3))
+  [[ "${status}" -eq 0 && "${set}" == $((now + big + 3)) ]] || fail "${copy}: two polls 900s apart with the same offset did not step: ${out}"
+  [[ "$(printf '%s\n' "${out}" | wc -l)" -eq 1 ]] || fail "${copy}: a confirmed step did not log one line: ${out}"
+
+  # Each of these second polls changes nothing: a different offset, a poll
+  # too soon, a poll too late, and a poll after a normal poll between.
+  # first-offset second-offset gap between-offset
+  for c in "${big} $((big + 60)) 900 -" "${big} ${big} 60 -" "${big} ${big} 7200 -" "${big} ${big} 900 0"; do
+    read -r o1 o2 gap mid <<<"${c}"
+    now="${base}"
+    run "${o1}"
+    [[ "${mid}" == - ]] || run "${mid}"
+    now=$((base + gap))
+    run "${o2}"
+    [[ "${status}" -eq 0 && -z "${set}" && "${out}" == *"refused"* ]] || fail "${copy}: took a step on polls '${c}': ${out}"
+    # The second poll above is now the first of a new pair.
+    now=$((base + gap + 900))
+    run "${o2}"
+    [[ "${set}" == $((now + o2)) ]] || fail "${copy}: a new pair after '${c}' did not step: ${out}"
+  done
+  now="${base}"
+
   # A first run that needs no step still starts the limit.
   rm -f "${state}"
   run 0
