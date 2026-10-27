@@ -839,6 +839,11 @@ func readable(msg []byte) bool {
 //
 // A message with no room for the 11 bytes of the OPT goes with no change.
 // Over TCP, the length prefix cannot count more than maxMsg bytes.
+//
+// A compression pointer into the header reads ARCOUNT as part of a name.
+// The new count changes that name, and the name can stop parsing. Such a
+// message also goes with no change, as stripOPT does when its cut breaks
+// a name.
 func withCallerOPT(msg []byte, e ednsOPT) []byte {
 	if !e.present || len(msg) < 12 || len(msg)+11 > maxMsg {
 		return msg
@@ -856,7 +861,23 @@ func withCallerOPT(msg []byte, e ednsOPT) []byte {
 	binary.BigEndian.PutUint16(rr[3:5], udpMax)
 	out = append(out, rr[:]...)
 	binary.BigEndian.PutUint16(out[10:12], ar+1)
+	if mayPointIntoHeader(msg) && !readable(out) {
+		return msg
+	}
 	return out
+}
+
+// mayPointIntoHeader is true if two bytes after the header can be a
+// compression pointer to an offset in the header. It can be true for a
+// message with no such pointer. It is never false for a message with one.
+// Thus only the few messages where it is true need a full parse.
+func mayPointIntoHeader(msg []byte) bool {
+	for i := 12; i+1 < len(msg); i++ {
+		if msg[i] == 0xc0 && msg[i+1] < 12 {
+			return true
+		}
+	}
+	return false
 }
 
 // skipRR advances past one resource record: its name, the ten bytes of

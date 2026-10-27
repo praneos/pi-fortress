@@ -481,6 +481,30 @@ func TestAnOPTNeverTakesAnAnswerPastTheTCPFrame(t *testing.T) {
 	}
 }
 
+// A compression pointer can point into the header. The name then reads
+// the bytes of ARCOUNT, and the OPT for the caller changes them. Here the
+// CNAME target points to the low byte of ARCOUNT. With 0 it is the root
+// name. With 1 it is a label that runs past the end of the message. The
+// message then goes with no change, because the caller must get a message
+// that it can read.
+func TestAnOPTDoesNotBreakANameThatPointsIntoTheHeader(t *testing.T) {
+	msg := []byte{
+		0x12, 0x34, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0,
+		1, 'a', 7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 0, 0, 1, 0, 1,
+		0xc0, 12, 0, 5, 0, 1, 0, 0, 0, 60, 0, 2, 0xc0, 11,
+	}
+	if !readable(msg) {
+		t.Fatal("the test message does not parse")
+	}
+	out := withCallerOPT(msg, ednsOPT{present: true, size: 1232})
+	if !readable(out) {
+		t.Fatalf("the caller gets a message that does not parse: %x", out)
+	}
+	if !bytes.Equal(out, msg) {
+		t.Fatalf("got %x, want the message with no change", out)
+	}
+}
+
 // The length prefix cannot say more than 65535. A longer message gets no
 // frame, not a frame whose length is the low 16 bits.
 func TestATCPFrameHoldsOnlyWhatItsLengthCanSay(t *testing.T) {
