@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"pi-fortress/internal/secrets"
+	"pi-fortress/internal/placeholder"
 )
 
 // Case-flipped keys. A receiver folds the case back, so a
@@ -87,11 +87,11 @@ func TestPlaceholderStaysExact(t *testing.T) {
 		"pf_0123456789abcdef_GITHUB_TOKENx": false,
 	} {
 		b := []byte(in)
-		sp := secrets.FindPlaceholderSpans(b)
+		sp := placeholder.FindPlaceholderSpans(b)
 		if len(sp) != 1 || sp[0] != [2]int{0, len(b)} {
 			t.Fatalf("%s: spans %v", in, sp)
 		}
-		if secrets.PlaceholderExact(b, sp[0]) != exact {
+		if placeholder.PlaceholderExact(b, sp[0]) != exact {
 			t.Fatalf("%s: exact %v", in, !exact)
 		}
 	}

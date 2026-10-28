@@ -12,6 +12,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"pi-fortress/internal/placeholder"
 )
 
 var (
@@ -89,11 +91,10 @@ func ParseEnvKey(key string) (slot, kind string, ok bool) {
 
 func FindPlaceholders(text string) [][2]string {
 	b := []byte(text)
-	spans := FindPlaceholderSpans(b)
+	spans := placeholder.FindPlaceholderSpans(b)
 	out := make([][2]string, 0, len(spans))
 	for _, sp := range spans {
-		slot := strings.ToLower(string(b[sp[0]+len(phPrefix) : sp[0]+len(phPrefix)+16]))
-		kind := string(b[sp[0]+len(phPrefix)+17 : sp[1]])
+		slot, kind := placeholder.PlaceholderParts(b, sp)
 		out = append(out, [2]string{slot, kind})
 	}
 	return out

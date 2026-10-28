@@ -6,7 +6,7 @@ import (
 	"sort"
 
 	"pi-fortress/internal/httpwire"
-	"pi-fortress/internal/secrets"
+	"pi-fortress/internal/placeholder"
 	"pi-fortress/internal/tokenrules"
 )
 
@@ -63,7 +63,7 @@ func (g *placeholderGuard) scan() {
 	}
 	hold := 0
 	if !g.EOF {
-		hold = secrets.PlaceholderHold(g.Buf)
+		hold = placeholder.PlaceholderHold(g.Buf)
 	}
 	// A hold that grows past maxHold is a kind run that no real placeholder
 	// has. The guard treats it as a placeholder, and does not let the agent
@@ -79,14 +79,14 @@ func (g *placeholderGuard) scan() {
 	// placeholder (FuzzPlaceholderGuard). The guard holds such a run with
 	// the rest, and never drops it.
 	if n < len(g.Buf) {
-		n = secrets.TrailingPlaceholders(g.Buf[:n])
+		n = placeholder.TrailingPlaceholders(g.Buf[:n])
 	}
 	// maxHold is the limit on the actual hold. Without it, a long kind run
 	// would grow the buffer without end.
 	hold = len(g.Buf) - n
 	// A whole placeholder in the settled prefix stops the copy. A hold past
 	// maxHold also stops it. The guard does not emit the bytes of this pass.
-	sp := secrets.FindPlaceholderSpans(g.Buf)
+	sp := placeholder.FindPlaceholderSpans(g.Buf)
 	if len(sp) > 0 && sp[0][1] <= n {
 		hold = maxHold + 1
 	}
@@ -96,7 +96,7 @@ func (g *placeholderGuard) scan() {
 		// its slot and its kind are the part that arrived.
 		var slot, kind string
 		if len(sp) > 0 {
-			slot, kind = secrets.PlaceholderParts(g.Buf, sp[0])
+			slot, kind = placeholder.PlaceholderParts(g.Buf, sp[0])
 		}
 		g.err = &StreamPlaceholderError{Slot: slot, Kind: kind}
 		// EOF stops more reads by the pump. Read answers with err.

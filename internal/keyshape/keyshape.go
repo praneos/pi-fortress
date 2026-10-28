@@ -13,7 +13,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"pi-fortress/internal/secrets"
+	"pi-fortress/internal/placeholder"
 	"pi-fortress/internal/tokenrules"
 )
 
@@ -349,7 +349,7 @@ func tldShaped(l string) bool {
 // placeholder of the gateway in any letter case, or "" for neither. It reports "key" for a
 // match in a group with no name. A nil all checks for placeholders only.
 func Rule(all *regexp.Regexp, s string) string {
-	if strings.IndexByte(s, '_') >= 0 && len(secrets.FindPlaceholderSpans([]byte(s))) > 0 {
+	if strings.IndexByte(s, '_') >= 0 && len(placeholder.FindPlaceholderSpans([]byte(s))) > 0 {
 		return "placeholder"
 	}
 	if all == nil {
