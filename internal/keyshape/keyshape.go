@@ -193,8 +193,17 @@ type forms struct {
 	lead                 int
 }
 
+// formCacheMax bounds formCache. The key is the pointer of a rule set, and
+// pf dns loads its rule sets again at each SIGHUP (logrotate sends one each
+// hour). Without the bound, each reload kept a rule set and its forms in
+// the cache for the life of the process. When the cache is full, formsOf
+// forgets all of it. The next name derives the forms again. No result
+// changes.
+const formCacheMax = 32
+
 var (
-	formCache sync.Map
+	formMu    sync.Mutex
+	formCache = map[*regexp.Regexp]*forms{}
 	noForms   = forms{lead: -1}
 )
 
@@ -205,8 +214,11 @@ func formsOf(all *regexp.Regexp) *forms {
 	if all == nil {
 		return &noForms
 	}
-	if v, ok := formCache.Load(all); ok {
-		return v.(*forms)
+	formMu.Lock()
+	cached, ok := formCache[all]
+	formMu.Unlock()
+	if ok {
+		return cached
 	}
 	f := &forms{anch: all, ends: all, endsAnch: all, lead: -1}
 	if re, err := regexp.Compile(`\A(?:` + all.String() + `)`); err == nil {
@@ -222,8 +234,16 @@ func formsOf(all *regexp.Regexp) *forms {
 			}
 		}
 	}
-	v, _ := formCache.LoadOrStore(all, f)
-	return v.(*forms)
+	formMu.Lock()
+	defer formMu.Unlock()
+	if cached, ok := formCache[all]; ok {
+		return cached
+	}
+	if len(formCache) >= formCacheMax {
+		clear(formCache)
+	}
+	formCache[all] = f
+	return f
 }
 
 // endRules returns the branches of expr (one branch for each rule) that
