@@ -109,6 +109,9 @@ echo
 # what it serves comes from its own segment list.
 echo "== pf dns =="
 systemctl is-active pi-fortress-dns-agent-go || true
+# netgate writes the gate sets for pf dns. When it is down, each answer
+# that is not in the cache of pf dns is SERVFAIL.
+echo "netgate: $(systemctl is-active pi-fortress-netgate 2>/dev/null || true)"
 # One line for each segment, from the -check of the daemon: the interface,
 # address, upstream and nft set that it would serve. A house segment that
 # fed resolved_v4 instead of resolved_house_v4 shows here and

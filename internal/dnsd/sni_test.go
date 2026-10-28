@@ -531,6 +531,75 @@ func TestSNIJudgesECHByRange(t *testing.T) {
 	}
 }
 
+// Chrome and Firefox send a GREASE encrypted_client_hello extension when
+// the site has no ECH config, so the hello carries the real name and
+// tlssni reports ECH. The /24 rule comes before the ECH ranges, so such a
+// flow to a neighbour of an answer passes, as a plain hello does. An ECH
+// flow outside both still fails, and the outer name must still resolve
+// and not be blocked.
+func TestSNISlash24BeforeECHRanges(t *testing.T) {
+	r := &fakeResolve{
+		ans: map[string][]netip.Addr{
+			"news.example":       {netip.MustParseAddr("151.101.1.10")},
+			"cloudflare-ech.com": {netip.MustParseAddr("104.18.10.10")},
+		},
+		block: map[string]bool{"tracker.example": true},
+	}
+	c, _ := newTestCheck(t, r)
+	ctx := context.Background()
+	key := func(dst string) sniFlowKey {
+		return sniFlowKey{netip.MustParseAddrPort("10.78.0.160:1"), netip.AddrPortFrom(netip.MustParseAddr(dst), 443)}
+	}
+	grease := tlssni.Hello{ServerName: "news.example", ECH: true}
+	if m, why := c.judge(ctx, key("151.101.1.77"), grease); m != sniOK {
+		t.Fatalf("a GREASE hello to the /24 of an answer, outside the ECH ranges, refused: %s", why)
+	}
+	m, why := c.judge(ctx, key("198.51.100.7"), grease)
+	if m != sniBad || !strings.Contains(why, "outside the /24 of its answers and the ECH ranges") {
+		t.Fatalf("an ECH hello outside the /24 and the ECH ranges: %#x %q", m, why)
+	}
+	// A real ECH flow: the ranges still pass it. A blocked outer name
+	// passes nowhere, and a name with no answer has no /24.
+	if m, why := c.judge(ctx, key("104.21.3.4"), tlssni.Hello{ServerName: "cloudflare-ech.com", ECH: true}); m != sniOK {
+		t.Fatalf("ECH inside the ranges refused: %s", why)
+	}
+	if m, _ := c.judge(ctx, key("104.21.3.4"), tlssni.Hello{ServerName: "tracker.example", ECH: true}); m != sniBad {
+		t.Fatal("ECH with a blocked outer name accepted")
+	}
+	if m, _ := c.judge(ctx, key("151.101.1.77"), tlssni.Hello{ServerName: "nothing.example", ECH: true}); m != sniBad {
+		t.Fatal("ECH with an outer name that has no answer accepted outside the ECH ranges")
+	}
+}
+
+// A name with no address (NXDOMAIN, an empty answer, a SERVFAIL reply:
+// no address and no error) passes nowhere: not into the ECH ranges with
+// ECH, a GREASE ECH extension or none. A name that the house gave for
+// that address in the last day still passes by that memory.
+func TestSNINameWithNoAddressIsRefused(t *testing.T) {
+	r := &fakeResolve{ans: map[string][]netip.Addr{"gone.example": nil}}
+	c, _ := newTestCheck(t, r)
+	ctx := context.Background()
+	key := func(dst string) sniFlowKey {
+		return sniFlowKey{netip.MustParseAddrPort("10.78.0.160:1"), netip.AddrPortFrom(netip.MustParseAddr(dst), 443)}
+	}
+	for _, dst := range []string{"104.21.3.4", "198.51.100.7"} {
+		for _, ech := range []bool{true, false} {
+			for _, name := range []string{"gone.example", "nothing.example"} {
+				m, why := c.judge(ctx, key(dst), tlssni.Hello{ServerName: name, ECH: ech})
+				if m != sniBad || why != name+" has no address" {
+					t.Errorf("%s to %s (ECH %v): %#x %q, want a refusal for no address", name, dst, ech, m, why)
+				}
+			}
+		}
+	}
+	c.seen = func(name string, addr netip.Addr) bool {
+		return name == "gone.example" && addr == netip.MustParseAddr("198.51.100.7")
+	}
+	if m, why := c.judge(ctx, key("198.51.100.7"), tlssni.Hello{ServerName: "gone.example"}); m != sniOK {
+		t.Fatalf("a name with an answer of the last day for this address refused: %s", why)
+	}
+}
+
 // After a long idle, a device opens a flow with an expired answer. The CDN
 // has moved the name to a different range, so the answer now does not
 // match. The address that the same name resolved to before still passes.
@@ -1039,4 +1108,75 @@ func TestSNINewSYNStartsAFreshCheck(t *testing.T) {
 		ok(t, q, 1, "Fast Open SYN")
 		ok(t, q, 2, "its retransmit")
 	})
+}
+
+// blockQueue is a queue on which nothing arrives until it closes.
+type blockQueue struct {
+	once   sync.Once
+	closed chan struct{}
+}
+
+func (q *blockQueue) Recv() (nfq.Packet, error) {
+	<-q.closed
+	return nfq.Packet{}, nfq.ErrClosed
+}
+func (q *blockQueue) Verdict(uint32, uint32, *uint32) error { return nil }
+func (q *blockQueue) Close() error {
+	q.once.Do(func() { close(q.closed) })
+	return nil
+}
+
+// pf dns binds the SNI queue through netgate. While netgate is down, or
+// refuses, the loop tries again, and the rest of the resolver serves. The
+// stop of the resolver closes the queue.
+func TestSNILoopRetriesUntilNetgateBinds(t *testing.T) {
+	srv, err := New(Config{
+		NFTTable: "inet fortress",
+		NFT:      &fakeNFT{},
+		Segments: []Segment{{
+			Name: "house", Iface: "lo", IP: netip.MustParseAddr("127.0.0.2"),
+			Upstream: "127.0.0.1:53", NFTSet: "resolved_house_v4", SNIQueue: 1,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := &blockQueue{closed: make(chan struct{})}
+	asked := make(chan uint16, 8)
+	srv.sniRetry = 10 * time.Millisecond
+	var tries atomic.Int32
+	srv.openSNI = func(num uint16) (sniQueue, error) {
+		asked <- num
+		if tries.Add(1) == 1 {
+			return nil, errors.New("dial unixpacket /run/pi-fortress-netgate/dns.sock: connect: no such file or directory")
+		}
+		return q, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.sniLoop(ctx, srv.segs[0])
+	}()
+	for i := range 2 {
+		select {
+		case n := <-asked:
+			if n != 1 {
+				t.Fatalf("asked for queue %d, want 1", n)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("no try %d to bind the queue", i+1)
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the loop did not stop with the resolver")
+	}
+	select {
+	case <-q.closed:
+	default:
+		t.Fatal("the stop did not close the queue")
+	}
 }

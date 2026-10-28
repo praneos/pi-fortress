@@ -599,13 +599,18 @@ in the same /24 as one that it resolves to now. The /24 lets a CDN that
 rotates its addresses through. The 24 hours let a device that opens a flow
 with an expired answer after a long idle through, also when the CDN has moved
 the name to a different range. A flow with Encrypted Client Hello (ECH) shows only the outer name
-of the provider: it passes to a resolved address of that name or into the
-ranges of `vm/policy/house_ech.ips`, whatever the inner name, and never by
-the /24. A ClientHello that does not parse, or that has an extension type
-two times, does not pass.
+of the provider: it passes by the rules above, as a plain flow with that
+name does, or into the ranges of `vm/policy/house_ech.ips`, whatever the
+inner name. The outer name must still have an address through the house:
+a name with no address (NXDOMAIN or an empty answer) passes nowhere. The /24 rule comes before the ranges: Chrome and Firefox send
+an ECH extension with random content (GREASE) in each hello to a site with
+no ECH config, and that hello names the real site. A ClientHello that does
+not parse, or that has an extension type two times, does not pass.
 The verdict of a flow is in its conntrack mark, and only a flow with no
 verdict goes to the check. Thus a flow that the check passed continues when
-pf dns restarts (each apply restarts it). A flow that is in its check at the
+pf dns or pf netgate restarts (each apply restarts both). pf netgate binds
+the queue and relays its packets to pf dns, which holds no
+`CAP_NET_ADMIN` (`privilege_split.md`). A flow that is in its check at the
 restart gets a TCP reset (`data with no SYN before it` in the journal), and
 the client opens it again.
 `direct_ip.allow` ships empty: nothing that an agent runs has needed it.

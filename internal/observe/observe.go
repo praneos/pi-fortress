@@ -28,6 +28,7 @@ import (
 	"pi-fortress/internal/dnslog"
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/leases"
+	"pi-fortress/internal/netgate"
 )
 
 const (
@@ -213,6 +214,12 @@ type Observer struct {
 	DNSLog     string
 	OffsetPath string
 	CTPath     string
+	// CTSocket is the socket of pf netgate (netgate.CTSocket). When it is
+	// set and CTPath is absent, observe asks netgate for the table, and
+	// does not run CTCmd. The daemon holds no capability, and the dump
+	// needs CAP_NET_ADMIN. CTCmd is for a run with that capability: a
+	// sudo pf observe once.
+	CTSocket   string
 	CTCmd      []string
 	NetEnvPath []string
 	// NetEnvLocal is the operator overlay that apply sources after the base
@@ -325,6 +332,9 @@ type Observer struct {
 	cursor     string
 	cursorRead bool
 	journalErr string
+	// ctErr is the last reason why netgate gave no conntrack table. Each
+	// new reason, and the end of a failure, is one line on Stderr.
+	ctErr string
 	// journalCap and journalTimeout are maxJournal and journalWait, separate
 	// so that a test can make them small. Zero is the default.
 	journalCap     int
@@ -356,6 +366,7 @@ func Defaults() *Observer {
 		DNSLog:          "/var/log/pi-fortress/dns.jsonl",
 		OffsetPath:      StateDir + "/dns.offset",
 		CTPath:          "/proc/net/nf_conntrack",
+		CTSocket:        netgate.CTSocket,
 		CTCmd:           []string{"conntrack", "-L", "-o", "extended"},
 		NetEnvPath:      base.NetEnvPaths(),
 		NetEnvLocal:     base.NetEnvLocal,
@@ -1584,10 +1595,20 @@ func (o *Observer) ingestStrip(st *State) {
 
 // Raspberry Pi kernels ship without CONFIG_NF_CONNTRACK_PROCFS, so the
 // proc file is absent there. `conntrack -L -o extended` prints the same
-// line layout over ctnetlink.
+// line layout over ctnetlink. The daemon gets it from pf netgate, which
+// runs that command: the dump needs CAP_NET_ADMIN, and observe has no
+// capability. When netgate is down, the flow and volume rows stop.
 func (o *Observer) readCT() ([]byte, error) {
 	raw, err := os.ReadFile(o.CTPath)
-	if err == nil || !os.IsNotExist(err) || len(o.CTCmd) == 0 {
+	if err == nil || !os.IsNotExist(err) {
+		return raw, err
+	}
+	if o.CTSocket != "" {
+		raw, err := netgate.ReadCT(o.CTSocket)
+		o.sayCT(err)
+		return raw, err
+	}
+	if len(o.CTCmd) == 0 {
 		return raw, err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -1595,6 +1616,23 @@ func (o *Observer) readCT() ([]byte, error) {
 	cmd := exec.CommandContext(ctx, o.CTCmd[0], o.CTCmd[1:]...)
 	cmd.Stderr = io.Discard
 	return cmd.Output()
+}
+
+// sayCT writes one line for each new reason of a failure of netgate, and
+// one line when it answers again.
+func (o *Observer) sayCT(err error) {
+	msg := ""
+	if err != nil {
+		msg = err.Error()
+	}
+	if msg != o.ctErr && o.Stderr != nil {
+		if msg == "" {
+			fmt.Fprintln(o.Stderr, "observe: conntrack through netgate answers again")
+		} else {
+			fmt.Fprintf(o.Stderr, "observe: conntrack through netgate: %s; the flow rows stop until it answers\n", msg)
+		}
+	}
+	o.ctErr = msg
 }
 
 // ingestCT records the original direction of each conntrack entry whose

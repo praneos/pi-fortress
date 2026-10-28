@@ -43,7 +43,7 @@ const (
 // queries comes from Config.units, because the stubs that exist depend on
 // what apply wrote.
 var Units = []string{
-	"nftables", AgentDNSUnit, HouseDNSUnit,
+	"nftables", "pi-fortress-netgate", AgentDNSUnit, HouseDNSUnit,
 	"pi-fortress-engine", "pi-fortress-broker", "pi-fortress-www",
 	"pi-fortress-observe", "pi-fortress-monitor", "pi-fortress-alert",
 }
