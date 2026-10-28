@@ -367,7 +367,10 @@ The fence does not scan trailers or chunk extensions. The broker reads each
 trailer field after the last chunk of a body, checks that it has the shape
 of a header field, and then discards it. A chunk extension (the text after
 `;` on a chunk size line) is discarded in the same way. A trailer field
-with a bad shape, or a control byte in a chunk extension, ends the request.
+with a bad shape, a trailer block larger than 4 KiB, or a control byte in
+a chunk extension, ends the request. A `Trailer` header that names
+`Content-Length`, `Transfer-Encoding` or `Trailer` also ends it. net/http
+has the same two trailer limits.
 No trailer field and no chunk extension goes to the origin server or to the
 agent. The broker also drops the `Trailer` header, which announces trailer
 fields, in the request and in the response. Thus a placeholder or a live

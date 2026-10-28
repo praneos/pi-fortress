@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -73,6 +74,14 @@ const (
 	// maxEyeballLine caps one line of an eyeball feed, and one record of a
 	// CSV feed. It is far above the length of a real line.
 	maxEyeballLine = 64 << 10
+	// maxRangesBadLines caps the lines of a ranges feed that are not a
+	// row. A row has a first address, a last address and an ASN. An empty
+	// line is not a row. A row with ASN 0 or with IPv6 addresses is a row:
+	// the table does not use it, but it does not count here. A real
+	// ip2asn file has no line that is not a row. A feed with more such
+	// lines than the cap is refused, and the read stops at that line. Thus
+	// a small gzip of many empty lines does not use seconds of CPU.
+	maxRangesBadLines = 10_000
 )
 
 // eyeballBodyCap gives the download cap of an eyeball feed, by its format.
@@ -135,7 +144,8 @@ func (e *EyeballSpec) validate(ids map[string]bool) error {
 // parseRanges reads the ip2asn TSV (start, end, ASN, country, name), plain
 // or gzip. It keeps the IPv4 ranges with an ASN. ASN 0 marks a range that
 // nobody announces. It gives the ranges as table lines, after Normalize,
-// and at most limit of them. cut is true when there were more.
+// and at most limit of them. cut is true when there were more. A feed
+// with more than maxRangesBadLines lines that are not rows is refused.
 func parseRanges(body string, limit int) (items []string, cut bool, err error) {
 	var r io.Reader = strings.NewReader(body)
 	if strings.HasPrefix(body, "\x1f\x8b") {
@@ -149,12 +159,15 @@ func parseRanges(body string, limit int) (items []string, cut bool, err error) {
 	cr := &countReader{r: r}
 	sc := eyeballLines(cr)
 	var rs []eyeball.Range
+	bad := 0
 	for sc.Scan() {
-		f := strings.SplitN(sc.Text(), "\t", 4)
-		if len(f) < 3 {
-			continue
+		rg, ok, row := rangeLine(sc.Bytes())
+		if !row {
+			bad++
+			if bad > maxRangesBadLines {
+				return nil, false, fmt.Errorf("more than %d lines are not rows of first address, last address and ASN", maxRangesBadLines)
+			}
 		}
-		rg, ok := eyeball.ParseRange(f[0], f[1], f[2])
 		if !ok {
 			continue
 		}
@@ -181,6 +194,48 @@ func parseRanges(body string, limit int) (items []string, cut bool, err error) {
 		items[i] = rg.String()
 	}
 	return items, cut, nil
+}
+
+// rangeLine reads one line of the ip2asn TSV. ok is true for a range that
+// the table can use. row is true for a line with a first address, a last
+// address and an ASN. A row with ASN 0 marks a range that nobody
+// announces, and the combined ip2asn file has IPv6 rows. Such a row is a
+// row, but it is not a range of the table.
+//
+// The split is on the bytes of the line. A line with less than three
+// fields gives no string, so it uses no memory. Of a longer line, only
+// the first three fields become a string. The fields after the ASN
+// (country, name) are not used.
+func rangeLine(line []byte) (rg eyeball.Range, ok, row bool) {
+	i := bytes.IndexByte(line, '\t')
+	if i < 0 {
+		return rg, false, false
+	}
+	j := bytes.IndexByte(line[i+1:], '\t')
+	if j < 0 {
+		return rg, false, false
+	}
+	j += i + 1
+	end := len(line)
+	if k := bytes.IndexByte(line[j+1:], '\t'); k >= 0 {
+		end = j + 1 + k
+	}
+	s := string(line[:end])
+	first, last, asn := s[:i], s[i+1:j], s[j+1:]
+	if rg, ok = eyeball.ParseRange(first, last, asn); ok {
+		return rg, true, true
+	}
+	if _, err := netip.ParseAddr(first); err != nil {
+		return rg, false, false
+	}
+	if _, err := netip.ParseAddr(last); err != nil {
+		return rg, false, false
+	}
+	if strings.TrimSpace(asn) == "0" {
+		return rg, false, true
+	}
+	_, isASN := eyeball.ParseASN(asn)
+	return rg, false, isASN
 }
 
 type countReader struct {

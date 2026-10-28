@@ -159,7 +159,9 @@ func Select(rs []Range, keep func(asn uint32) bool) []Range {
 	return Normalize(out)
 }
 
-// Write writes a table. rs must be the output of Normalize or Select.
+// Write writes a table. rs must be the output of Normalize or Select. The
+// built time is to the second: Write drops a fraction of a second, and
+// Parse refuses one.
 func Write(w io.Writer, built time.Time, rs []Range) error {
 	bw := bufio.NewWriter(w)
 	fmt.Fprintf(bw, "%s\n%s%s\n", Magic, builtPrefix, built.UTC().Format(time.RFC3339))
@@ -200,6 +202,13 @@ func Parse(r io.Reader) (*Table, error) {
 				when, err := time.Parse(time.RFC3339, strings.TrimSpace(v))
 				if err != nil {
 					return nil, fmt.Errorf("eyeball table: line %d: %w", line, err)
+				}
+				// Write keeps the time to the second, and pf fetch never
+				// writes a fraction. Parse refuses a fraction of a second.
+				// Thus a table that Parse accepts gives the same Built time
+				// after Write.
+				if when.Nanosecond() != 0 {
+					return nil, fmt.Errorf("eyeball table: line %d: built time has a fraction of a second", line)
 				}
 				t.Built = when.UTC()
 			}

@@ -353,7 +353,9 @@ func walkChunks(body []byte) (string, bool) {
 				body = body[j+2:]
 			}
 		}
-		if int64(len(body)) < n+2 {
+		// n+2 wraps for a size near 1<<63. Thus the test subtracts from the
+		// length and does not add to the size.
+		if n > int64(len(body))-2 {
 			return "", false
 		}
 		if !bytes.Equal(body[n:n+2], []byte("\r\n")) {

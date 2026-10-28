@@ -1,0 +1,6 @@
+go test fuzz v1
+string("0:///dns-querY")
+string("")
+string("0")
+string("0")
+[]byte("0")

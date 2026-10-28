@@ -224,11 +224,11 @@ func aRecords(msg []byte) ([]netip.Addr, uint32, bool) {
 			ttl, seen = h.TTL, true
 		}
 		if h.Type == dnsmessage.TypeA {
-			r, err := p.AResource()
-			if err != nil {
+			a, ok := readA(&p, h)
+			if !ok {
 				return nil, 0, false
 			}
-			addrs = append(addrs, netip.AddrFrom4(r.A))
+			addrs = append(addrs, a)
 			continue
 		}
 		if p.SkipAnswer() != nil {
@@ -236,6 +236,22 @@ func aRecords(msg []byte) ([]netip.Addr, uint32, bool) {
 		}
 	}
 	return addrs, ttl, true
+}
+
+// readA reads the rdata of the A record whose header p read last. The
+// parser reads 4 bytes and then steps over RDLENGTH bytes. It does not
+// compare the two. Thus an A record with an RDLENGTH of 0 gives an address
+// that is made of the bytes of the next record. readA refuses an A record
+// whose RDLENGTH is not 4.
+func readA(p *dnsmessage.Parser, h dnsmessage.ResourceHeader) (netip.Addr, bool) {
+	if h.Length != 4 {
+		return netip.Addr{}, false
+	}
+	r, err := p.AResource()
+	if err != nil {
+		return netip.Addr{}, false
+	}
+	return netip.AddrFrom4(r.A), true
 }
 
 // maxNegTTL is the longest time that the cache keeps a negative answer.
@@ -616,11 +632,11 @@ func answerOf(msg []byte) string {
 			break
 		}
 		if h.Type == dnsmessage.TypeA {
-			r, err := p.AResource()
-			if err != nil {
+			a, ok := readA(&p, h)
+			if !ok {
 				break
 			}
-			return netip.AddrFrom4(r.A).String()
+			return a.String()
 		}
 		if p.SkipAnswer() != nil {
 			break
@@ -753,7 +769,8 @@ func canonicalQuery(q dnsmessage.Question, id uint16) []byte {
 // them. A compression pointer in a later record still points where the
 // name was before. Every resolver puts OPT last. If one does not, its
 // answer passes through and is not cached. That costs a lookup and
-// nothing else.
+// nothing else. It also refuses a message with bytes after its last
+// record.
 func stripOPT(msg []byte) ([]byte, bool) {
 	if len(msg) < 12 {
 		return msg, false
@@ -805,6 +822,14 @@ func stripOPT(msg []byte) ([]byte, bool) {
 			return msg, false
 		}
 		return out, true
+	}
+	// A message with no OPT must also end at its last record. withCallerOPT
+	// appends the OPT at the end of the message. After other bytes, a client
+	// reads those bytes and the OPT as one record that the upstream and this
+	// resolver did not write. Refuse such a message, as when the OPT is not
+	// last.
+	if i != len(msg) {
+		return msg, false
 	}
 	return msg, true
 }

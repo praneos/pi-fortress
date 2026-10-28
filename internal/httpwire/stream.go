@@ -153,10 +153,20 @@ func (c *chunkedReader) overhead(line int, n int64) bool {
 	return c.excess <= maxChunkExcess
 }
 
+// maxTrailerBytes is the limit on the trailer block: each trailer line
+// with its CRLF, and the CRLF of the empty line that ends the block.
+// net/http requires the full block in the buffer of its connection
+// reader, which is 4096 bytes (body.readTrailer in transfer.go). It
+// refuses a longer block. Before, this code allowed 64 KiB. Thus a
+// streamed body with a trailer block of 4 to 64 KiB read clean here, and
+// a Go peer refused it.
+const maxTrailerBytes = 4096
+
 // trailers reads the trailer block after the last chunk, to the empty
 // line that ends the body.
 func (c *chunkedReader) trailers() (int, error) {
-	trailer := 0
+	// The count starts with the CRLF of the empty line that ends the block.
+	trailer := 2
 	for {
 		t, err := c.framing()
 		if err != nil {
@@ -166,7 +176,7 @@ func (c *chunkedReader) trailers() (int, error) {
 			c.done = true
 			return 0, io.EOF
 		}
-		if trailer += len(t) + 2; trailer > maxHeaderBytes {
+		if trailer += len(t) + 2; trailer > maxTrailerBytes {
 			return c.fail(ErrHeaderLimit)
 		}
 		// The trailer block was counted against the header budget but never

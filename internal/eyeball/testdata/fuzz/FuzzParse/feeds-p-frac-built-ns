@@ -1,0 +1,2 @@
+go test fuzz v1
+string("# pf eyeball v1\x0a# built 2026-10-01T00:00:00.999999999Z\x0a192.0.2.0 192.0.2.255 64496\x0a")

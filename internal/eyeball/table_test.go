@@ -134,6 +134,32 @@ func TestParseRefuses(t *testing.T) {
 	}
 }
 
+// A '# built' time with a fraction of a second is refused. Write keeps
+// the time to the second, so the fraction would not survive a round
+// trip. pf fetch never writes one. A fraction of zero is the same time
+// as none.
+func TestParseRefusesAFractionOfASecond(t *testing.T) {
+	for _, stamp := range []string{"2026-10-01T00:00:00.5Z", "2026-10-01T00:00:00.999999999Z", "2026-10-01T02:00:00.25+02:00"} {
+		in := Magic + "\n# built " + stamp + "\n192.0.2.0 192.0.2.255 64496\n"
+		if _, err := Parse(strings.NewReader(in)); err == nil {
+			t.Errorf("%s: accepted", stamp)
+		}
+	}
+	in := Magic + "\n# built 2026-10-01T00:00:00.000Z\n192.0.2.0 192.0.2.255 64496\n"
+	tab, err := Parse(strings.NewReader(in))
+	if err != nil || !tab.Built.Equal(built) {
+		t.Fatalf("a fraction of zero: %v, %v", tab, err)
+	}
+	var b bytes.Buffer
+	if err := Write(&b, tab.Built, tab.ranges); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Parse(&b)
+	if err != nil || !again.Built.Equal(tab.Built) || again.Len() != tab.Len() {
+		t.Fatalf("round trip: %v, %v", again, err)
+	}
+}
+
 func TestParseASN(t *testing.T) {
 	for in, want := range map[string]uint32{"AS64496": 64496, "as64511": 64511, "64496": 64496, " 64500 ": 64500} {
 		if got, ok := ParseASN(in); !ok || got != want {
