@@ -211,6 +211,12 @@ func BenchmarkDecideForeignBody1MNoise(b *testing.B) {
 	runDecide(b, "example.com", postReq("example.com", benchPrefixNoiseBody()))
 }
 
+// A megabyte of one prefix in one letter case (benchOneCaseBody) through
+// the buffered path.
+func BenchmarkDecideForeignBody1MOneCase(b *testing.B) {
+	runDecide(b, "example.com", postReq("example.com", benchOneCaseBody()))
+}
+
 // A megabyte that is one run of token bytes with a rule prefix every four
 // bytes. Each prefix opens a window, and all of them end where the run
 // ends.
@@ -222,6 +228,11 @@ func benchPrefixRunsBody() string {
 	run := strings.Repeat("ghp_", (maxHold-64)/4) + " "
 	return strings.Repeat(run, (1<<20)/len(run))
 }
+
+// A megabyte of one prefix in upper case, each hit too short to open a
+// window. The anchor byte of the folded search ('k' of akia) is then in
+// the body in one case only.
+func benchOneCaseBody() string { return strings.Repeat("AKIA ", (1<<20)/5) }
 
 // benchTokenReads measures the token stream alone in reads of n bytes.
 func benchTokenReads(b *testing.B, body string, n int) {
@@ -262,3 +273,5 @@ func BenchmarkTokenPrefixRunReplace(b *testing.B)  { benchTokenReplace(b, benchP
 func BenchmarkTokenPrefixRunsReplace(b *testing.B) { benchTokenReplace(b, benchPrefixRunsBody()) }
 func BenchmarkTokenCleanReplace(b *testing.B)      { benchTokenReplace(b, benchCleanBody()) }
 func BenchmarkTokenTokensReplace(b *testing.B)     { benchTokenReplace(b, benchTokenBody()) }
+func BenchmarkTokenOneCaseReads16K(b *testing.B)   { benchTokenReads(b, benchOneCaseBody(), 16<<10) }
+func BenchmarkTokenOneCaseReplace(b *testing.B)    { benchTokenReplace(b, benchOneCaseBody()) }
