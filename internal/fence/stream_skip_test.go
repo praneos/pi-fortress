@@ -284,7 +284,7 @@ func TestHitIsTheOkOfSpan(t *testing.T) {
 			continue
 		}
 		ts, s := sets[i%len(sets)], rng.IntN(len(b))
-		if _, ok := ts.span(b, s); ts.hit(b, s) != ok {
+		if _, ok := ts.span(b, s, new(tokenRun)); ts.hit(b, s) != ok {
 			t.Fatalf("hit and span disagree at %d of %q", s, b)
 		}
 	}
