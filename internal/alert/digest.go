@@ -116,7 +116,10 @@ func (d *Digest) load(now time.Time) {
 	}
 }
 
-// save replaces the state file in one rename.
+// save replaces the state file in one rename. The file has the names of
+// the open window before the redaction of the post. Only the alert service
+// reads it, so it is 0600. A temp file that a stop left is removed first:
+// a new file gets the mode, an old file keeps its own mode.
 func (d *Digest) save() {
 	if d.StatePath == "" {
 		return
@@ -125,8 +128,16 @@ func (d *Digest) save() {
 	if err == nil {
 		tmp := d.StatePath + ".tmp"
 		if err = os.MkdirAll(filepath.Dir(d.StatePath), 0o755); err == nil {
-			if err = os.WriteFile(tmp, append(raw, '\n'), 0o644); err == nil {
-				err = os.Rename(tmp, d.StatePath)
+			_ = os.Remove(tmp)
+			var f *os.File
+			if f, err = os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); err == nil {
+				_, err = f.Write(append(raw, '\n'))
+				if cerr := f.Close(); err == nil {
+					err = cerr
+				}
+				if err == nil {
+					err = os.Rename(tmp, d.StatePath)
+				}
 			}
 		}
 	}

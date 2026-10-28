@@ -293,7 +293,7 @@ Between two counts, `pf observe` keeps a maximum of 512 destinations for each se
 
 A digest shows the zone of a name that has the shape of a key or a placeholder, for example `(redacted).example.com`. It never shows the full name. `pf observe` sends its counts to `pf alert` each time that it writes its ledger. This occurs each 15 minutes by default. Thus a block can be in the digest of the next window.
 
-The alert service keeps the open window in `/var/lib/pi-fortress/alert/digest.json`. After a restart, the service continues the same window. It does not send a digest two times. If the service stops while a digest is not yet sent, you lose that digest only.
+The alert service keeps the open window in `/var/lib/pi-fortress/alert/digest.json`. After a restart, the service continues the same window. It does not send a digest two times. If the service stops while a digest is not yet sent, you lose that digest only. The file has the full names of the window, before the redaction of the post. Thus its mode is `0600`, and only the alert service (`pf-sidecar`) can read it.
 
 | Flag | Meaning | Default |
 |---|---|---|
