@@ -1734,6 +1734,25 @@ for _l in NoNewPrivileges=yes PrivateTmp=yes PrivateDevices=yes ProtectHome=yes 
   'AmbientCapabilities=CAP_NET_ADMIN' 'RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK'; do
   grep -qxF "${_l}" "${here}/wg-alert.service" || fail "wg-alert.service has no '${_l}'"
 done
+# The update check runs as the alert sidecar with no capability. It keeps
+# /lib/modules visible (no ProtectKernelModules) to compare the kernels.
+for _l in User=pf-sidecar 'CapabilityBoundingSet=' NoNewPrivileges=yes PrivateTmp=yes PrivateDevices=yes \
+  ProtectHome=yes ProtectSystem=strict ProtectKernelTunables=yes ProtectKernelLogs=yes ProtectControlGroups=yes \
+  ProtectClock=yes RestrictNamespaces=yes RestrictRealtime=yes RestrictSUIDSGID=yes LockPersonality=yes \
+  MemoryDenyWriteExecute=yes SystemCallArchitectures=native SystemCallFilter=@system-service \
+  SystemCallFilter=~@privileged SystemCallErrorNumber=EPERM 'ExecStart=/usr/local/sbin/pf alert updates' \
+  'ReadWritePaths=/var/lib/pi-fortress/updates.last'; do
+  grep -qxF "${_l}" "${here}/update-check.service" || fail "update-check.service has no '${_l}'"
+done
+grep -q '^ProtectKernelModules=' "${here}/update-check.service" &&
+  fail "update-check.service hides /lib/modules; the kernel check would see no installed kernel"
+grep -qF 'const DefaultUpdatesLast = "/var/lib/pi-fortress/updates.last"' "${here}/../../internal/cli/updates.go" ||
+  fail "pf alert updates does not write the updates.last that update-check.service names"
+_mk="$(grep -nxF '  touch /var/lib/pi-fortress/updates.last' "${apply}" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nF 'systemctl enable --now pi-fortress-update-check.timer' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "apply does not make updates.last before it enables the update-check timer"
+
 # apply puts the WireGuard interface name in place of each wg0.
 [[ "$(grep -c wg0 "${here}/wg-alert.service")" -eq 2 ]] ||
   fail "wg-alert.service names wg0 outside After= and ExecStart=; apply replaces each one"
@@ -1847,7 +1866,8 @@ harden_run() {
 printf 'PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"\nID=debian\nVERSION_CODENAME=bookworm\n' >"${hroot}/os-release"
 harden_run uu 2>"${hroot}/err" || fail "the hardening steps failed: $(cat "${hroot}/err")"
 cp "${hroot}/sysctl.d/99-pi-fortress.conf" "${tmp}/sysctl.conf"
-for _l in kernel.kptr_restrict=2 kernel.yama.ptrace_scope=2 fs.protected_regular=2 net.ipv4.tcp_syncookies=1; do
+for _l in kernel.kptr_restrict=2 kernel.yama.ptrace_scope=2 fs.protected_regular=2 net.ipv4.tcp_syncookies=1 \
+  kernel.io_uring_disabled=2 net.mptcp.enabled=0; do
   grep -qxF "${_l}" "${tmp}/sysctl.conf" || fail "99-pi-fortress.conf lacks ${_l}"
 done
 grep -qF 'label=Debian-Security' "${hroot}/apt.conf.d/52-pi-fortress-upgrades" || fail "no security origin in 52-pi-fortress-upgrades"

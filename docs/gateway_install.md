@@ -186,6 +186,17 @@ To install the OS updates at once, run `sudo apt update && sudo apt full-upgrade
 
 Plan the reboot: `sudo reboot`. The agents have no gateway while it starts.
 
+`pi-fortress-update-check.timer` runs `pf alert updates` each day at about 12:00 and 15 minutes after a boot. It posts to the webhook of `alert.url` when one of these things waits for you:
+
+- A reboot: the flag, or a newer kernel than the one that runs (as the `reboot` rung).
+- A bootloader image (Raspberry Pi with an EEPROM bootloader): one that `rpi-eeprom-update -a` staged and that flashes at the next reboot, or a newer one in the `rpi-eeprom` package for the release in `/etc/default/rpi-eeprom-update`. The package does not flash the EEPROM itself.
+- An update from an origin that `unattended-upgrades` installs (the security archive, the Raspberry Pi archive) that is still not installed 36 hours after the apt lists first showed it. Then `unattended-upgrades` fails or holds it: see `/var/log/unattended-upgrades`.
+- A new major release: the apt lists say that the Debian release of the box is now `oldstable`.
+
+It posts when this list changes, also when it becomes empty (for example after the reboot), and again each 7 days while the list stays. The state is in `/var/lib/pi-fortress/updates.last`. The unit runs as `pf-sidecar` with no capability, and runs `apt-get -s`, which changes nothing.
+
+The kernel has MPTCP and io_uring off (`net.mptcp.enabled=0`, `kernel.io_uring_disabled=2` in `/etc/sysctl.d/99-pi-fortress.conf`). No pf daemon and no service of the box uses them. The pf binary also listens and dials with plain TCP (`godebug multipathtcp=0` in `go.mod`).
+
 A Go daemon reads the system CA roots one time, when it starts. Thus `apply.sh` installs the apt hook `/etc/apt/apt.conf.d/60pi-fortress-ca`. After each dpkg run, it runs `/usr/local/lib/pi-fortress/ca-restart.sh`. When `/etc/ssl/certs/ca-certificates.crt` is different from the last run, the script restarts the running units of pf-broker, pf dns (`pi-fortress-dns-agent-go`, `pi-fortress-dns-stub@*`) and pf alert. The last hash is in `/var/lib/pi-fortress/ca-bundle.sha256` (mode 0600). The hook writes nothing to the terminal and never fails the apt run. The journal tag of a restart is `pi-fortress-ca`.
 
 A broker start locks a sealed credential store again. Thus with a sealed store (`#pf-sealed` header in `secrets.env`, or a store that the script cannot read), the hook does not restart pf-broker. It restarts pf dns and pf alert, and writes the time to `/var/lib/pi-fortress/ca-restart-pending` (mode 0600). While that file is there, `pf doctor` warns on rung `ca`. When you can unlock, run `sudo systemctl restart pi-fortress-broker.service`, then `sudo pf unlock`. Each broker start (also the restart of a `pf apply`) removes the file (`ExecStartPost` in `pf-broker.service`).

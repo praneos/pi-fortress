@@ -2221,6 +2221,20 @@ for _f in /var/lib/pi-fortress/alert.offset /var/lib/pi-fortress/alert.last /var
   chmod 0644 "${_f}"
 done
 
+# The daily update check (pf alert updates) also runs as pf-sidecar. Its
+# state file is the one path that update-check.service can write, and the
+# unit does not start without it.
+if [[ -f "${PI_LIB}/update-check.service" && -f "${PI_LIB}/update-check.timer" ]]; then
+  install -m 0644 "${PI_LIB}/update-check.service" /etc/systemd/system/pi-fortress-update-check.service
+  install -m 0644 "${PI_LIB}/update-check.timer" /etc/systemd/system/pi-fortress-update-check.timer
+  touch /var/lib/pi-fortress/updates.last
+  chown pf-sidecar:pf-fortress /var/lib/pi-fortress/updates.last
+  chmod 0644 /var/lib/pi-fortress/updates.last
+  systemctl daemon-reload
+  systemctl enable --now pi-fortress-update-check.timer >/dev/null 2>&1 \
+    || echo "pi-fortress: pi-fortress-update-check.timer did not start; no post tells a reboot or update that waits (journalctl -u pi-fortress-update-check.timer)" >&2
+fi
+
 install -d -m 0755 /usr/local/lib/pi-fortress
 rm -f /usr/local/lib/pi-fortress/{alert,doh,core_policy,secrets_store,substitute,enroll,compile_policy,observe,fetch_blocklists,console,dump_streams}.py
 # alert.url is a webhook URL whose path is its bearer token. Its readers
