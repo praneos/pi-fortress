@@ -27,8 +27,10 @@ import (
 // none excludes it.
 type EyeballSpec struct {
 	Comment string `json:"comment,omitempty"`
-	// UserAgent replaces the user_agent of the spec for these feeds. Some
-	// publishers ask for a contact in it.
+	// UserAgent replaces the user_agent of the spec for all the feeds of
+	// this section, the ranges feed and each ASN feed. Some publishers ask
+	// for a contact in it. That contact then goes to each publisher of the
+	// section, not only to the one that asks.
 	UserAgent string `json:"user_agent,omitempty"`
 	// MaxRanges caps the ranges that the ranges feed can give. 0 means
 	// defaultEyeballRanges.

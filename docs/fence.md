@@ -731,6 +731,11 @@ of a table. `eyeball.allow` goes in the same way.
   range, and keeps the last good table. In the feed, the widest range of an
   eyeball network is one /8.
 
+All the feeds of the `eyeball` section get the `user_agent` of that
+section as their User-Agent. bgp.tools asks for a contact in it. If you put
+a contact there, it goes to each publisher of the section (iptoasn.com,
+bgp.tools and PeeringDB), not only to bgp.tools.
+
 Each feed has its own last-good copy, as a blocklist feed has. The table
 has the time of its oldest data. The broker loads the table again when the
 file changes, with no restart. The check fails open:
