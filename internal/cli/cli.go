@@ -42,6 +42,7 @@ func Commands() []Command {
 		{"doctor", "walk each segment: link, address, resolver, leases, DNS", runDoctor},
 		{"status", "addresses, routes, nft sets, services", runStatus},
 		{"fetch", "download blocklist feeds into policy/generated", runFetch},
+		{"feeds", "run|import (root): the feed download as pf-feeds, then the checked import of its lists", runFeeds},
 		{"compile", "merge local + generated - never_block into nft/dnsmasq files", runCompile},
 		{"render", "house.env + segments.d + DoT keys -> nftables.conf, apply.env", runRender},
 		{"nftsets", "save|restore|policy: carry the resolved-address sets across a ruleset reload", runNFTSets},
