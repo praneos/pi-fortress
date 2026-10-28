@@ -53,7 +53,9 @@ def client_env(mgmt_mac, lab_mac)
 end
 
 Vagrant.configure("2") do |config|
-  config.vm.box = ENV.fetch("PF_BOX", "debian/bookworm64")
+  # Debian 13, as Raspberry Pi OS trixie on the Pi. PF_BOX=debian/bookworm64
+  # runs the lab on Debian 12, the other supported release.
+  config.vm.box = ENV.fetch("PF_BOX", "debian/trixie64")
   config.vm.box_check_update = false
   config.vm.boot_timeout = 600
   # One-way copy: root in a client VM must not edit what the host runs next.

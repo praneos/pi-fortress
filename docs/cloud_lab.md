@@ -191,7 +191,7 @@ Options (set as environment variables before `up`):
 | Env | Default | Meaning |
 |---|---|---|
 | `PF_AGENT_COUNT` | `2` | number of agent VMs, 1 to 3 |
-| `PF_BOX` | `debian/bookworm64` | base VM image |
+| `PF_BOX` | `debian/trixie64` | base VM image. `debian/bookworm64` runs the lab on Debian 12, the other supported release. A change of box needs `lab.sh destroy`, then `lab.sh up` |
 | `PF_E2E_REBOOT` | unset | `1` lets the tests reboot `gw` and `desk` |
 | `PF_E2E_DESTRUCTIVE` | unset | `1` runs the lab-only groups (`strip`, `secrets`, `setup`, `enroll`, `seg-dhcp`, `desk-inspect`, `tui`) against `PF_TARGET=pi`. These groups seed secrets, truncate logs and enroll the agent again. Use it only for a fresh Pi with nothing to keep. For the length of the run, it also lends the Pi the `pf-core-echo.test` fixture: `touch /etc/pi-fortress/lab`, the `pf-core-echo.test *` line in `core.hosts`, and `pf apply --local`. Thus, the `secrets` group and the two `enroll` subtests that read the echo run on hardware, and do not skip. Nothing opens: the broker synthesises the echo in process, and `192.0.2.0/24` is already carved out of the agent gate on every box. The teardown copies the baseline back from `/var/lib/pi-fortress/e2e-echo`, applies again and `cmp`s each file. The teardown runs also when tests fail. The next run recovers a run that was killed. Without `PF_E2E_DESTRUCTIVE`, the suite does not lend this fixture to a real Pi, and those subtests skip as before. The suite still makes small changes on a real Pi. Section 5 lists them |
 
