@@ -9,10 +9,11 @@ import (
 	"pi-fortress/internal/testsupport"
 )
 
-// netgate holds CAP_NET_ADMIN. A reviewer reads all of its code, so its
-// non-test files import the standard library and these small packages of
-// this module, and nothing else: no other module, no parser of network
-// bytes. The check follows each package of this module that it reaches.
+// netgate holds CAP_NET_ADMIN, so all of its code must be small enough to
+// read in full. Its non-test files import the standard library and these
+// small packages of this module, and nothing else: no other module, no
+// parser of network bytes. The check follows each package of this module
+// that it reaches.
 var netgateMayImport = map[string]bool{
 	"pi-fortress/internal/gateset": true,
 	"pi-fortress/internal/nfq":     true,
