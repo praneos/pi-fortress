@@ -30,6 +30,7 @@ import (
 	"pi-fortress/internal/base"
 	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/dnslog"
+	"pi-fortress/internal/gateset"
 )
 
 const (
@@ -300,7 +301,7 @@ func New(cfg Config) (*Server, error) {
 		linkEvents:   routeEvents,
 	}
 	if s.nft == nil {
-		s.nft = &nftCmd{table: cfg.NFTTable}
+		s.nft = &gateset.Cmd{Table: cfg.NFTTable}
 	}
 	seen := map[string]bool{}
 	names := map[string]bool{}
@@ -933,7 +934,7 @@ func (s *Server) answer(ctx context.Context, seg *Segment, src netip.Addr, req [
 	// the address as a direct dial, which it is. Only this upstream path
 	// filters. A fixture in the local list is the word of the operator. It
 	// goes in as written.
-	addrs = public(addrs)
+	addrs = gateset.Public(addrs)
 	// An address-only A answer gives the client the first maxFlatA
 	// addresses (flattenA). The gate set gets the first maxFlatA public
 	// addresses, which include each public address that the client gets.

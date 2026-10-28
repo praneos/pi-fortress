@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"golang.org/x/net/dns/dnsmessage"
+
+	"pi-fortress/internal/gateset"
 )
 
 func randomID() (uint16, error) {
@@ -326,46 +328,10 @@ func negTTL(msg []byte) (uint32, bool) {
 	return min(ttl, maxNegTTL), true
 }
 
-// localV4 is what --stop-dns-rebind refused beyond what netip already
-// names: this network, CGNAT, the benchmark range and class E.
-var localV4 = []netip.Prefix{
-	netip.MustParsePrefix("0.0.0.0/8"),
-	netip.MustParsePrefix("100.64.0.0/10"),
-	netip.MustParsePrefix("198.18.0.0/15"),
-	netip.MustParsePrefix("240.0.0.0/4"),
-}
-
-// public drops each address that a gate set must not learn from an
-// upstream: private, loopback, link-local, multicast, unspecified and the
-// ranges in localV4. It filters the slice in place.
-func public(addrs []netip.Addr) []netip.Addr {
-	out := addrs[:0]
-next:
-	for _, a := range addrs {
-		a = a.Unmap()
-		if a.IsPrivate() || a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsMulticast() || a.IsUnspecified() {
-			continue
-		}
-		for _, p := range localV4 {
-			if p.Contains(a) {
-				continue next
-			}
-		}
-		out = append(out, a)
-	}
-	return out
-}
-
 // maxGateA is the number of addresses that one answer can put in the gate
-// set when the client gets the full answer: the house, and a type that
-// dns_types.allow forwards. An address-only A answer uses maxFlatA, the
-// number of addresses that the client gets. Each answer adds its
-// addresses to a set with a size (render resolvedSetSize). Without a
-// limit, one large answer over TCP (about 4000 A records) could use a
-// large part of that size. 64 is four times maxFlatA. A client that
-// connects to an address after the first 64 meets the gate drop, the same
-// as for an address that this box did not resolve.
-const maxGateA = 64
+// set when the client gets the full answer (gateset.MaxA gives the
+// reason). The writer of the set refuses a larger write.
+const maxGateA = gateset.MaxA
 
 // gateAddrs returns the first n distinct addresses of addrs, in the order
 // of the answer. An address that is in the answer two times goes to nft

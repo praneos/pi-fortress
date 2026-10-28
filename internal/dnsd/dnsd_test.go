@@ -19,6 +19,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 
 	"pi-fortress/internal/dnslog"
+	"pi-fortress/internal/gateset"
 )
 
 // fakeNFT records the writes, and a test can make it fail. This is how
@@ -409,7 +410,7 @@ func TestARebindIsAnsweredButNeverAdmitted(t *testing.T) {
 	if got := h.nft.flat(); len(got) != 0 {
 		t.Fatalf("gate set learned %v", got)
 	}
-	if got := public([]netip.Addr{netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("172.16.0.1"), netip.MustParseAddr("::ffff:10.0.0.1")}); len(got) != 1 || got[0].String() != "8.8.8.8" {
+	if got := gateset.Public([]netip.Addr{netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("172.16.0.1"), netip.MustParseAddr("::ffff:10.0.0.1")}); len(got) != 1 || got[0].String() != "8.8.8.8" {
 		t.Fatalf("public %v", got)
 	}
 }
