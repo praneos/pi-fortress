@@ -76,7 +76,7 @@ func (s *Server) serveSNI(c *net.UnixConn, first []byte) {
 	}
 	s.cfg.Logf("pf netgate: SNI queue %d: bound for pf dns", num)
 	r.run(s.cfg.sniSweep)
-	s.cfg.Logf("pf netgate: SNI queue %d: pf dns went away; the queue is closed, and the kernel drops its packets", num)
+	s.cfg.Logf("pf netgate: SNI queue %d: the relay ended; the queue is closed, and the kernel drops its packets", num)
 }
 
 func (s *Server) claimQueue(num uint16) bool {
@@ -167,7 +167,12 @@ func (r *relay) fromQueue() {
 			return
 		}
 		msg, err := encodePacket(p)
-		if err != nil || !r.hold(p) {
+		if err != nil {
+			r.say("SNI queue %d: %v; dropped", r.num, err)
+			r.drop(p.ID)
+			continue
+		}
+		if !r.hold(p) {
 			r.say("SNI queue %d: packet %d dropped: %d packets wait for a verdict", r.num, p.ID, r.max)
 			r.drop(p.ID)
 			continue

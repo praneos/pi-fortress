@@ -131,6 +131,27 @@ func houseTests(t *testing.T) {
 		mustFailOn(t, "house", "curl -sS --noproxy '*' -o /dev/null --max-time 5 --resolve "+stranger+":443:"+ip+" https://"+stranger+"/")
 		kernLog(t, since, "pi-fortress house-sni: ", "DST="+ip+" ")
 	})
+	// pf dns has no CAP_NET_ADMIN. pf netgate binds the SNI queue of the
+	// house and relays it to pf dns, so the queue belongs to the netgate
+	// process (render.SNIQueue is 1). The subtest above used that relay.
+	t.Run("netgate binds the SNI queue", func(t *testing.T) {
+		if !sniCheck {
+			t.Skip("HOUSE_BLOCK_DIRECT_IP=off")
+		}
+		pid := mainPID(t, "pi-fortress-netgate")
+		eventually(t, 15*time.Second, func() string {
+			out := pi(t, "sudo cat /proc/net/netfilter/nfnetlink_queue 2>/dev/null || true")
+			for line := range strings.SplitSeq(out, "\n") {
+				if f := strings.Fields(line); len(f) >= 2 && f[0] == "1" {
+					if f[1] == pid {
+						return ""
+					}
+					return "queue 1 is bound by portid " + f[1] + ", not by netgate (pid " + pid + ")"
+				}
+			}
+			return "nothing binds the SNI queue 1:\n" + out
+		})
+	})
 	t.Run("plain HTTP follows HOUSE_BLOCK_HTTP", func(t *testing.T) {
 		url := "http://" + allow + "/"
 		if !httpBlocked {
