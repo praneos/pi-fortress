@@ -15,6 +15,9 @@ type chunkedReader struct {
 	err     error
 	started bool
 	excess  int64
+	// last says that Read found the last chunk after data that it already
+	// had. The trailers come in the next call.
+	last bool
 }
 
 // maxChunkExcess is the limit on the framing count of overhead.
@@ -24,6 +27,12 @@ func newChunkedReader(br *bufio.Reader) io.Reader {
 	return &chunkedReader{br: br}
 }
 
+// Read gives the data of all the chunks that p has space for, as net/http
+// does. Before, it gave one chunk for each call. Thus a body in chunks of
+// one byte cost one call for each byte in each filter above it. After the
+// first data, Read continues only on bytes that are already in the
+// buffer. It never waits for more input when it has data to give, so a
+// stream of small chunks still passes immediately.
 func (c *chunkedReader) Read(p []byte) (int, error) {
 	if c.err != nil {
 		return 0, c.err
@@ -31,51 +40,99 @@ func (c *chunkedReader) Read(p []byte) (int, error) {
 	if c.done {
 		return 0, io.EOF
 	}
-	for c.n == 0 {
-		if c.started {
-			// The CRLF after the data of a chunk must be exactly that. Before, the
-			// code read a line and dropped it, so anything up to the next LF could
-			// stand in for it.
-			end, err := c.framing()
+	if c.last {
+		return c.trailers()
+	}
+	n := 0
+	for {
+		if n > 0 && (n == len(p) || !c.more()) {
+			return n, nil
+		}
+		if c.n == 0 {
+			size, err := c.next()
 			if err != nil {
+				if n > 0 {
+					// The data before the error goes out first, and the next call
+					// gives the error. This is the order that one chunk for each
+					// call gave.
+					c.err = err
+					return n, nil
+				}
 				return c.fail(err)
 			}
-			if end != "" {
-				return c.fail(ErrBadRequest)
+			if size == 0 {
+				if n > 0 {
+					c.last = true
+					return n, nil
+				}
+				return c.trailers()
 			}
+			c.n = size
+			continue
 		}
-		c.started = true
-		// net/http reads the size line in a 4 KiB buffer and refuses a longer
-		// line. Before, this code read up to 8 KiB. Thus a long chunk
-		// extension framed here and the stdlib refused the body.
-		line, err := c.framingMax(maxChunkLine)
+		q := p[n:]
+		if int64(len(q)) > c.n {
+			q = q[:c.n]
+		}
+		k, err := c.br.Read(q)
+		n += k
+		c.n -= int64(k)
+		if err != nil && err != io.EOF {
+			c.err = err
+			return n, err
+		}
+		if err == io.EOF && c.n > 0 {
+			c.err = io.ErrUnexpectedEOF
+			return n, c.err
+		}
+		if k == 0 {
+			return n, nil
+		}
+	}
+}
+
+// more says whether Read can continue without a wait for input: the rest
+// of the chunk data, or else the framing before the next chunk, is in the
+// buffer. The framing is the CRLF after the data and the full size line.
+// This is chunkHeaderAvailable of net/http, with the CRLF added.
+func (c *chunkedReader) more() bool {
+	if c.n > 0 {
+		return c.br.Buffered() > 0
+	}
+	b, _ := c.br.Peek(c.br.Buffered())
+	i := bytes.IndexByte(b, '\n')
+	return i >= 0 && bytes.IndexByte(b[i+1:], '\n') >= 0
+}
+
+// next reads the framing before the data of a chunk and returns the size
+// of the chunk.
+func (c *chunkedReader) next() (int64, error) {
+	if c.started {
+		// The CRLF after the data of a chunk must be exactly that. Before, the
+		// code read a line and dropped it, so anything up to the next LF could
+		// stand in for it.
+		end, err := c.framing()
 		if err != nil {
-			return c.fail(err)
+			return 0, err
 		}
-		n, err := chunkSize(line)
-		if err != nil {
-			return c.fail(err)
+		if end != "" {
+			return 0, ErrBadRequest
 		}
-		if !c.overhead(len(line), n) {
-			return c.fail(ErrBadRequest)
-		}
-		if n == 0 {
-			return c.trailers()
-		}
-		c.n = n
 	}
-	if int64(len(p)) > c.n {
-		p = p[:c.n]
+	c.started = true
+	// net/http reads the size line in a 4 KiB buffer and refuses a longer
+	// line. Before, this code read up to 8 KiB. Thus a long chunk
+	// extension framed here and the stdlib refused the body.
+	line, err := c.framingMax(maxChunkLine)
+	if err != nil {
+		return 0, err
 	}
-	n, err := c.br.Read(p)
-	c.n -= int64(n)
-	if err != nil && err != io.EOF {
-		c.err = err
-		return n, err
+	n, err := chunkSize(line)
+	if err != nil {
+		return 0, err
 	}
-	if err == io.EOF && c.n > 0 {
-		c.err = io.ErrUnexpectedEOF
-		return n, c.err
+	if !c.overhead(len(line), n) {
+		return 0, ErrBadRequest
 	}
 	return n, nil
 }
