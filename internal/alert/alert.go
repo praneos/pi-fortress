@@ -462,16 +462,25 @@ func kindOf(event map[string]any) string {
 // keyAlert is a row about a credential or a key: a stripped literal slot
 // secret, a refusal that the broker marked to alert, a key in a DNS name, a
 // bulk upload. These rows have their own hourly budget (webhookCap).
+//
+// An eyeball row is not about a key. The broker marks one to alert for
+// each new name and ASN pair, and the agent selects the names. So
+// those rows go on the ordinary budget, and a run of them cannot use the
+// posts that a stripped secret needs.
 func keyAlert(event map[string]any) bool {
 	switch tailer.Field(event, "threat", "") {
 	case "dns_key", "volume":
 		return true
 	}
 	if tailer.Field(event, "ev", "") == refusedEv {
-		return true
+		return tailer.Field(event, "cause", "") != eyeballCause
 	}
 	return strings.HasPrefix(tailer.Field(event, "rule", ""), "secret:")
 }
+
+// eyeballCause is the cause of an eyeball row (internal/broker
+// CauseEyeball).
+const eyeballCause = "eyeball_network"
 
 // postable decides what reaches the webhook. A strip is the incident by
 // definition: the agent already had the secret. A refusal is not always an
