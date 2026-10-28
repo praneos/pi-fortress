@@ -4,8 +4,9 @@ import "syscall"
 
 // bindToDevice pins an upstream socket to one interface before it
 // connects. It is the dial half of what control in serve.go does for the
-// listeners. pf dns runs with CAP_NET_RAW (vm/pi/dns-agent-go.service).
-// The option needs this capability.
+// listeners. The socket is new, and no device pins it yet. Linux 5.7 and
+// later let a process with no capability set the option on such a socket.
+// Thus pf dns runs without CAP_NET_RAW (vm/pi/dns-agent-go.service).
 func bindToDevice(iface string) func(network, address string, c syscall.RawConn) error {
 	return func(_, _ string, c syscall.RawConn) error {
 		var serr error

@@ -281,7 +281,8 @@ func ifIndexes() (map[string]int, error) {
 	return idx, nil
 }
 
-// pinToDevice is SO_BINDTODEVICE. The unit gives pf dns CAP_NET_RAW for it.
+// pinToDevice is SO_BINDTODEVICE, on a new socket before its bind. It
+// needs no capability (bindToDevice gives the reason).
 func pinToDevice(fd int, iface string) error {
 	return syscall.SetsockoptString(fd, syscall.SOL_SOCKET, syscall.SO_BINDTODEVICE, iface)
 }

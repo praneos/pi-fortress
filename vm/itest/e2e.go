@@ -318,7 +318,7 @@ func reboot(t *testing.T, host string) {
 
 // Capability bits, for the bounding sets the sandboxed daemons keep.
 // CapBnd in /proc/<pid>/status is that mask in hex, so the three net
-// capabilities a resolver or a DHCP server needs read 0x3400.
+// capabilities that a DHCP server needs read 0x3400.
 const (
 	capNetBindService = 1 << 10
 	capNetAdmin       = 1 << 12

@@ -28,7 +28,8 @@ const bindLogEvery = time.Minute
 // It applies only to the initial bind. The two cases are different
 // failures. A socket that never bound one time has a configuration that
 // cannot work: an address that is not on this box, a port that is
-// already in use, an interface that will never exist, or no CAP_NET_RAW.
+// already in use, an interface that will never exist, or a kernel older
+// than 5.7 that refuses the device pin to a process with no CAP_NET_RAW.
 // More time does not fix it. Meanwhile, the process stays up and the unit
 // stays healthy, with no resolver behind it. A socket that served and
 // then lost its address has a cable, adapter or reconfiguration problem.
@@ -149,14 +150,15 @@ func (s *Server) control(seg *Segment, pinErr *error) func(string, string, sysca
 // interface. An unpinned socket would answer all that reaches the address
 // by any route. The segment exists to draw that boundary. Thus this
 // function fails closed and lets retry try again. An interface that is
-// not up yet heals. A box without CAP_NET_RAW never heals, and must
-// report it loudly, not quietly serve wider than asked. retry does not
-// log, so this function writes the line here, on each attempt.
+// not up yet heals. A kernel that refuses the pin itself (older than
+// 5.7, with no CAP_NET_RAW) never heals, and must report it loudly, not
+// quietly serve wider than asked. retry does not log, so this function
+// writes the line here, on each attempt.
 func (s *Server) refusePin(seg *Segment, network string, err error) error {
 	if err == nil {
 		return nil
 	}
-	s.logf("dns %s %s: refusing to serve %s unpinned: SO_BINDTODEVICE failed (needs CAP_NET_RAW): %v",
+	s.logf("dns %s %s: refusing to serve %s unpinned: SO_BINDTODEVICE failed: %v",
 		seg.Iface, network, s.addr(seg), err)
 	return fmt.Errorf("segment %q: cannot pin %s to %s: %w", seg.Name, network, seg.Iface, err)
 }

@@ -441,7 +441,7 @@ func dnsSegmentTests(t *testing.T) {
 	t.Run("the resolver runs boxed in", func(t *testing.T) {
 		since := piClock(t)
 		pid, filter := unitSandbox(t, "pi-fortress-dns-agent-go", "pf-dns",
-			capNetBindService|capNetAdmin|capNetRaw)
+			capNetBindService|capNetAdmin)
 		// No @chown re-add, unlike the DHCP daemon: no code that pf dns
 		// reaches chowns a file. It reopens its log with O_APPEND and
 		// keeps the owner that apply.sh gave it.
@@ -490,7 +490,7 @@ func dnsSegmentTests(t *testing.T) {
 		}
 		since := piClock(t)
 		pid, _ := unitSandbox(t, "pi-fortress-dns-stub@main", "pf-dns",
-			capNetBindService|capNetRaw)
+			capNetBindService)
 		// Through the stub and out over TLS. On the Pi, not on the agent:
 		// the lookups of the box go to 127.0.0.1, and the stub binds
 		// nothing else.

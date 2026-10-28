@@ -1538,8 +1538,19 @@ grep -q 'lab_echo' "${here}/apply.sh" ||
 unit="${here}/dns-agent-go.service"
 [[ -f "${unit}" ]] || fail "vm/pi/dns-agent-go.service is missing"
 grep -q '^User=pf-dns' "${unit}" || fail "dns-agent-go.service does not drop to pf-dns"
-grep -qE '^CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_NET_RAW$' "${unit}" ||
-  fail "dns-agent-go.service bounding set is not the three net capabilities"
+grep -qE '^CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN$' "${unit}" ||
+  fail "dns-agent-go.service bounding set is not port 53 and the nft fork"
+grep -qxF 'AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN' "${unit}" ||
+  fail "dns-agent-go.service does not give the two capabilities to pf dns and its nft fork"
+# pf dns pins each socket to its interface before it binds or connects it.
+# Linux 5.7 and later allow that with no capability. Thus neither pf dns
+# unit has NET_RAW.
+for _u in dns-agent-go dns-stub@; do
+  grep -vE '^[[:space:]]*#' "${here}/${_u}.service" | grep -q 'CAP_NET_RAW' &&
+    fail "${_u}.service has CAP_NET_RAW, which the device pin of a new socket does not need"
+done
+grep -qxF 'CapabilityBoundingSet=CAP_NET_BIND_SERVICE' "${here}/dns-stub@.service" ||
+  fail "dns-stub@.service bounding set is not port 53 only"
 grep -q 'CAP_SET\|CAP_CHOWN\|CAP_DAC_OVERRIDE' "${unit}" &&
   fail "dns-agent-go.service kept a dnsmasq privilege-drop capability"
 # Only the log directory and the directory of the fake-IP journal. The "-"
