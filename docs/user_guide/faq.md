@@ -243,7 +243,7 @@ With a terminal tool, `pf tui`. Run it over ssh or at the seat.
 
 There is no web console. No management service listens on the network. The policy is in plain text files. `pf apply` applies them. There are two groups of files:
 
-- The lists (blocklists, `never_block`, `ssh_allow.ips` and similar lists) are in `/opt/pi-fortress/vm/policy/`. `pf apply` compiles from these files. The TUI and `pf fetch` edit them.
+- The lists (blocklists, `never_block`, `ssh_allow.ips` and similar lists) are in `/opt/pi-fortress/vm/policy/`. `pf apply` compiles from these files. The TUI and `pf feeds run` edit them.
 - The settings, such as `net.env.local` and `house.env`, are in `/etc/pi-fortress`.
 
 The Devices and Activity sections of the TUI show this data for each device:

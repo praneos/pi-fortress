@@ -238,14 +238,17 @@ func (c *Config) Apply(ctx context.Context, local bool, w io.Writer) error {
 	return c.stream(ctx, w, argv...)
 }
 
-// Fetch writes generated/ like apply does, so it holds the same lock.
+// Fetch writes generated/ like apply does, so it holds the same lock. It
+// runs pf feeds run, which starts the download unit (pf fetch as
+// pf-feeds) and imports its checked lists. The child inherits the lock
+// descriptor and uses it.
 func (c *Config) Fetch(ctx context.Context, w io.Writer) error {
 	lock, err := TryLock(c.LockPath)
 	if err != nil {
 		return err
 	}
 	defer lock.Release()
-	return c.stream(ctx, w, append(slices.Clone(c.PfCmd), "fetch")...)
+	return c.stream(ctx, w, append(slices.Clone(c.PfCmd), "feeds", "run", "--fresh", "0")...)
 }
 
 func (c *Config) systemctl(verb string, args ...string) error {

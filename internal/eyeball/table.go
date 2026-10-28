@@ -194,6 +194,12 @@ func Write(w io.Writer, built time.Time, rs []Range) error {
 	return bw.Flush()
 }
 
+// Encode writes t in the form of Write. A table from Parse gives a file
+// that Parse reads back to the same table.
+func (t *Table) Encode(w io.Writer) error {
+	return Write(w, t.Built, t.ranges)
+}
+
 var (
 	errMagic = errors.New("eyeball table: first line is not " + Magic)
 	errBuilt = errors.New("eyeball table: no '# built' line")

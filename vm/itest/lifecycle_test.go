@@ -276,6 +276,14 @@ func lifecycleTests(t *testing.T) {
 	// The later steps roll back and revert the box. With no N-1 and N
 	// from this run, a rollback goes to a tree from before the run.
 	shipped := t.Run("ship N-1 then N, post-upgrade doctor passes", func(t *testing.T) {
+		since := strings.TrimSpace(pi(t, "date +%s"))
+		// The apply of a ship gets the feeds through the download unit
+		// (pf fetch as pf-feeds), never as root.
+		defer func() {
+			if j := pi(t, "sudo journalctl -u pi-fortress-feeds.service --since @"+since+" -o cat --no-pager | tail -20"); strings.TrimSpace(j) == "" {
+				t.Errorf("no run of pi-fortress-feeds.service during the ships")
+			}
+		}()
 		bN1 := buildBundle(t, arch)
 		signBundle(t, release, bN1)
 		shipInstall(t, bN1, "")

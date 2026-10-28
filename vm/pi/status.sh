@@ -170,13 +170,18 @@ echo "--- ${P}/blacklist.ips ---"
 cat "${P}/blacklist.ips"
 echo "--- ${P}/blacklist.domains ---"
 cat "${P}/blacklist.domains"
+# The feed report holds text from the feed servers: a redirect URL and the
+# text of a TLS or HTTP error, which can hold the names in a certificate.
+# Thus this prints only TAB, newline and printable ASCII from it. An escape
+# sequence from a server does not get to the terminal of the operator.
+printable_file() { tr -cd '\11\12\40-\176' <"$1"; }
 if [[ -f "${P}/generated/fetch.report" ]]; then
   echo
   echo "== feed fetch =="
-  cat "${P}/generated/fetch.report"
+  printable_file "${P}/generated/fetch.report"
 fi
 if [[ -f "${P}/generated/sample.domain" ]]; then
-  echo "sample.domain=$(tr -d '[:space:]' < "${P}/generated/sample.domain")"
+  echo "sample.domain=$(tr -cd '\41-\176' < "${P}/generated/sample.domain")"
 fi
 echo
 echo "== observe =="

@@ -547,7 +547,7 @@ func (f *Fetcher) eyeballItems(outDir, ua string, timeout time.Duration, feed Fe
 		}
 	}
 	if why == "" {
-		if err := writeCache(outDir, feed, items); err != nil {
+		if err := f.writeCopy(outDir, feed, items); err != nil {
 			*report = append(*report, "WARN "+feed.ID+": last-good copy not saved: "+err.Error())
 		}
 		note := ""
@@ -557,7 +557,7 @@ func (f *Fetcher) eyeballItems(outDir, ua string, timeout time.Duration, feed Fe
 		*report = append(*report, fmt.Sprintf("OK %s: %d %s%s", feed.ID, len(items), eyeballLabel(feed.Kind), note))
 		return items, f.now(), true
 	}
-	cached, when, ok := readCache(outDir, feed)
+	cached, when, ok := f.readCopy(outDir, feed)
 	if !ok {
 		*report = append(*report, "FAIL "+feed.ID+": "+why)
 		return nil, time.Time{}, false
@@ -678,13 +678,13 @@ func (f *Fetcher) eyeballAfterCommit(spec Spec, outDir, ua string, timeout time.
 	n := len(*report)
 	text := f.runEyeball(spec, outDir, ua, timeout, seen, report)
 	// runEyeball adds the eyeball feeds to seen, so their copies stay.
-	pruneCache(outDir, seen)
+	pruneCacheIn(f.copies(outDir), seen)
 	if err := commitEyeball(outDir, text); err != nil {
 		*report = append(*report, "FAIL eyeball: "+err.Error())
 	}
 	if len(*report) > n {
 		// The lists are in place. A report that is not written does not
 		// make the run fail.
-		_ = commit(outDir, []struct{ name, text string }{{"fetch.report", lines(*report)}})
+		_ = commit(outDir, []struct{ name, text string }{{"fetch.report", reportText(*report)}})
 	}
 }

@@ -1,14 +1,18 @@
 // Package fetch downloads the blocklist feeds named in sources.json and parses
-// them into domain and IP lists on disk. pf fetch, the TUI and internal/admin
-// call it.
+// them into domain and IP lists on disk. pf fetch calls it, as the user
+// pf-feeds in pi-fortress-feeds.service. Run does not run as root: root
+// imports the checked lists of that unit with pf feeds run
+// (internal/feedstage).
 package fetch
 
 import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"iter"
 	"net"
 	"net/http"
@@ -21,6 +25,7 @@ import (
 	"time"
 
 	"pi-fortress/internal/base"
+	"pi-fortress/internal/feedstage"
 	"pi-fortress/internal/policycompile"
 )
 
@@ -211,7 +216,18 @@ type Fetcher struct {
 	// the feed servers twice, and a server that limits the request rate
 	// does not refuse the second request. Zero always downloads.
 	FreshFor time.Duration
-	web      *client
+	// CacheDir, when set, holds the last-good copies, in place of feeds/
+	// in the out directory.
+	CacheDir string
+	// SeedDir, when set, is read for a last-good copy that CacheDir does
+	// not have (readCopy).
+	SeedDir string
+	// RunID, when set, makes the out directory a stage for root
+	// (internal/feedstage). Run first removes the staged files of an
+	// earlier run, and writes RunID to feedstage.RunFile after all other
+	// files. Thus the stage holds the output of this run only.
+	RunID string
+	web   *client
 }
 
 func (f *Fetcher) now() time.Time {
@@ -231,7 +247,7 @@ func (f *Fetcher) freshCopy(outDir string, feed Feed) (items []string, note stri
 	if f.FreshFor <= 0 {
 		return nil, "", time.Time{}, false
 	}
-	items, when, ok = readCache(outDir, feed)
+	items, when, ok = f.readCopy(outDir, feed)
 	if !ok {
 		return nil, "", time.Time{}, false
 	}
@@ -602,10 +618,10 @@ func (s *Spec) settings() (ua string, timeout time.Duration, maxIPs, maxDoms int
 	}
 	maxIPs, maxDoms = s.MaxIPs, s.MaxDomains
 	if maxIPs == 0 {
-		maxIPs = 20000
+		maxIPs = feedstage.DefaultMaxIPs
 	}
 	if maxDoms == 0 {
-		maxDoms = 50000
+		maxDoms = feedstage.DefaultMaxDomains
 	}
 	return ua, timeout, maxIPs, maxDoms
 }
@@ -698,7 +714,7 @@ func (f *Fetcher) feedItems(outDir, ua string, timeout time.Duration, feed Feed,
 		}
 	}
 	if why == "" {
-		if err := writeCache(outDir, feed, items); err != nil {
+		if err := f.writeCopy(outDir, feed, items); err != nil {
 			// This is not a failure of this run: the feed answered, and its
 			// names are in the lists below. The next run suffers, with no
 			// fallback. So the operator learns about it now, and does not
@@ -707,7 +723,7 @@ func (f *Fetcher) feedItems(outDir, ua string, timeout time.Duration, feed Feed,
 		}
 		return items, "", cut, true
 	}
-	cached, when, ok := readCache(outDir, feed)
+	cached, when, ok := f.readCopy(outDir, feed)
 	if !ok {
 		*report = append(*report, "FAIL "+feed.ID+": "+why)
 		return nil, "", false, false
@@ -736,7 +752,7 @@ const (
 // days of STALE first, and the feed does not stay stale until somebody
 // deletes its copy.
 func (f *Fetcher) shrunk(outDir string, feed Feed, items []string, report *[]string) string {
-	cached, when, ok := readCache(outDir, feed)
+	cached, when, ok := f.readCopy(outDir, feed)
 	if !ok {
 		return ""
 	}
@@ -774,11 +790,26 @@ func anyFail(report []string) bool {
 	return false
 }
 
+// ErrRoot is the error of Run when the effective user is root. Thus no
+// root caller gets to the HTTP code, whichever caller it is.
+var ErrRoot = errors.New("pf fetch does not run as root; use pf apply or pf feeds run")
+
+// geteuid is a variable so that a test can be root.
+var geteuid = os.Geteuid
+
 func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
+	if geteuid() == 0 {
+		return nil, 0, 0, ErrRoot
+	}
 	policy := f.PolicyDir
 	outDir := f.OutDir
 	if outDir == "" {
 		outDir = filepath.Join(policy, "generated")
+	}
+	if f.RunID != "" {
+		if err := clearStage(outDir); err != nil {
+			return nil, 0, 0, err
+		}
 	}
 	spec, err := readSpec(policy)
 	if err != nil {
@@ -833,6 +864,12 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 			never, label = houseNever, house.Name+" domains"
 		}
 		kept := uniq(dropNever(items, feed.Kind, neverNets, never))
+		if toHouse {
+			// The house blocks names only: it has no IP drop, and pf
+			// compile reads its lists as names. An address there blocks
+			// nothing, so it does not go into the list.
+			kept = slices.DeleteFunc(kept, isAddr)
+		}
 		for _, item := range kept {
 			if _, dup := feedOf[item]; !dup {
 				feedOf[item] = feed.ID
@@ -874,7 +911,7 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 	domOut := capShare(domains, maxDoms, cutDoms, "domains", &report)
 	houseOut := capShare(houseDomains, maxDoms, cutHouse, house.Name+" domains", &report)
 	vpnOut := capShare(houseVPN, maxDoms, cutVPN, house.Name+" vpn domains", &report)
-	repText := lines(report)
+	repText := reportText(report)
 	// houseOut also counts. A run in which only the house feeds answered
 	// used to be called a total failure, and the house list that it did
 	// fetch was discarded with the rest. So the ad and tracker blocks, which
@@ -885,6 +922,9 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 		// so the Feeds screen does not show the OK lines of yesterday.
 		_ = commit(outDir, []struct{ name, text string }{{"fetch.report", repText}})
 		f.eyeballAfterCommit(spec, outDir, ua, timeout, seen, &report)
+		if err := f.markRun(outDir); err != nil {
+			return report, 0, 0, err
+		}
 		return report, 0, 0, fmt.Errorf("all feeds failed")
 	}
 	sampleText := ""
@@ -907,7 +947,62 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 		return report, 0, 0, err
 	}
 	f.eyeballAfterCommit(spec, outDir, ua, timeout, seen, &report)
+	if err := f.markRun(outDir); err != nil {
+		return report, 0, 0, err
+	}
 	return report, len(ipOut), len(domOut), nil
+}
+
+func isAddr(s string) bool {
+	_, err := netip.ParseAddr(s)
+	return err == nil
+}
+
+// stagedFiles are the files that a run with RunID set writes into its stage.
+func stagedFiles() []string {
+	return []string{
+		feedstage.IPsFile, feedstage.DomainsFile, feedstage.HouseDomainsFile, feedstage.HouseVPNFile,
+		feedstage.FeedsMapFile, feedstage.SampleFile, feedstage.ReportFile, feedstage.EyeballFile,
+		feedstage.RunFile,
+	}
+}
+
+// clearStage removes the staged files of an earlier run. A list that this
+// run does not write is then not in the stage, and root keeps its copy.
+func clearStage(outDir string) error {
+	for _, name := range stagedFiles() {
+		if err := os.Remove(filepath.Join(outDir, name)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
+// markRun writes the run id last, when RunID is set. Root imports the stage
+// only when this file holds the id of its request.
+func (f *Fetcher) markRun(outDir string) error {
+	if f.RunID == "" {
+		return nil
+	}
+	return commit(outDir, []struct{ name, text string }{{feedstage.RunFile, f.RunID + "\n"}})
+}
+
+// reportText is the text of the report file. A line has text from the
+// feed servers (the URL of a redirect, the text of a TLS or HTTP error).
+// Each byte outside printable ASCII becomes '?', so the file has no
+// control byte for a terminal.
+func reportText(report []string) string {
+	out := make([]string, len(report))
+	for i, l := range report {
+		b := []byte(l)
+		for j, c := range b {
+			if c < 0x20 || c > 0x7e {
+				b[j] = '?'
+			}
+		}
+		out[i] = string(b)
+	}
+	return lines(out)
 }
 
 // capShare joins the lists of the feeds, without duplicates, and keeps at
@@ -992,25 +1087,11 @@ func lines(items []string) string {
 // file over its target. So a run that dies half way leaves the previous
 // generated set in place.
 func commit(outDir string, files []struct{ name, text string }) error {
-	if err := os.MkdirAll(outDir, 0755); err != nil {
-		return err
+	out := make([]feedstage.File, len(files))
+	for i, f := range files {
+		out[i] = feedstage.File{Name: f.name, Text: []byte(f.text)}
 	}
-	tmp, err := os.MkdirTemp(outDir, ".fetch-")
-	if err != nil {
-		return err
-	}
-	defer os.RemoveAll(tmp)
-	for _, f := range files {
-		if err := os.WriteFile(filepath.Join(tmp, f.name), []byte(f.text), 0644); err != nil {
-			return err
-		}
-	}
-	for _, f := range files {
-		if err := os.Rename(filepath.Join(tmp, f.name), filepath.Join(outDir, f.name)); err != nil {
-			return err
-		}
-	}
-	return nil
+	return feedstage.Commit(outDir, out)
 }
 
 // CountWarnings reads the report lines of a run, and says how many feeds

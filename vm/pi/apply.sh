@@ -330,7 +330,13 @@ if [[ "${RENDER}" -eq 0 ]]; then
   source "${LIB_DIR}/dhcp.sh"
   # shellcheck source=lib/harden.sh
   source "${LIB_DIR}/harden.sh"
+  # shellcheck source=lib/feeds.sh
+  source "${LIB_DIR}/feeds.sh"
 fi
+# The unit directory and the input directory of the feed download
+# (lib/feeds.sh).
+FEEDS_UNITS=/etc/systemd/system
+FEEDS_IN=/var/lib/pi-fortress/feeds-in
 # The location where seg_dhcp_sync (lib/dhcp.sh) keeps the dnsmasq conf,
 # leases, log and unit of each segment. They are here, not in the lib, so
 # that this file names all that apply writes.
@@ -447,7 +453,16 @@ else
     if [[ "${REFRESH}" -eq 1 ]]; then
       _fresh=0
     fi
-    if ! "${PF}" fetch --policy "${POLICY}" --out "${POLICY}/generated" --fresh "${_fresh}"; then
+    # The download runs in pi-fortress-feeds.service as pf-feeds, with no
+    # capability (lib/feeds.sh). pf feeds run starts it, waits for it, and
+    # imports its lists into generated/ through a strict check of each
+    # line. This script does not download or parse a feed. The unit may
+    # use only lo, the uplink and WireGuard. Render finds WAN_IF later, so
+    # an empty WAN_IF takes the default route here, as render does.
+    _uplink="${WAN_IF:-${PF_WAN_IF:-}}"
+    [[ -n "${_uplink}" ]] || _uplink="$(feeds_uplink)"
+    if ! feeds_prepare "${PI_LIB}/feeds.service" "${_uplink}" "${WG_IF:-}" ||
+      ! "${PF}" feeds run --policy "${POLICY}" --fresh "${_fresh}"; then
       echo "pi-fortress: feed fetch failed; compiling from the last generated lists" >&2
       if [[ ! -s "${POLICY}/generated/blacklist.domains" ]]; then
         echo "pi-fortress: ${POLICY}/generated/blacklist.domains missing or empty; nothing to fall back on" >&2

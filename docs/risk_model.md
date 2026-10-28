@@ -196,6 +196,14 @@ an `ADMIN=yes` segment can still reach the Pi. This does not cover plain DNS,
 traffic metadata, or captive portals. For details and checks, refer to
 `user_guide/public_wifi.md`.
 
+The blocklist download is the one process of the Pi that reads feed bodies
+from the internet. It runs as `pf-feeds` with no capability, and it can use
+only `lo` and the uplink (`privilege_split.md`). Root imports only list
+lines that pass a strict check, and one bad line stops the import of all
+lists. Thus a hostile feed server or uplink can change which names and
+addresses the lists block, within the size caps, `never_block` and
+`core.hosts`. It cannot add a firewall rule.
+
 
 ## 7. Non-goals
 

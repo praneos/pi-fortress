@@ -108,7 +108,9 @@ If the floor names a version that is not the version of the tree at `/opt/pi-for
 
 A plain `pf apply` uses the last good copy of a feed when that copy is less than 30 minutes old, and does not download the feed again. Thus a ship, its rollback and a dead-man revert in a few minutes do not ask the feed servers again (a server that limits the request rate refuses the repeated request). A copy that is older, that does not parse, or whose feed changed in `sources.json` gets a download. `pf apply --refresh` (the nightly timer) downloads all feeds. Use it to get a feed now.
 
-A `pf install` box has no `/vagrant`. `apply.sh` compiles from the tree that it runs in: `/opt/pi-fortress/vm/policy`. The TUI, `pf fetch`, `pf backup`/`pf restore` and `pf status` resolve the same directory. Thus, a block or a revocation from the operator goes where apply reads it. `base.PolicyDir` selects the directory in this sequence:
+The download runs in `pi-fortress-feeds.service`, as the user `pf-feeds`, with no capability. `pf apply`, the timer and the TUI start it through `pf feeds run`. The unit writes its lists, and its last good copies in `cache/`, under `/var/lib/pi-fortress-feeds`. Then root examines each line and writes `generated/`. If one line is bad, root keeps all lists as they were, and the report (`pf status`, `generated/fetch.report`) starts with `FAIL stage`. The log of the download: `journalctl -u pi-fortress-feeds`. `pf fetch` as root exits 2.
+
+A `pf install` box has no `/vagrant`. `apply.sh` compiles from the tree that it runs in: `/opt/pi-fortress/vm/policy`. The TUI, `pf feeds run`, `pf backup`/`pf restore` and `pf status` resolve the same directory. Thus, a block or a revocation from the operator goes where apply reads it. `base.PolicyDir` selects the directory in this sequence:
 
 1. `/vagrant`, only when it holds `vm/pi/net.env` and `vm/policy`.
 2. `/opt/pi-fortress`, only when it holds `vm/pi/net.env` and `vm/policy`.

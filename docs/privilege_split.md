@@ -216,7 +216,24 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   apply does not use them. Its bounding set has no `CAP_SYS_PTRACE` and no
   `CAP_SYS_ADMIN`: the refresh finds the admin SSH sessions by port 22,
   not by process, and it does not set the kernel sysctls of
-  `lib/harden.sh`.
+  `lib/harden.sh`. `fetch.service` opens no IP socket
+  (`RestrictAddressFamilies=AF_UNIX AF_NETLINK`) and has
+  `ProtectProc=invisible`. The sandbox of a root unit that writes `/etc`
+  and talks to systemd limits the effect of a mistake. It is not a
+  security boundary. Thus the refresh does not download a feed: the unit
+  of the next item does that.
+- `pi-fortress-feeds.service` downloads the feeds. It runs `pf fetch` as
+  `pf-feeds`, with no capability and `NoNewPrivileges`. It can use only
+  `lo` and the uplink (`RestrictNetworkInterfaces`, from a drop-in that
+  apply writes) and only `AF_INET` and `AF_INET6`. Of
+  `/var/lib/pi-fortress`, it sees only `feeds-in`: the copies of
+  `sources.json` and the `never_block` lists that root puts there. It
+  writes only `/var/lib/pi-fortress-feeds` (`0700`): the lists of the run
+  and the last good copies. `pf feeds run` (root: apply, the timer, the
+  TUI) starts the unit, then examines each line of each list. It imports
+  the lists into `generated/` only when all lines pass. One bad line
+  stops the import, and the lists stay as they were. `pf fetch` as root
+  exits 2.
 - Each unit with a system-call filter also removes asynchronous I/O
   (`@aio`, with io_uring), the kernel keyring (`@keyring`) and
   `userfaultfd` from its allowed set, and allows only native calls

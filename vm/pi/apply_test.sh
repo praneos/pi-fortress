@@ -1357,7 +1357,7 @@ fi
 _own && exit 4
 exit 3
 EOF
-libs=("${here}/lib/harden.sh" "${here}/lib/dhcp.sh" "${here}/lib/netman.sh")
+libs=("${here}/lib/harden.sh" "${here}/lib/dhcp.sh" "${here}/lib/netman.sh" "${here}/lib/feeds.sh")
 mkdir -p "${tmp}/gr-none" "${tmp}/gr-desk/proc/device-tree" "${tmp}/gr-pi/proc/device-tree" \
   "${tmp}/gr-lab/vagrant/vm/pi" "${tmp}/gr-app/etc/pi-fortress" "${tmp}/gr-gw/etc/pi-fortress"
 printf 'Some Desktop\0' >"${tmp}/gr-desk/proc/device-tree/model"
@@ -2983,6 +2983,18 @@ done
 printf '\tEGRESS =\t"strict"\n' >"${tmp}/seg2.env"
 _got="$(eval "${_sv}"; seg_val "${tmp}/seg2.env" EGRESS)"
 [[ "${_got}" == strict ]] || fail "status.sh seg_val EGRESS gives '${_got}' for '<tab>EGRESS =<tab>\"strict\"', not 'strict'"
+# status.sh prints the feed report through a filter that keeps only TAB,
+# newline and printable ASCII. ESC, BEL, CR and bytes above 0x7e go.
+_pf="$(grep -E '^printable_file\(\) \{' "${here}/status.sh" || true)"
+[[ -n "${_pf}" ]] || fail "status.sh has no one-line printable_file"
+printf 'OK a: 1 ips\nFAIL b: x\033]0;t\007y\033[31mz\r\nWARN c:\tk\303\251\n' >"${tmp}/feed.report"
+_got="$(eval "${_pf}"; printable_file "${tmp}/feed.report")"
+[[ "${_got}" == $'OK a: 1 ips\nFAIL b: x]0;ty[31mz\nWARN c:\tk' ]] ||
+  fail "status.sh printable_file gives $(printf '%q' "${_got}")"
+grep -qF 'printable_file "${P}/generated/fetch.report"' "${here}/status.sh" ||
+  fail "status.sh prints the feed report without printable_file"
+grep -qE '^ *cat "\$\{P\}/generated/' "${here}/status.sh" &&
+  fail "status.sh prints a generated file with a plain cat"
 grep -qF 'pi-fortress-dns-stub@house.service' "${apply}" \
   || fail "apply.sh never manages the house stub instance"
 
@@ -3500,9 +3512,11 @@ EOF
   # A refresh that also finds a change to another fence input restarts
   # the fence, as --local does, and records the fence state. If not, the
   # broker stays on the old core.hosts while the ruleset is new.
-  # The pf of this root is a wrapper. Its fetch writes FAKE_FEED as the
-  # feed output and never goes to the network. All other commands go to
-  # the real pf.
+  # The pf of this root is a wrapper. Its feeds run (the download unit and
+  # the import) writes FAKE_FEED as the list, or fails with FAKE_FEED_FAIL,
+  # and never goes to the network. It records each call. A pf fetch call
+  # leaves a mark: apply must not download as root. All other commands go
+  # to the real pf.
   ref="${tmp}/lroot3"
   mkdir -p "${ref}/etc/pi-fortress" "${ref}/usr/local/lib/pi-fortress" "${ref}/usr/local/sbin" \
     "${ref}/etc/systemd/system"
@@ -3513,8 +3527,14 @@ EOF
   cat >"${ref}/usr/local/lib/pi-fortress/pf" <<EOF
 #!/bin/bash
 if [[ "\$1" == fetch ]]; then
-  while [[ \$# -gt 0 && "\$1" != --out ]]; do shift; done
-  printf '%s\n' "\${FAKE_FEED:?}" >"\$2/blacklist.domains"
+  : >"${ref}.rootfetch"
+  exit 1
+fi
+if [[ "\$1" == feeds ]]; then
+  printf '%s\n' "\$*" >>"${ref}.feeds"
+  [[ -z "\${FAKE_FEED_FAIL:-}" ]] || exit 1
+  while [[ \$# -gt 0 && "\$1" != --policy ]]; do shift; done
+  printf '%s\n' "\${FAKE_FEED:?}" >"\$2/generated/blacklist.domains"
   exit 0
 fi
 exec "${tmp}/pf-real" "\$@"
@@ -3526,6 +3546,7 @@ EOF
   export FAKE_FEED='feed-a.example'
   local_apply "${ref}" "${_rapply}"
   _restarted "${ref}" broker || fail "refresh setup: the first --local did not start the fence"
+  [[ ! -s "${ref}.feeds" ]] || fail "apply --local ran the feed download: $(cat "${ref}.feeds")"
   # The list alone changes.
   FAKE_FEED='feed-b.example'
   local_apply "${ref}" "${_rapply}" --refresh
@@ -3536,6 +3557,24 @@ EOF
   fi
   grep -q 'fence keeps the old name list' "${ref}.log" ||
     fail "a list-only --refresh did not say that the fence keeps the old list: $(tail -3 "${ref}.log")"
+  # The refresh gets the lists through pf feeds run, with no copy reuse,
+  # after feeds_prepare put the unit and its uplink drop-in in place.
+  [[ "$(cat "${ref}.feeds")" == "feeds run --policy ${ref}/etc/pi-fortress --fresh 0" ]] ||
+    fail "a --refresh called pf feeds as: $(cat "${ref}.feeds")"
+  cmp -s "${here}/feeds.service" "${ref}/etc/systemd/system/pi-fortress-feeds.service" ||
+    fail "a --refresh did not install pi-fortress-feeds.service"
+  grep -qxF "RestrictNetworkInterfaces=lo ${lwan}" "${ref}/etc/systemd/system/pi-fortress-feeds.service.d/uplink.conf" ||
+    fail "the feed download is not limited to lo and the uplink ${lwan}"
+  [[ -d "${ref}/var/lib/pi-fortress/feeds-in" ]] || fail "a --refresh did not make the input directory of the download"
+  # A failed download keeps the lists: apply compiles from the last ones.
+  export FAKE_FEED_FAIL=1
+  local_apply "${ref}" "${_rapply}" --refresh
+  unset FAKE_FEED_FAIL
+  grep -q 'feed fetch failed; compiling from the last generated lists' "${ref}.log" ||
+    fail "a --refresh with a failed download did not say that it keeps the lists"
+  grep -q 'feed-b.example' "${ref}/etc/pi-fortress/blocked-domains.conf" ||
+    fail "a --refresh with a failed download lost the last list"
+  [[ ! -e "${ref}.rootfetch" ]] || fail "apply ran pf fetch as root"
   # The list and core.hosts.local change.
   FAKE_FEED='feed-c.example'
   printf '%s\n' 'gitlab.com GITLAB_TOKEN:PRIVATE-TOKEN' >"${ref}/etc/pi-fortress/core.hosts.local"
@@ -3635,7 +3674,8 @@ grep -qE '^InaccessiblePaths=(.* )?-/var/lib/pi-fortress/www( |$)' "${here}/pf-e
 for _u in "${here}"/*.service; do
   [[ "$(basename "${_u}")" == www.service ]] && continue
   grep -qE '^(User=|DynamicUser=yes)' "${_u}" || continue
-  grep -qE '^InaccessiblePaths=(.* )?-/var/lib/pi-fortress/www( |$)' "${_u}" ||
+  # An empty tmpfs over all of /var/lib/pi-fortress also hides it.
+  grep -qE '^(InaccessiblePaths=(.* )?-/var/lib/pi-fortress/www( |$)|TemporaryFileSystem=/var/lib/pi-fortress(:ro)?$)' "${_u}" ||
     fail "$(basename "${_u}") can read the claim codes in /var/lib/pi-fortress/www"
 done
 # The engine and www read no log, no observe state, no webhook URL and no
@@ -3818,13 +3858,89 @@ _start="$(grep -nF 'systemctl restart pi-fortress-observe' "${here}/provision.sh
   fi
 )
 
+# The feed download (feeds.service): pf fetch as pf-feeds with no
+# capability. Its view has its state directory, the inputs of root and the
+# system files of DNS and TLS. No policy tree, no log, no other part of
+# /var/lib/pi-fortress. It uses only IP sockets.
+_fu="${here}/feeds.service"
+for _l in Type=oneshot User=pf-feeds Group=pf-feeds CapabilityBoundingSet= NoNewPrivileges=yes \
+  ProtectProc=invisible ProcSubset=pid 'RestrictAddressFamilies=AF_INET AF_INET6' ProtectSystem=strict \
+  ProtectHome=yes PrivateTmp=yes PrivateDevices=yes RestrictSUIDSGID=yes ProtectKernelTunables=yes \
+  StateDirectory=pi-fortress-feeds StateDirectoryMode=0700 UMask=0077 \
+  TemporaryFileSystem=/var/lib/pi-fortress:ro BindReadOnlyPaths=/var/lib/pi-fortress/feeds-in \
+  'IPAddressDeny=link-local multicast' \
+  'InaccessiblePaths=-/etc/pi-fortress -/var/log/pi-fortress -/opt/pi-fortress -/vagrant -/etc/nftables.conf -/usr/local/lib/pi-fortress'; do
+  grep -qxF "${_l}" "${_fu}" || fail "feeds.service has no '${_l}'"
+done
+grep -qxF 'ExecStart=/usr/local/sbin/pf fetch --request /var/lib/pi-fortress/feeds-in/request --policy /var/lib/pi-fortress/feeds-in --out /var/lib/pi-fortress-feeds/stage --cache /var/lib/pi-fortress-feeds/cache --seed /var/lib/pi-fortress/feeds-in/seed' "${_fu}" ||
+  fail "feeds.service does not run pf fetch in stage mode on the fixed paths"
+grep -qE '^AmbientCapabilities=.' "${_fu}" && fail "feeds.service gives a capability"
+# pf feeds run starts this unit from the refresh, a ship and a first boot,
+# and waits. An order on a pi-fortress unit would wait for itself.
+grep -qE '^(After|Before|Requires|Requisite|BindsTo|PartOf|Wants)=.*pi-fortress' "${_fu}" &&
+  fail "feeds.service orders on a pi-fortress unit"
+(($(_oom feeds) > $(_oom fetch))) || fail "the OOM killer does not take the feed download before the refresh"
+
+# feeds_prepare (lib/feeds.sh) in a temp root: the account, the unit, the
+# input directory, and the drop-in that keeps the unit on lo, the uplink
+# and WireGuard. A second run with the same values reloads nothing. A
+# value that is not an interface name changes nothing.
+_fr="${tmp}/feeds-root"
+mkdir -p "${_fr}/units" "${_fr}/bin"
+for _c in getent id; do
+  printf '#!/bin/sh\necho "%s $*" >>"%s/calls"\nexit 2\n' "${_c}" "${_fr}" >"${_fr}/bin/${_c}"
+done
+for _c in groupadd useradd systemctl; do
+  printf '#!/bin/sh\necho "%s $*" >>"%s/calls"\nexit 0\n' "${_c}" "${_fr}" >"${_fr}/bin/${_c}"
+done
+chmod 0755 "${_fr}"/bin/*
+_fp() {
+  PATH="${_fr}/bin:${PATH}" FEEDS_UNITS="${_fr}/units" FEEDS_IN="${_fr}/feeds-in" \
+    bash -c 'set -euo pipefail; source "$1"; shift; feeds_prepare "$@"' _ "${here}/lib/feeds.sh" "${_fu}" "$@"
+}
+_drop="${_fr}/units/pi-fortress-feeds.service.d/uplink.conf"
+_fp eth0 wg0 >/dev/null 2>&1 || fail "feeds_prepare eth0 wg0 failed"
+cmp -s "${_fu}" "${_fr}/units/pi-fortress-feeds.service" || fail "feeds_prepare did not install feeds.service"
+[[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth0 wg0' ]] ||
+  fail "feeds_prepare wrote the drop-in $(printf '%q' "$(cat "${_drop}")")"
+[[ -d "${_fr}/feeds-in" ]] || fail "feeds_prepare did not make the input directory"
+grep -qxF 'useradd --system --no-create-home --gid pf-feeds --home /nonexistent --shell /usr/sbin/nologin pf-feeds' "${_fr}/calls" ||
+  fail "feeds_prepare did not add the account pf-feeds"
+[[ "$(grep -c '^systemctl daemon-reload$' "${_fr}/calls")" == 1 ]] || fail "feeds_prepare did not reload systemd one time"
+: >"${_fr}/calls"
+_fp eth0 wg0 >/dev/null 2>&1 || fail "a second feeds_prepare failed"
+grep -q 'daemon-reload' "${_fr}/calls" && fail "feeds_prepare reloads systemd with no change"
+_fp eth1 >/dev/null 2>&1 || fail "feeds_prepare eth1 failed"
+[[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth1' ]] || fail "feeds_prepare did not follow the uplink"
+for _bad in 'eth0 lo2' 'eth0;x' '' 'a-very-long-ifname0'; do
+  _fp "${_bad}" >/dev/null 2>&1 && fail "feeds_prepare took the uplink '${_bad}'"
+done
+[[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth1' ]] || fail "a refused value changed the drop-in"
+# feeds_uplink takes the IPv4 default route with the lowest metric, as
+# pf render does for an empty WAN_IF. No default route gives nothing.
+printf '#!/bin/sh\nprintf "%%s\\n" "default via 10.0.0.1 dev wlan0 proto dhcp metric 600" "default via 192.168.1.1 dev eth0 proto dhcp src 192.168.1.5 metric 100" "default dev wg0 scope link metric 900"\n' >"${_fr}/bin/ip"
+chmod 0755 "${_fr}/bin/ip"
+_got="$(PATH="${_fr}/bin:${PATH}" bash -c 'source "$1"; feeds_uplink' _ "${here}/lib/feeds.sh")"
+[[ "${_got}" == eth0 ]] || fail "feeds_uplink gives '${_got}', not eth0"
+printf '#!/bin/sh\nexit 0\n' >"${_fr}/bin/ip"
+_got="$(PATH="${_fr}/bin:${PATH}" bash -c 'source "$1"; feeds_uplink' _ "${here}/lib/feeds.sh")"
+[[ -z "${_got}" ]] || fail "feeds_uplink with no default route gives '${_got}'"
+_fp '' >/dev/null 2>&1 && fail "feeds_prepare took an empty uplink"
+# apply downloads no feed as root. It gets the lists through pf feeds run,
+# after feeds_prepare, and only on a full apply or a refresh.
+grep -vE '^[[:space:]]*#' "${apply}" | grep -qE '"\$\{PF\}" fetch( |$)' && fail "apply.sh runs pf fetch as root"
+_fl="$(grep -nF 'feeds_prepare "${PI_LIB}/feeds.service" "${_uplink}" "${WG_IF:-}" ||' "${apply}" | head -1 | cut -d: -f1 || true)"
+_rl="$(grep -nF '! "${PF}" feeds run --policy "${POLICY}" --fresh "${_fresh}"; then' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_fl}" && -n "${_rl}" && $((_rl - _fl)) -eq 1 ]] || fail "apply.sh does not run feeds_prepare and then pf feeds run"
+grep -qxF '  source "${LIB_DIR}/feeds.sh"' "${apply}" || fail "apply.sh does not source lib/feeds.sh"
+
 # The root oneshots run sandboxed. fetch runs apply --refresh, and ship and
 # ship-deadman run a full apply. All three stay root, because apply loads
 # nft, sets sysctls and adds accounts.
 for _u in fetch ship ship-deadman; do
   for _l in NoNewPrivileges=yes PrivateTmp=yes ProtectSystem=strict ProtectKernelModules=yes ProtectKernelLogs=yes \
     ProtectControlGroups=yes RestrictNamespaces=yes MemoryMax=1G TasksMax=256 SystemCallArchitectures=native \
-    SystemCallFilter=@system-service 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK'; do
+    SystemCallFilter=@system-service; do
     grep -qxF "${_l}" "${here}/${_u}.service" || fail "${_u}.service has no '${_l}'"
   done
   grep -q '^User=' "${here}/${_u}.service" && fail "${_u}.service names a User=; apply needs root"
@@ -3832,6 +3948,17 @@ for _u in fetch ship ship-deadman; do
   grep -qE '^(ProtectKernelTunables|RestrictSUIDSGID)=yes' "${here}/${_u}.service" &&
     fail "${_u}.service blocks the sysctl writes or the setgid directories of apply"
 done
+# The refresh opens no IP socket: pi-fortress-feeds.service downloads. A
+# ship or a dead-man rollback is a full apply, and keeps the IP families.
+for _u in ship ship-deadman; do
+  grep -qxF 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK' "${here}/${_u}.service" ||
+    fail "${_u}.service has a different set of address families"
+done
+[[ "$(grep '^RestrictAddressFamilies=' "${here}/fetch.service")" == "RestrictAddressFamilies=AF_UNIX AF_NETLINK" ]] ||
+  fail "fetch.service can open an IP socket"
+grep -qxF 'ProtectProc=invisible' "${here}/fetch.service" || fail "fetch.service sees the processes of other users"
+# The refresh writes /proc/sys/net.
+grep -q '^ProcSubset=' "${here}/fetch.service" && fail "fetch.service hides /proc/sys from apply"
 # ssh_local_addrs finds the admin SSH sessions by the local port 22, not by
 # process. ss -p would read the sockets of sshd, another uid, only with
 # SYS_PTRACE, and fetch.service does not have it. ship keeps SYS_PTRACE for

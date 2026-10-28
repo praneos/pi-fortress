@@ -996,7 +996,7 @@ func (a *App) runAction(i int) {
 	case 1:
 		a.runApply(applyLocal)
 	case 2:
-		a.stream("pf fetch", "fetch", admin.Args{})
+		a.stream("pf feeds run", "fetch", admin.Args{})
 	case 3:
 		a.confirm("restart "+admin.HouseDNSUnit, func() { a.report("restarted", "dns.restart") })
 	case 4:

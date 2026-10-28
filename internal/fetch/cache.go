@@ -32,6 +32,34 @@ import (
 // clean again.
 func cacheDir(outDir string) string { return filepath.Join(outDir, "feeds") }
 
+// copies is the directory of the last-good copies of a run: CacheDir when
+// it is set (the download unit keeps them apart from the staged lists),
+// else feeds/ in the out directory.
+func (f *Fetcher) copies(outDir string) string {
+	if f.CacheDir != "" {
+		return f.CacheDir
+	}
+	return cacheDir(outDir)
+}
+
+// readCopy is readCacheIn of the copies of the run. On a miss it reads the
+// copy in SeedDir, when that is set. Root puts the copies of an earlier
+// release there, so the first run of the download unit still has a
+// fallback. Nothing writes to SeedDir.
+func (f *Fetcher) readCopy(outDir string, feed Feed) ([]string, time.Time, bool) {
+	if items, when, ok := readCacheIn(f.copies(outDir), feed); ok {
+		return items, when, true
+	}
+	if f.SeedDir != "" {
+		return readCacheIn(f.SeedDir, feed)
+	}
+	return nil, time.Time{}, false
+}
+
+func (f *Fetcher) writeCopy(outDir string, feed Feed, items []string) error {
+	return writeCacheIn(f.copies(outDir), feed, items)
+}
+
 // cacheName makes sure that a feed id cannot name a path. Ids come from
 // sources.json. An operator edits it by hand, and the TUI does not
 // validate it. So "../../etc/pi-fortress/net.env" is a possible id.
@@ -79,11 +107,15 @@ const stampPrefix = "# feed "
 // failure. If it overwrote the copy that would have covered it, it would
 // destroy the fallback at exactly the moment that the fallback is needed.
 func writeCache(outDir string, feed Feed, items []string) error {
+	return writeCacheIn(cacheDir(outDir), feed, items)
+}
+
+// writeCacheIn is writeCache into the directory dir.
+func writeCacheIn(dir string, feed Feed, items []string) error {
 	name, ok := cacheName(feed.ID)
 	if !ok || len(items) == 0 {
 		return nil
 	}
-	dir := cacheDir(outDir)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
@@ -115,11 +147,16 @@ func writeCache(outDir string, feed Feed, items []string) error {
 // compiler accepts is code that does change. A token that this build would
 // refuse must not reach the generated lists only because an older build wrote it.
 func readCache(outDir string, feed Feed) ([]string, time.Time, bool) {
+	return readCacheIn(cacheDir(outDir), feed)
+}
+
+// readCacheIn is readCache from the directory dir.
+func readCacheIn(dir string, feed Feed) ([]string, time.Time, bool) {
 	name, ok := cacheName(feed.ID)
 	if !ok {
 		return nil, time.Time{}, false
 	}
-	p := filepath.Join(cacheDir(outDir), name)
+	p := filepath.Join(dir, name)
 	st, err := os.Stat(p)
 	if err != nil {
 		return nil, time.Time{}, false
@@ -151,7 +188,12 @@ func readCache(outDir string, feed Feed) ([]string, time.Time, bool) {
 // feed that is only disabled keeps its copy, so when it is enabled again,
 // it does not start from nothing.
 func pruneCache(outDir string, keep map[string]bool) {
-	ents, err := os.ReadDir(cacheDir(outDir))
+	pruneCacheIn(cacheDir(outDir), keep)
+}
+
+// pruneCacheIn is pruneCache in the directory dir.
+func pruneCacheIn(dir string, keep map[string]bool) {
+	ents, err := os.ReadDir(dir)
 	if err != nil {
 		return
 	}
@@ -160,7 +202,7 @@ func pruneCache(outDir string, keep map[string]bool) {
 		if e.IsDir() || !strings.HasSuffix(n, ".list") || keep[strings.TrimSuffix(n, ".list")] {
 			continue
 		}
-		os.Remove(filepath.Join(cacheDir(outDir), n))
+		os.Remove(filepath.Join(dir, n))
 	}
 }
 
