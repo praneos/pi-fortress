@@ -28,6 +28,12 @@ type Config struct {
 	// the group of that socket, a group that only that client has.
 	DNS      Peer
 	DNSGroup int
+	// CT is observe, the one client of ct.sock, and CTGroup is the group
+	// of that socket.
+	CT      Peer
+	CTGroup int
+	// CTArgv is the conntrack command. Nil is ctArgv. A test gives a fake.
+	CTArgv []string
 	// Run runs nft (gateset.Cmd.Run). Nil runs the nft command. A test
 	// gives its own.
 	Run func(arg string) error
@@ -41,6 +47,9 @@ type Config struct {
 	sniAge   time.Duration
 	sniHeld  int
 	sniSweep time.Duration
+	// ctTimeout and ctMax are the constants of ct.go, the same way.
+	ctTimeout time.Duration
+	ctMax     int
 }
 
 // sock is one listening socket: its file, the one peer that may use it,
@@ -65,6 +74,7 @@ type Server struct {
 	cfg   Config
 	socks []*sock
 	gate  *gateVerb
+	ct    *ctVerb
 	// refusals limits the log lines of the refusals that are not about
 	// one verb: a peer that is not the client, a bad message.
 	refusals logLimit
@@ -96,12 +106,16 @@ func New(cfg Config) (*Server, error) {
 	if cfg.sniAge == 0 {
 		cfg.sniAge, cfg.sniHeld, cfg.sniSweep = sniAge, sniHeld, sniSweep
 	}
+	if cfg.ctTimeout == 0 {
+		cfg.ctTimeout, cfg.ctMax = ctTimeout, ctMax
+	}
 	s := &Server{
 		cfg:    cfg,
 		conns:  map[*net.UnixConn]struct{}{},
 		queues: map[uint16]bool{},
 	}
 	s.gate = newGateVerb(&s.cfg)
+	s.ct = newCTVerb(&s.cfg)
 	s.socks = []*sock{{
 		name:  "dns.sock",
 		peer:  cfg.DNS,
@@ -109,9 +123,20 @@ func New(cfg Config) (*Server, error) {
 		conns: dnsConns,
 		buf:   maxGate + 1,
 		serve: s.serveDNS,
+	}, {
+		name:  "ct.sock",
+		peer:  cfg.CT,
+		group: cfg.CTGroup,
+		conns: ctConns,
+		buf:   ctRequestLen + 1,
+		serve: func(c *net.UnixConn, first, _ []byte) { s.ct.serve(c, first) },
 	}}
 	return s, nil
 }
+
+// ctConns is the limit of connections on ct.sock. observe makes one at a
+// time.
+const ctConns = 4
 
 // dnsConns is the limit of connections on dns.sock: the GATE pool of
 // pf dns (gateConns) and one SNI relay for each queue, with spare room

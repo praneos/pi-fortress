@@ -26,6 +26,8 @@ const (
 	verbSNI     = 'S' // pf dns -> netgate: relay this SNI queue to me
 	verbPacket  = 'P' // netgate -> pf dns: one queued packet
 	verbVerdict = 'V' // pf dns -> netgate: the verdict for one packet
+	verbCT      = 'C' // observe -> netgate: the conntrack table, please
+	verbData    = 'D' // netgate -> observe: the next part of the table
 )
 
 // Operations of a GATE request.
@@ -302,4 +304,28 @@ func (v verdict) mark(old uint32) *uint32 {
 		m |= SNIBad
 	}
 	return &m
+}
+
+const (
+	// ctRequestLen is a CT request, the one request of its connection:
+	//
+	//	0     'C'
+	//	1:4   0
+	//
+	// The reply is data messages, each 'D' and then at most ctChunk bytes
+	// of the output of conntrack, and then one reply message ('R'). The
+	// data is complete only if the reply is ok. SOCK_SEQPACKET keeps the
+	// order and the edges of the messages. Thus the reply needs no length.
+	ctRequestLen = 4
+	ctChunk      = 32 << 10
+	maxData      = 1 + ctChunk
+)
+
+var ctRequest = []byte{verbCT, 0, 0, 0}
+
+func decodeCTRequest(b []byte) error {
+	if len(b) != ctRequestLen || b[0] != verbCT || b[1] != 0 || b[2] != 0 || b[3] != 0 {
+		return protoErr("CT request of %d bytes", len(b))
+	}
+	return nil
 }

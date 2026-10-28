@@ -1,11 +1,11 @@
 [Unit]
-Description=pi-fortress netgate (gate set writes and the SNI queue for pf dns)
+Description=pi-fortress netgate (gate set writes, SNI queue, conntrack dump)
 After=network-online.target nftables.service
 Wants=network-online.target
-# pf dns asks netgate for each write to a gate set. Thus netgate is up
-# first. A start of pf dns does not wait for it, and pf dns fails closed
-# (SERVFAIL) until it answers.
-Before=pi-fortress-dns-agent-go.service
+# pf dns asks netgate for each write to a gate set, and observe for the
+# conntrack table. Thus netgate is up first. A start of pf dns does not
+# wait for it, and pf dns fails closed (SERVFAIL) until it answers.
+Before=pi-fortress-dns-agent-go.service pi-fortress-observe.service
 # Always restart, with no limit (pf-broker.service gives the reason).
 StartLimitIntervalSec=0
 
@@ -26,29 +26,33 @@ LimitNOFILE=256
 OOMScoreAdjust=-500
 CPUWeight=200
 # Its own account, in no group of the other daemons. It reads no log and
-# no state. pf-dnsgate is the primary group of the agent resolver only.
-# netgate is in it only to give that group to dns.sock (a chown to a group
-# of the owner needs no capability).
+# no state. pf-dnsgate is the primary group of the agent resolver only,
+# and pf-ctgate is a group of observe only. netgate is in them only to
+# give each group to the socket of its client, dns.sock and ct.sock (a
+# chown to a group of the owner needs no capability).
 User=pf-netgate
 Group=nogroup
-SupplementaryGroups=pf-dnsgate
+SupplementaryGroups=pf-dnsgate pf-ctgate
 # The sockets start with no access for the group or for others. netgate
 # opens each one to the group of its client after it sets that group.
 UMask=0077
 # Not /run/pi-fortress, which only root and pf-fence can enter. pf dns
-# enters this directory, and only the group of a socket opens it.
+# and observe enter this directory, and only the group of a socket opens
+# it.
 RuntimeDirectory=pi-fortress-netgate
 RuntimeDirectoryMode=0755
 # NET_ADMIN only. netgate binds the SNI queue of the house and gives each
 # verdict that pf dns sends back. The kernel checks NET_ADMIN on each of
 # these netlink messages, also on a socket that a different process
 # opened, so pf dns cannot get the queue as a file descriptor. It is
-# ambient, because the nft that netgate forks needs it too. nft is in
-# /usr/sbin, which stays readable with ProtectSystem=strict.
+# ambient, because the nft and the conntrack that netgate forks need it
+# too. Both are in /usr/sbin, which stays readable with
+# ProtectSystem=strict.
 CapabilityBoundingSet=CAP_NET_ADMIN
 AmbientCapabilities=CAP_NET_ADMIN
-# dns.json gives the nft table and the gate sets. apply writes it, and
-# restarts netgate before pf dns, so that both read the same file.
+# dns.json gives the nft table, the gate sets and the SNI queues. apply
+# writes it, and restarts netgate before pf dns, so that both read the
+# same file.
 ExecStart=/usr/local/sbin/pf netgate run -config /etc/pi-fortress/dns.json
 NoNewPrivileges=yes
 ProtectSystem=strict
@@ -63,8 +67,8 @@ ProtectClock=yes
 ProtectHostname=yes
 ProtectProc=invisible
 # AF_UNIX: the sockets of the clients, and stderr to the journal.
-# AF_NETLINK: nft and the SNI queue (nfnetlink). No AF_INET: netgate and
-# nft open no network socket.
+# AF_NETLINK: nft, conntrack and the SNI queue (nfnetlink). No AF_INET:
+# netgate, nft and conntrack open no network socket.
 RestrictAddressFamilies=AF_UNIX AF_NETLINK
 RestrictNamespaces=yes
 RestrictRealtime=yes

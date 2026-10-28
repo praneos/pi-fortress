@@ -61,11 +61,21 @@ func runNetgateDaemon(config string, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, fmt.Errorf("pf netgate: the agent resolver account: %w", err))
 	}
+	ct, err := netgate.LookupPeer(netgate.CTUser, netgate.CTUserGroup)
+	if err != nil {
+		return fail(stderr, fmt.Errorf("pf netgate: the observe account: %w", err))
+	}
+	ctGroup, err := netgate.LookupGroup(netgate.CTGroup)
+	if err != nil {
+		return fail(stderr, fmt.Errorf("pf netgate: the group of ct.sock: %w", err))
+	}
 	srv, err := netgate.New(netgate.Config{
 		Dir:       netgate.Dir,
 		DNSConfig: dc,
 		DNS:       dns,
 		DNSGroup:  int(dns.GID),
+		CT:        ct,
+		CTGroup:   ctGroup,
 	})
 	if err != nil {
 		return fail(stderr, err)

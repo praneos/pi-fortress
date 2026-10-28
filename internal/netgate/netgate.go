@@ -118,6 +118,16 @@ const (
 	DNSGroup = "pf-dnsgate"
 )
 
+// The accounts of the client of ct.sock. observe runs as CTUser with
+// CTUserGroup (pf-fortress, which all daemons share) as its primary group.
+// CTGroup is the group of ct.sock: observe.service has it, and no other
+// unit does.
+const (
+	CTUser      = "pf-observe"
+	CTUserGroup = "pf-fortress"
+	CTGroup     = "pf-ctgate"
+)
+
 // LookupPeer gives the uid of account and the gid of group.
 func LookupPeer(account, group string) (Peer, error) {
 	u, err := user.Lookup(account)

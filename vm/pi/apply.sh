@@ -530,6 +530,10 @@ else
   # client, and the other daemons do not read them.
   getent group pf-leases >/dev/null || groupadd --system pf-leases
   usermod -aG pf-leases pf-observe
+  # pf-ctgate: the group of the socket on which pf netgate gives observe
+  # the conntrack table. Only observe.service has it (SupplementaryGroups),
+  # and netgate.service, to give it to the socket. No account is in it.
+  getent group pf-ctgate >/dev/null || groupadd --system pf-ctgate
   # pf-sidecar (the group): the alert sidecar only, through
   # SupplementaryGroups in alert.service. It is the group of alert.url, the
   # webhook URL, whose path is its bearer token. No account is a member.

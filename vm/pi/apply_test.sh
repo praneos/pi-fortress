@@ -1652,7 +1652,7 @@ grep -qxF '    useradd --system --no-create-home --gid nogroup --home /nonexiste
 ng="${here}/netgate.service"
 [[ -f "${ng}" ]] || fail "vm/pi/netgate.service is missing"
 for _l in \
-  'User=pf-netgate' 'Group=nogroup' 'SupplementaryGroups=pf-dnsgate' 'UMask=0077' \
+  'User=pf-netgate' 'Group=nogroup' 'SupplementaryGroups=pf-dnsgate pf-ctgate' 'UMask=0077' \
   'RuntimeDirectory=pi-fortress-netgate' 'RuntimeDirectoryMode=0755' \
   'CapabilityBoundingSet=CAP_NET_ADMIN' 'AmbientCapabilities=CAP_NET_ADMIN' \
   'RestrictAddressFamilies=AF_UNIX AF_NETLINK' \
@@ -1663,7 +1663,7 @@ for _l in \
   'RestrictNamespaces=yes' 'RestrictRealtime=yes' 'RestrictSUIDSGID=yes' 'LockPersonality=yes' \
   'MemoryDenyWriteExecute=yes' 'SystemCallArchitectures=native' 'SystemCallFilter=@system-service' \
   'SystemCallFilter=~@privileged' 'SystemCallFilter=@chown' 'ReadWritePaths=' \
-  'Before=pi-fortress-dns-agent-go.service'; do
+  'Before=pi-fortress-dns-agent-go.service pi-fortress-observe.service'; do
   grep -qxF "${_l}" "${ng}" || fail "netgate.service has no '${_l}'"
 done
 # The one daemon with NET_ADMIN for pf dns reads no log, no state, no claim
@@ -3681,15 +3681,33 @@ _start="$(grep -nE 'systemctl (restart|start|enable --now) ' "${apply}" | head -
   fail "observe.service must write only its state directory and the logs"
 [[ "$(grep '^ReadWritePaths=' "${here}/alert.service")" == "ReadWritePaths=-/var/lib/pi-fortress/alert.offset -/var/lib/pi-fortress/alert-notice.offset -/var/lib/pi-fortress/alert.last" ]] ||
   fail "alert.service must write only its three state files"
-# observe runs as its own account, with NET_ADMIN only (the conntrack
-# dump). It reads the leases through pf-leases, not through a DAC
-# capability.
-for _l in User=pf-observe Group=pf-fortress 'SupplementaryGroups=systemd-journal pf-leases' \
-  CapabilityBoundingSet=CAP_NET_ADMIN AmbientCapabilities=CAP_NET_ADMIN; do
+# observe runs as its own account, with no capability. pf netgate runs
+# the conntrack dump for it, on a socket of the group pf-ctgate, which
+# only observe has. It reads the leases through pf-leases, not through a
+# DAC capability.
+for _l in User=pf-observe Group=pf-fortress 'SupplementaryGroups=systemd-journal pf-leases pf-ctgate' \
+  CapabilityBoundingSet= AmbientCapabilities=; do
   grep -qxF "${_l}" "${here}/observe.service" || fail "observe.service has no '${_l}'"
 done
 grep -q '^\(CapabilityBoundingSet\|AmbientCapabilities\)=.*DAC_' "${here}/observe.service" &&
   fail "observe.service has a DAC capability"
+grep -vE '^[[:space:]]*#' "${here}/observe.service" | grep -q 'CAP_NET_ADMIN' &&
+  fail "observe.service has CAP_NET_ADMIN; pf netgate runs the conntrack dump for it"
+[[ "$(grep -cE '^(After|Wants)=.*pi-fortress-netgate\.service' "${here}/observe.service")" -eq 2 ]] ||
+  fail "observe.service needs both Wants= and After= on netgate"
+grep -qxF '  getent group pf-ctgate >/dev/null || groupadd --system pf-ctgate' "${apply}" ||
+  fail "apply.sh does not make the pf-ctgate group"
+grep -qE 'usermod .*pf-ctgate' "${apply}" && fail "apply.sh puts an account in pf-ctgate"
+# Each group of a netgate socket is in its client unit and in netgate,
+# and in no other unit.
+for _u in "${here}"/*.service; do
+  _n="$(basename "${_u}")"
+  _body="$(grep -vE '^[[:space:]]*#' "${_u}")"
+  [[ "${_n}" != dns-agent-go.service && "${_n}" != netgate.service ]] && grep -q 'pf-dnsgate' <<<"${_body}" &&
+    fail "${_n} has pf-dnsgate, the group of the netgate socket of the agent resolver"
+  [[ "${_n}" != observe.service && "${_n}" != netgate.service ]] && grep -q 'pf-ctgate' <<<"${_body}" &&
+    fail "${_n} has pf-ctgate, the group of the netgate socket of observe"
+done
 grep -qxF '    useradd --system --no-create-home --gid pf-fortress --home /nonexistent --shell /usr/sbin/nologin pf-observe' "${apply}" ||
   fail "apply.sh does not make the pf-observe account"
 grep -qxF '  getent group pf-leases >/dev/null || groupadd --system pf-leases' "${apply}" ||

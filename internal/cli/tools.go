@@ -240,6 +240,12 @@ func runObserve(args []string, _, stderr io.Writer) int {
 	if *dnsLog != "" {
 		o.DNSLog = *dnsLog
 	}
+	// Only the daemon asks pf netgate for the conntrack table. once, show
+	// and reset come from an operator with sudo, who holds the capability
+	// and runs conntrack directly. netgate refuses any peer but observe.
+	if verb != "run" {
+		o.CTSocket = ""
+	}
 	ctx, stop := signalCtx()
 	defer stop()
 	switch verb {

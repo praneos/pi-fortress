@@ -245,3 +245,50 @@ func sniErr(err error) error {
 	}
 	return err
 }
+
+// ctWait limits one CT request: the conntrack timeout of netgate, and
+// time for the data.
+const ctWait = ctTimeout + 5*time.Second
+
+// ReadCT asks netgate for the conntrack table: the output of
+// `conntrack -L -o extended`. It gives the whole table or an error,
+// never a part of the table.
+func ReadCT(path string) ([]byte, error) {
+	c, err := dial(path)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	if err := c.SetDeadline(time.Now().Add(ctWait)); err != nil {
+		return nil, err
+	}
+	if _, err := c.Write(ctRequest); err != nil {
+		return nil, err
+	}
+	buf := make([]byte, maxData+1)
+	var out []byte
+	for {
+		msg, err := readMsg(c, buf)
+		if err != nil {
+			return nil, err
+		}
+		switch msg[0] {
+		case verbData:
+			if len(out)+len(msg)-1 > ctMax {
+				return nil, protoErr("CT data of more than %d bytes", ctMax)
+			}
+			out = append(out, msg[1:]...)
+		case verbReply:
+			status, why, err := decodeReply(msg)
+			if err != nil {
+				return nil, err
+			}
+			if err := replyErr(status, why); err != nil {
+				return nil, err
+			}
+			return out, nil
+		default:
+			return nil, protoErr("CT message with verb %q", msg[0])
+		}
+	}
+}

@@ -56,6 +56,8 @@ func (h *harness) start(mod func(*Config)) {
 		DNSConfig: DNSConfig{Table: "inet fortress", Sets: []string{"resolved_v4", "resolved_house_v4"}, Queues: []uint16{1}},
 		DNS:       me(),
 		DNSGroup:  os.Getgid(),
+		CT:        me(),
+		CTGroup:   os.Getgid(),
 		Run:       h.run,
 		Now:       h.clock,
 		Logf:      h.logf,
@@ -81,6 +83,7 @@ func (h *harness) start(mod func(*Config)) {
 	}
 	h.t.Cleanup(h.stop)
 	h.waitSocket("dns.sock")
+	h.waitSocket("ct.sock")
 }
 
 // waitSocket waits until name is open to the group: the last step of
@@ -267,18 +270,20 @@ func TestGatePeerCheck(t *testing.T) {
 	}
 }
 
-// The socket opens to its group, and only to it.
+// Each socket opens to its group, and only to it.
 func TestSocketModeAndGroup(t *testing.T) {
 	h := newHarness(t, nil)
-	fi, err := os.Stat(h.sock("dns.sock"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fi.Mode().Type() != fs.ModeSocket || fi.Mode().Perm() != 0660 {
-		t.Fatalf("dns.sock mode %v, want a socket 0660", fi.Mode())
-	}
-	if gid := fi.Sys().(*syscall.Stat_t).Gid; gid != uint32(os.Getgid()) {
-		t.Fatalf("dns.sock group %d, want %d", gid, os.Getgid())
+	for _, name := range []string{"dns.sock", "ct.sock"} {
+		fi, err := os.Stat(h.sock(name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fi.Mode().Type() != fs.ModeSocket || fi.Mode().Perm() != 0660 {
+			t.Fatalf("%s mode %v, want a socket 0660", name, fi.Mode())
+		}
+		if gid := fi.Sys().(*syscall.Stat_t).Gid; gid != uint32(os.Getgid()) {
+			t.Fatalf("%s group %d, want %d", name, gid, os.Getgid())
+		}
 	}
 }
 

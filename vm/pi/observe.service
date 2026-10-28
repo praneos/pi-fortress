@@ -1,7 +1,7 @@
 [Unit]
 Description=pi-fortress observe (DNS + conntrack)
-After=network-online.target pi-fortress-dns-agent.service
-Wants=pi-fortress-dns-agent.service
+After=network-online.target pi-fortress-dns-agent.service pi-fortress-netgate.service
+Wants=pi-fortress-dns-agent.service pi-fortress-netgate.service
 # Always restart, with no limit (pf-broker.service gives the reason).
 StartLimitIntervalSec=0
 
@@ -26,8 +26,9 @@ Group=pf-fortress
 # systemd-journal: journalctl _TRANSPORT=kernel for the nft drop lines
 # (ProtectKernelLogs closes /dev/kmsg; -k needs the boot ID, which
 # ProcSubset=pid hides). pf-leases: the DHCP lease files, for the client
-# names (apply.sh and lib/dhcp.sh give them this group).
-SupplementaryGroups=systemd-journal pf-leases
+# names (apply.sh and lib/dhcp.sh give them this group). pf-ctgate: the
+# socket of pf netgate for the conntrack table. No other unit has it.
+SupplementaryGroups=systemd-journal pf-leases pf-ctgate
 UMask=0027
 NoNewPrivileges=yes
 ProtectSystem=strict
@@ -48,13 +49,15 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
-# NET_ADMIN only, for the conntrack -L dump over ctnetlink. The kernel
-# refuses that dump without it. The process keeps it as an ambient
-# capability, so that conntrack gets it when observe starts it. All files
-# that observe reads are readable by its account or its groups, so it
-# needs no DAC capability.
-CapabilityBoundingSet=CAP_NET_ADMIN
-AmbientCapabilities=CAP_NET_ADMIN
+# No capability. The conntrack dump over ctnetlink needs CAP_NET_ADMIN,
+# so pf netgate runs `conntrack -L -o extended` for observe and streams
+# the output back over /run/pi-fortress-netgate/ct.sock. Thus code that
+# runs in observe cannot change the ruleset, a route, a link or a bridge.
+# When netgate is down, the flow and volume rows stop, and observe says so
+# in the journal. All files that observe reads are readable by its
+# account or its groups, so it needs no DAC capability.
+CapabilityBoundingSet=
+AmbientCapabilities=
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged
