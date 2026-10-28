@@ -19,6 +19,23 @@ _pf_lib="${BASH_SOURCE[0]%/*}"
 # shellcheck source=guard.sh
 source "${_pf_lib}/guard.sh" && pf_guard_target lib/feeds.sh || return 1 2>/dev/null || exit 1
 
+# feeds_uplink prints the device of the IPv4 default route with the lowest
+# metric, as pf render finds WAN_IF when net.env leaves it empty. The
+# download runs before render, so apply asks here. No default route
+# prints nothing.
+feeds_uplink() {
+  ip -4 route show default 2>/dev/null | awk '
+    {
+      dev = ""; metric = 0
+      for (i = 1; i < NF; i++) {
+        if ($i == "dev") dev = $(i + 1)
+        if ($i == "metric") metric = $(i + 1) + 0
+      }
+      if (dev != "" && (best == "" || metric < low)) { best = dev; low = metric }
+    }
+    END { print best }'
+}
+
 # feeds_prepare SRC WAN_IF [WG_IF]: SRC is the feeds.service of the tree.
 # The unit may use only lo, the uplink and the WireGuard interface. Each
 # step does nothing when it is already done. A daemon-reload runs only
@@ -30,6 +47,10 @@ feeds_prepare() {
   local want _i changed=0
   if [[ ! -f "${src}" ]]; then
     echo "pi-fortress: ${src} is missing, so no feed is downloaded" >&2
+    return 1
+  fi
+  if [[ -z "${wan}" ]]; then
+    echo "pi-fortress: no uplink for the feed download (WAN_IF is empty and there is no IPv4 default route), so no feed is downloaded" >&2
     return 1
   fi
   # The names go into a unit file. Apply checked them already; this

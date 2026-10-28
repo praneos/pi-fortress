@@ -46,8 +46,9 @@ echo 'DECOY' >"${src}/vm/policy/alert.url"
 for f in agent-env-1.sh agent-credentials-1.json mitm-ca.pem egress-ca.pem; do
   echo 'DECOY' >"${src}/vm/policy/generated/${f}"
 done
-# pf with a fetch that fails: a first boot behind a dead NAT adapter.
-printf '#!/bin/bash\n[[ "$1" == fetch ]] && exit 1\nexec %q "$@"\n' "${PF_BIN}" >"${src}/bin/pf"
+# pf with a feed download that fails: a first boot behind a dead NAT
+# adapter. apply gets the lists through pf feeds run.
+printf '#!/bin/bash\n[[ "$1" == feeds ]] && exit 1\nexec %q "$@"\n' "${PF_BIN}" >"${src}/bin/pf"
 chmod 0755 "${src}/bin/pf"
 
 stubs="${tmp}/stubs"

@@ -72,32 +72,45 @@ func opsTests(t *testing.T) {
 	t.Run("reboot", rebootTests)
 }
 
-// feedsFailTests run pf fetch with no network on a copy of generated/:
-// the lists must not change whether or not saved feed copies exist.
+// feedsFailTests run the feed download unit with no network (a runtime
+// drop-in PrivateNetwork=yes), through pf feeds run on a scratch copy of
+// the policy: the lists must not change whether or not saved feed copies
+// exist. The download never runs as root.
 func feedsFailTests(t *testing.T) {
-	const gen = "/tmp/pf-gen"
-	hash := "sudo find " + gen + " -type f ! -name fetch.report -exec sha256sum {} + | sort"
-	fetch := func(t *testing.T) (out string, rc int, same bool) {
+	s := feedsScratch(t)
+	const nonet = "/run/systemd/system/pi-fortress-feeds.service.d/zz-itest-nonet.conf"
+	pi(t, `sudo sh -c 'mkdir -p `+nonet[:strings.LastIndex(nonet, "/")]+` && printf "[Service]\nPrivateNetwork=yes\n" > `+nonet+` && systemctl daemon-reload'`)
+	defer func() {
+		_, _ = ssh(t, 30*time.Second, "pi", "sudo sh -c 'rm -f "+nonet+"; systemctl daemon-reload'")
+	}()
+	run := func(t *testing.T) (out string, rc int, same bool) {
 		t.Helper()
-		before := pi(t, hash)
-		out = strings.TrimSpace(pi(t, "sudo unshare -n pf fetch -out "+gen+" 2>&1; echo rc=$?"))
+		before := listsHash(t, s)
+		out = strings.TrimSpace(pi(t, "sudo pf feeds run --fresh 0 -policy "+s+" 2>&1; echo rc=$?"))
 		rc, _ = strconv.Atoi(out[strings.LastIndex(out, "rc=")+3:])
-		return out, rc, before == pi(t, hash)
+		return out, rc, before == listsHash(t, s)
 	}
-	pi(t, "sudo rm -rf "+gen+" && sudo cp -a /vagrant/vm/policy/generated "+gen)
-	defer func() { _, _ = ssh(t, 20*time.Second, "pi", "sudo rm -rf "+gen) }()
 
 	t.Run("saved copies: STALE, rc 0, lists unchanged", func(t *testing.T) {
-		if _, err := ssh(t, 10*time.Second, "pi", "sudo test -d "+gen+"/feeds"); err != nil {
-			t.Skip("no saved feed copies: no real fetch has run here")
+		if _, err := ssh(t, 10*time.Second, "pi", "sudo sh -c 'ls "+feedsState+"/cache/*.list' >/dev/null 2>&1"); err != nil {
+			t.Skip("no saved feed copies: no download has run here")
 		}
-		if out, rc, same := fetch(t); rc != 0 || !same || !contains(out, "STALE ") {
+		if out, rc, same := run(t); rc != 0 || !same || !contains(out, "STALE ") {
 			t.Fatalf("rc=%d same=%v\n%s", rc, same, out)
 		}
 	})
 	t.Run("no copies: FAIL, rc 1, lists unchanged", func(t *testing.T) {
-		pi(t, "sudo rm -rf "+gen+"/feeds")
-		if out, rc, same := fetch(t); rc != 1 || !same || !contains(out, "FAIL ") || !contains(out, "wrote 0 ips, 0 domains") {
+		// The copies and the seed move aside for this one run.
+		const aside = "/var/lib/pi-fortress/itest-feeds-aside"
+		pi(t, "sudo sh -c 'rm -rf "+aside+" && mkdir -p "+aside+" && "+
+			"{ [ ! -d "+feedsState+"/cache ] || mv "+feedsState+"/cache "+aside+"/cache; } && "+
+			"{ [ ! -d /var/lib/pi-fortress/feeds-in/seed ] || mv /var/lib/pi-fortress/feeds-in/seed "+aside+"/seed; }'")
+		defer func() {
+			_, _ = ssh(t, 30*time.Second, "pi", "sudo sh -c '"+
+				"{ [ ! -d "+aside+"/cache ] || { rm -rf "+feedsState+"/cache && mv "+aside+"/cache "+feedsState+"/cache; }; } && "+
+				"{ [ ! -d "+aside+"/seed ] || mv "+aside+"/seed /var/lib/pi-fortress/feeds-in/seed; } && rm -rf "+aside+"'")
+		}()
+		if out, rc, same := run(t); rc != 1 || !same || !contains(out, "FAIL ") || !contains(out, "imported unchanged ips, unchanged domains") {
 			t.Fatalf("rc=%d same=%v\n%s", rc, same, out)
 		}
 	})
