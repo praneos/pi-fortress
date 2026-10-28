@@ -297,8 +297,8 @@ pi-ship: pi-check
 	@$(MAKE) -s pi-sign
 	@rsync -t -e "$(PI_SSH) -i $(PI_SHIP_KEY) -o IdentitiesOnly=yes" $(PI_BUNDLE) $(PI_SHIP_USER)@$(PI_IP):
 	@rsync -t -e "$(PI_SSH) -i $(PI_SHIP_KEY) -o IdentitiesOnly=yes" $(PI_BUNDLE).sig $(PI_SHIP_USER)@$(PI_IP):
-	@echo "uploaded; result: $(PI_SSH) $(PI) tail -1 /var/log/pi-fortress/ship.jsonl"
-	@echo "then, once the box checks out: $(PI_SSH) -t $(PI) sudo pf ship confirm -- within the dead-man window (10 min by default), or the Pi rolls itself back"
+	@echo "uploaded; the Pi installs it now (a full apply, some minutes). Result: $(PI_SSH) $(PI) tail -1 /var/log/pi-fortress/ship.jsonl"
+	@echo "then, once the box checks out: $(PI_SSH) -t $(PI) sudo pf ship confirm -- it waits for the install to finish. Confirm within the dead-man window (10 min after the install by default), or the Pi rolls itself back"
 
 # The old loop, for a Pi without pfship, or a bundle that the Pi refuses.
 # sudo prompts one time for the login password. After a signed ship, root

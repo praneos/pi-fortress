@@ -14,6 +14,7 @@ import (
 	"pi-fortress/internal/admin"
 	"pi-fortress/internal/alert"
 	"pi-fortress/internal/fetch"
+	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/ship"
 )
 
@@ -35,7 +36,7 @@ func runShip(args []string, stdout, stderr io.Writer) int {
 			code = 0
 		}
 	}
-	fmt.Fprintln(stderr, "usage: pf ship bundle -o FILE [flags] | pf ship install [flags] | pf ship confirm | pf ship deadman | pf ship lint FILE (docs/signed_ship.md)")
+	fmt.Fprintln(stderr, "usage: pf ship bundle -o FILE [flags] | pf ship install [flags] | pf ship confirm [-wait D] | pf ship deadman | pf ship lint FILE (docs/signed_ship.md)")
 	return code
 }
 
@@ -248,20 +249,55 @@ func shipInstallerFlags(fs *flag.FlagSet, stderr io.Writer) *ship.Installer {
 	return in
 }
 
+// shipConfirmWait is how long pf ship confirm waits for the ship lock
+// by default. An install holds the lock for minutes. It can wait up to
+// 10 min for the apply lock. The full apply downloads the feeds. pf doctor
+// --post-upgrade gets up to 90 s. A failed apply adds the apply of the
+// rollback. pi-fortress-ship.service stops an install after 45 min
+// (TimeoutStartSec). Thus no install holds the lock for longer. The
+// dead-man window does not limit the wait: the install arms it only at
+// its end, and the confirm examines the deadline after the wait.
+const shipConfirmWait = 45 * time.Minute
+
+// shipLockPoll is how frequently a waiting pf ship confirm tries the
+// ship lock again. It is a variable, so that a test can make it short.
+var shipLockPoll = time.Second
+
 // runShipConfirm is pf ship confirm: disarm the dead-man timer of an
 // upgrade that has proven itself. It does nothing more than remove the
 // pending file and log that it did.
+//
+// make pi-ship returns after the upload, while the install still runs.
+// On 2026-10-29, a confirm typed at once found the ship lock held and
+// failed. Now it waits for the holder. Then it confirms only what the
+// holder left pending (shipWaitOutcome).
 func runShipConfirm(args []string, _, stderr io.Writer) int {
 	fs := newFlags("ship confirm", stderr)
 	in := shipInstallerFlags(fs, stderr)
+	wait := fs.Duration("wait", shipConfirmWait, "how long to wait for a ship install, rollback or dead-man run that holds the ship lock (0: fail at once)")
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}
-	release, err := shipExclusive(in)
+	// The mark comes before the first try of the lock. Thus the rows of
+	// a holder that this run waits for are all after it.
+	mark := jsonl.ShipLogSize(in.Log)
+	release, waited, err := shipExclusiveWait(in, *wait, func() {
+		fmt.Fprintf(stderr, "pf ship confirm: waiting for the ship install to finish (up to %s; Ctrl-C stops only this wait)\n", *wait)
+	})
 	if err != nil {
 		return fail(stderr, fmt.Errorf("pf ship confirm: %w", err))
 	}
 	defer release()
+	if waited {
+		done, err := shipWaitOutcome(in, jsonl.ShipsAfter(in.Log, mark), time.Now())
+		if err != nil {
+			return fail(stderr, fmt.Errorf("pf ship confirm: %w", err))
+		}
+		if done != "" {
+			fmt.Fprintln(stderr, "pf ship confirm:", done)
+			return 0
+		}
+	}
 	row, ok, err := in.Confirm()
 	if err != nil {
 		return fail(stderr, err)
@@ -270,8 +306,68 @@ func runShipConfirm(args []string, _, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "pf ship confirm: nothing pending")
 		return 0
 	}
-	fmt.Fprintf(stderr, "pf ship confirm: version %d confirmed\n", row.Version)
+	fmt.Fprintf(stderr, "pf ship confirm: version %d sha=%s confirmed\n", row.Version, row.SHA)
 	return 0
+}
+
+// shipWaitOutcome decides what a pf ship confirm that waited for the
+// ship lock can do now. The caller holds the lock. rows are what the
+// holder logged during the wait. A busy row is an install that found
+// the lock held and changed nothing, so it does not count.
+//   - No row: the holder changed nothing (for example, a dead-man run
+//     with nothing due). The usual confirm follows.
+//   - ok: the usual confirm follows only if ship.pending names that
+//     version and its deadline has not passed. Nothing pending: the
+//     usual confirm says so.
+//   - confirm: another confirm did the work. done says so.
+//   - Any other row: a failed install, a rollback or a dead-man revert.
+//     err says what occurred. Nothing is confirmed.
+func shipWaitOutcome(in *ship.Installer, rows []jsonl.Ship, now time.Time) (done string, err error) {
+	var last *jsonl.Ship
+	for i := range rows {
+		if rows[i].Result != "busy" {
+			last = &rows[i]
+		}
+	}
+	if last == nil {
+		return "", nil
+	}
+	path := in.PendingPath
+	if path == "" {
+		path = ship.DefaultPendingPath
+	}
+	switch last.Result {
+	case "ok":
+		p, ok, err := ship.ReadPending(path)
+		switch {
+		case err != nil:
+			return "", fmt.Errorf("version %d sha=%s is installed, but %v; nothing confirmed", last.Version, last.SHA, err)
+		case !ok:
+			return "", nil
+		case p.Version != last.Version:
+			return "", fmt.Errorf("version %d sha=%s is installed, but ship.pending names version %d; nothing confirmed", last.Version, last.SHA, p.Version)
+		case !now.Before(p.Deadline):
+			return "", fmt.Errorf("version %d sha=%s is installed, but its dead-man deadline %s has passed; nothing confirmed, pf ship deadman reverts it to %d", last.Version, last.SHA, p.Deadline.Format(time.RFC3339), p.PrevVersion)
+		}
+		return "", nil
+	case "confirm":
+		return fmt.Sprintf("version %d sha=%s was confirmed by another pf ship confirm during this wait", last.Version, last.SHA), nil
+	}
+	return "", fmt.Errorf("nothing confirmed: during this wait, ship.jsonl got %s version=%d sha=%s: %s; %s", last.Result, last.Version, last.SHA, last.Reason, pendingNow(path))
+}
+
+// pendingNow tells what ship.pending holds, for a confirm that did not
+// confirm. An older upgrade can still be armed after an install that
+// failed before its swap.
+func pendingNow(path string) string {
+	p, ok, err := ship.ReadPending(path)
+	switch {
+	case err != nil:
+		return err.Error()
+	case !ok:
+		return "nothing is pending"
+	}
+	return fmt.Sprintf("ship.pending still names version %d (deadline %s)", p.Version, p.Deadline.Format(time.RFC3339))
 }
 
 // runShipDeadman is pf ship deadman. ship-deadman.timer runs it
@@ -339,6 +435,27 @@ func shipExclusive(in *ship.Installer) (func(), error) {
 		return nil, err
 	}
 	return l.Release, nil
+}
+
+// shipExclusiveWait is shipExclusive, but while another run holds the
+// lock, it tries again until bound has passed. It calls waiting one time,
+// when it starts to wait. waited true tells the caller that a holder
+// ran before it. Thus the state can differ from the state at the start.
+func shipExclusiveWait(in *ship.Installer, bound time.Duration, waiting func()) (release func(), waited bool, err error) {
+	release, err = shipExclusive(in)
+	if !errors.Is(err, admin.ErrLocked) || bound <= 0 {
+		return release, false, err
+	}
+	waiting()
+	deadline := time.Now().Add(bound)
+	for time.Now().Before(deadline) {
+		time.Sleep(min(shipLockPoll, time.Until(deadline)))
+		release, err = shipExclusive(in)
+		if !errors.Is(err, admin.ErrLocked) {
+			return release, true, err
+		}
+	}
+	return nil, true, fmt.Errorf("the ship lock is still held after %s; nothing confirmed. The dead-man window starts only when the install ends. Look at journalctl -u pi-fortress-ship, then run pf ship confirm again", bound)
 }
 
 // runShipLint is release-lint: refuse a bundle that ships the lab marker file or an
