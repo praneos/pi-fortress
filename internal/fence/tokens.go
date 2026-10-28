@@ -151,48 +151,109 @@ next:
 // each hit. Thus a byte with no case (a digit, '_', '-') is the cheapest
 // anchor: one memchr, not two.
 func indexFold(src, needle []byte) int {
-	n := len(needle)
-	if n == 0 {
-		return 0
+	f := newFoldIndex(src, needle)
+	return f.next(0)
+}
+
+// foldIndex is indexFold for all the hits of one needle in one b. next(i)
+// is indexFold(b[i:], needle) as a position in b. A pass over b asks for
+// the hits in order. foldIndex keeps the next position of each case of the
+// anchor byte from one call to the next. Thus the scans of a pass read
+// each byte of b at most one time for each case. A new indexFold for each
+// hit scanned again for both cases. When one case was not in b, each of
+// those scans went on to the end of b. Then a body with a hit every few
+// bytes cost the square of its length.
+type foldIndex struct {
+	b, needle []byte
+	// k is the anchor: the byte of needle that next scans for. lo and up
+	// are that byte in each case. Byte k of a match sits before end.
+	k, end int
+	lo, up byte
+	// nl is the first lo at or after il, or end. nu is the first up at or
+	// after iu, or end. -1 is no scan yet.
+	nl, il, nu, iu int
+	// searched is the number of bytes that the scans went past. The tests
+	// of the cost of a pass read it.
+	searched int
+}
+
+func newFoldIndex(b, needle []byte) foldIndex {
+	f := foldIndex{b: b, needle: needle, nl: -1, nu: -1}
+	if len(needle) == 0 || len(b) < len(needle) {
+		return f
 	}
-	if len(src) < n {
+	f.k = foldAnchor(needle)
+	f.lo = needle[f.k]
+	f.up = f.lo
+	if 'a' <= f.lo && f.lo <= 'z' {
+		f.up = f.lo - 'a' + 'A'
+	}
+	f.end = len(b) - len(needle) + f.k + 1
+	return f
+}
+
+// next is the first hit at or after from, or -1. A scan result stays in
+// use while the search position is between the start of that scan and its
+// result. Thus next gives the same hit for from in any order. In a pass,
+// from does not go back, and each scan starts after the result of the
+// scan before.
+func (f *foldIndex) next(from int) int {
+	n := len(f.needle)
+	if n == 0 {
+		return from
+	}
+	if len(f.b)-from < n {
 		return -1
 	}
-	k := foldAnchor(needle)
-	lo := needle[k]
-	up := lo
-	if 'a' <= lo && lo <= 'z' {
-		up = lo - 'a' + 'A'
+	// The loop runs on locals, as indexFold did before foldIndex. On the
+	// fields of f, it was about 10% slower for ordinary JSON.
+	b, k, end, lo, up := f.b, f.k, f.end, f.lo, f.up
+	nl, il, nu, iu := f.nl, f.il, f.nu, f.iu
+	at, searched := -1, 0
+	// A result from before the start of its scan is not of use. In the
+	// loop, i only grows, and each scan starts at i. Thus this test is
+	// necessary only here.
+	i := from + k
+	if il > i {
+		nl = -1
 	}
-	// Byte k of a match sits in [k, end).
-	end := len(src) - n + k + 1
-	nl, nu := -1, -1
-	for i := k; i < end; {
+	if iu > i {
+		nu = -1
+	}
+	for i < end {
 		if nl < i {
-			nl = nextByte(src, i, end, lo)
+			il, nl = i, i+indexOrLen(b[i:end], lo)
+			searched += nl - i
 		}
-		if up == lo {
-			nu = nl
-		} else if nu < i {
-			nu = nextByte(src, i, end, up)
+		p := nl
+		if up != lo {
+			if nu < i {
+				iu, nu = i, i+indexOrLen(b[i:end], up)
+				searched += nu - i
+			}
+			p = min(p, nu)
 		}
-		p := min(nl, nu)
 		if p >= end {
-			return -1
+			break
 		}
-		if equalFoldASCII(src[p-k:p-k+n], needle) {
-			return p - k
+		if equalFoldASCII(b[p-k:p-k+n], f.needle) {
+			at = p - k
+			break
 		}
 		i = p + 1
 	}
-	return -1
+	f.nl, f.il, f.nu, f.iu = nl, il, nu, iu
+	f.searched += searched
+	return at
 }
 
-func nextByte(src []byte, i, end int, c byte) int {
-	if j := bytes.IndexByte(src[i:end], c); j >= 0 {
-		return i + j
+// indexOrLen is the index of the first c in s, or len(s). It is small
+// enough for the compiler to inline it into the loop of foldIndex.next.
+func indexOrLen(s []byte, c byte) int {
+	if j := bytes.IndexByte(s, c); j >= 0 {
+		return j
 	}
-	return end
+	return len(s)
 }
 
 func equalFoldASCII(b, lower []byte) bool {
@@ -227,13 +288,37 @@ func foldAnchor(needle []byte) int {
 	return best
 }
 
-// index is the prefix search the set was built for.
-func (t *tokenSet) index(b, p []byte) int {
-	if t.fold {
-		return indexFold(b, p)
-	}
-	return httpwire.Index(b, p)
+// prefixIndex is the prefix search that the set was built for, for all the
+// hits of one prefix p in one b. next(i) is the first hit at or after i, or
+// -1. A folded search keeps what its scans found (foldIndex). The exact
+// search scans for one byte only, and each scan stops at the next hit.
+type prefixIndex struct {
+	fold   foldIndex
+	b, p   []byte
+	folded bool
 }
+
+func (t *tokenSet) hits(b, p []byte) prefixIndex {
+	if t.fold {
+		return prefixIndex{fold: newFoldIndex(b, p), folded: true}
+	}
+	return prefixIndex{b: b, p: p}
+}
+
+func (x *prefixIndex) next(i int) int {
+	if x.folded {
+		return x.fold.next(i)
+	}
+	if j := httpwire.Index(x.b[i:], x.p); j >= 0 {
+		return i + j
+	}
+	return -1
+}
+
+// passWork is what one pass of the prefix search over b did. searched is
+// the number of bytes that the folded scans read. walked is the number of
+// bytes that span walked. The tests of the cost of a pass read them.
+type passWork struct{ searched, walked int }
 
 // inTokenClass is tokenrules.InTokenClass: letters, digits, '_', '-' and
 // '.'.
@@ -256,35 +341,39 @@ func (t *tokenSet) candidates(b []byte) ([][2]int, bool) {
 	return wins, ok
 }
 
-// candidatesWalk is candidates, and also the number of bytes that span
-// walked. The hits of one prefix come in order, and they share one
-// tokenRun. Thus span walks each byte of b at most one time for each
-// prefix, also when a run of token bytes has a prefix every few bytes.
-func (t *tokenSet) candidatesWalk(b []byte) ([][2]int, bool, int) {
+// candidatesWalk is candidates, and also the work of the pass. The hits of
+// one prefix come in order, and they share one prefixIndex and one
+// tokenRun. Thus the search reads each byte of b at most one time for each
+// case of the anchor byte, and span walks each byte of b at most one time,
+// for each prefix. This is also true when b has a hit every few bytes.
+func (t *tokenSet) candidatesWalk(b []byte) ([][2]int, bool, passWork) {
 	if !t.complete {
-		return nil, false, 0
+		return nil, false, passWork{}
 	}
 	var r tokenRun
 	var wins [][2]int
+	searched := 0
 	for i, p := range t.prefixes {
 		back := 1
 		if t.lead[i] {
 			back = tokenrules.LeadMax
 		}
+		x := t.hits(b, p)
 		for k := 0; k < len(b); {
-			j := t.index(b[k:], p)
-			if j < 0 {
+			s := x.next(k)
+			if s < 0 {
 				break
 			}
-			s := k + j
 			if hi, ok := t.span(b, s, &r); ok {
 				wins = append(wins, [2]int{max(s-back, 0), hi})
 			}
 			k = s + 1
 		}
+		searched += x.fold.searched
 	}
+	work := passWork{searched: searched, walked: r.walked}
 	if len(wins) == 0 {
-		return nil, true, r.walked
+		return nil, true, work
 	}
 	sort.Slice(wins, func(i, j int) bool { return wins[i][0] < wins[j][0] })
 	var out [][2]int
@@ -295,7 +384,7 @@ func (t *tokenSet) candidatesWalk(b []byte) ([][2]int, bool, int) {
 		}
 		out = append(out, w)
 	}
-	return out, true, r.walked
+	return out, true, work
 }
 
 // tokenRun is the part of b that the last walk of span found: each byte
@@ -544,14 +633,22 @@ func (t *tokenSet) rules(b []byte) []string {
 // be in transit. A search of only the tail keeps the cost independent of
 // how much body is already buffered.
 func (t *tokenSet) firstPrefixFrom(b []byte, lo int) int {
-	best := -1
+	i, _ := t.firstPrefixWork(b, lo)
+	return i
+}
+
+// firstPrefixWork is firstPrefixFrom, and also the number of bytes that
+// the folded scans read. As in candidatesWalk, the hits of one prefix share
+// one prefixIndex.
+func (t *tokenSet) firstPrefixWork(b []byte, lo int) (int, int) {
+	best, searched := -1, 0
 	for _, p := range t.prefixes {
+		x := t.hits(b, p)
 		for k := lo; k < len(b); {
-			j := t.index(b[k:], p)
-			if j < 0 {
+			s := x.next(k)
+			if s < 0 {
 				break
 			}
-			s := k + j
 			if t.hit(b, s) {
 				if best < 0 || s < best {
 					best = s
@@ -560,6 +657,7 @@ func (t *tokenSet) firstPrefixFrom(b []byte, lo int) int {
 			}
 			k = s + 1
 		}
+		searched += x.fold.searched
 	}
-	return best
+	return best, searched
 }
