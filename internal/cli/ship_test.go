@@ -292,8 +292,8 @@ func TestRunShipConfirmWaitsForTheHolderOfTheShipLock(t *testing.T) {
 			}()
 			code := runShipConfirm([]string{"-pending-file", pending, "-log", logPath, "-wait", "10s"}, nil, errb)
 			out := errb.String()
-			if !strings.Contains(out, "waiting for the ship install to finish") {
-				t.Fatalf("no waiting line: %q", out)
+			if !strings.Contains(out, "waiting for the ship install to finish (usually a few minutes; gives up after 10s;") {
+				t.Fatalf("no waiting line with its bound: %q", out)
 			}
 			if !strings.Contains(out, c.want) {
 				t.Fatalf("stderr = %q, want %q", out, c.want)

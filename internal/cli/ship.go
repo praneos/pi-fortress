@@ -282,7 +282,12 @@ func runShipConfirm(args []string, _, stderr io.Writer) int {
 	// a holder that this run waits for are all after it.
 	mark := jsonl.ShipLogSize(in.Log)
 	release, waited, err := shipExclusiveWait(in, *wait, func() {
-		fmt.Fprintf(stderr, "pf ship confirm: waiting for the ship install to finish (up to %s; Ctrl-C stops only this wait)\n", *wait)
+		// The bound is the install unit's start timeout, not the usual time.
+		bound := wait.String()
+		if *wait >= time.Minute && *wait%time.Minute == 0 {
+			bound = fmt.Sprintf("%dm", *wait/time.Minute)
+		}
+		fmt.Fprintf(stderr, "pf ship confirm: waiting for the ship install to finish (usually a few minutes; gives up after %s; Ctrl-C stops only this wait)\n", bound)
 	})
 	if err != nil {
 		return fail(stderr, fmt.Errorf("pf ship confirm: %w", err))
