@@ -36,6 +36,8 @@ func segDHCPTests(t *testing.T) {
 		leasef = "/var/lib/dhcp/dhclient-" + dev + ".leases"
 		apply  = "sudo /usr/local/sbin/pf apply --local 2>&1"
 	)
+	// For the seccomp check after the lease.
+	since := piClock(t)
 	houseIF := strings.TrimSpace(pi(t, ". /etc/pi-fortress/house.env && echo $HOUSE_IF"))
 	if houseIF == "" || strings.Contains(houseIF, ".") {
 		t.Skipf("HOUSE_IF=%q: this needs an untagged house port to hang a VLAN on", houseIF)
@@ -136,6 +138,9 @@ func segDHCPTests(t *testing.T) {
 		if u := strings.TrimSpace(pi(t, "sudo stat -c %U /proc/"+pid)); u != "pf-dhcp-"+name {
 			t.Errorf("%s runs as %s, want pf-dhcp-%s", unit, u, name)
 		}
+		// The box of the house DHCP daemon (house_test.go): a seccomp
+		// filter, no_new_privs and the three net capabilities.
+		procBoxed(t, unit, capNetBindService|capNetAdmin|capNetRaw)
 		if s := pi(t, "sudo stat -c '%U %a' /var/lib/pi-fortress/dhcp-"+name+".leases /var/log/pi-fortress/dhcp-"+name+".log"); strings.Count(s, "pf-dhcp-"+name+" 640") != 2 {
 			t.Errorf("lease file and log are not pf-dhcp-%s 0640:\n%s", name, s)
 		}
@@ -186,6 +191,9 @@ func segDHCPTests(t *testing.T) {
 		mustFailAllOn(t, "house",
 			"sudo ip netns exec "+ns+" nc -z -w3 "+segIP+" 22",
 			"sudo ip netns exec "+ns+" nc -z -w3 "+e["AGENT_IP"]+" 22")
+		// The lease went through the filter of the instance. A filtered
+		// call kills dnsmasq, and the kernel logs it.
+		noSeccompKill(t, since, "dnsmasq")
 	})
 	// A reservation for the MAC of the client, outside the dynamic range,
 	// so that the address can only come from it. It is in dhcp.<name>.hosts
