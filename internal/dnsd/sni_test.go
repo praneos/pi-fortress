@@ -1040,3 +1040,74 @@ func TestSNINewSYNStartsAFreshCheck(t *testing.T) {
 		ok(t, q, 2, "its retransmit")
 	})
 }
+
+// blockQueue is a queue on which nothing arrives until it closes.
+type blockQueue struct {
+	once   sync.Once
+	closed chan struct{}
+}
+
+func (q *blockQueue) Recv() (nfq.Packet, error) {
+	<-q.closed
+	return nfq.Packet{}, nfq.ErrClosed
+}
+func (q *blockQueue) Verdict(uint32, uint32, *uint32) error { return nil }
+func (q *blockQueue) Close() error {
+	q.once.Do(func() { close(q.closed) })
+	return nil
+}
+
+// pf dns binds the SNI queue through netgate. While netgate is down, or
+// refuses, the loop tries again, and the rest of the resolver serves. The
+// stop of the resolver closes the queue.
+func TestSNILoopRetriesUntilNetgateBinds(t *testing.T) {
+	srv, err := New(Config{
+		NFTTable: "inet fortress",
+		NFT:      &fakeNFT{},
+		Segments: []Segment{{
+			Name: "house", Iface: "lo", IP: netip.MustParseAddr("127.0.0.2"),
+			Upstream: "127.0.0.1:53", NFTSet: "resolved_house_v4", SNIQueue: 1,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := &blockQueue{closed: make(chan struct{})}
+	asked := make(chan uint16, 8)
+	srv.sniRetry = 10 * time.Millisecond
+	var tries atomic.Int32
+	srv.openSNI = func(num uint16) (sniQueue, error) {
+		asked <- num
+		if tries.Add(1) == 1 {
+			return nil, errors.New("dial unixpacket /run/pi-fortress-netgate/dns.sock: connect: no such file or directory")
+		}
+		return q, nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.sniLoop(ctx, srv.segs[0])
+	}()
+	for i := range 2 {
+		select {
+		case n := <-asked:
+			if n != 1 {
+				t.Fatalf("asked for queue %d, want 1", n)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("no try %d to bind the queue", i+1)
+		}
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the loop did not stop with the resolver")
+	}
+	select {
+	case <-q.closed:
+	default:
+		t.Fatal("the stop did not close the queue")
+	}
+}

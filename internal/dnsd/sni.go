@@ -16,6 +16,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 
 	"pi-fortress/internal/base"
+	"pi-fortress/internal/netgate"
 	"pi-fortress/internal/nfq"
 	"pi-fortress/internal/tlssni"
 )
@@ -34,10 +35,14 @@ import (
 // The mark values come from render (sniOK, sniBad). A verdict repeats the
 // packet into forward with one of them. forward copies it to the flow, so
 // an answered flow never goes into the queue again.
+//
+// pf dns holds no CAP_NET_ADMIN. pf netgate binds the queue and relays
+// each packet to this code (netgate.SNIConn). It sets only the SNI bits
+// of the mark that the kernel gave the packet.
 const (
-	sniBits = 0x00f00000
-	sniOK   = 0x00200000
-	sniBad  = 0x00300000
+	sniBits = netgate.SNIBits
+	sniOK   = netgate.SNIOK
+	sniBad  = netgate.SNIBad
 	// sniWait is how long a flow can take to send its full ClientHello. A
 	// client sends it immediately after the handshake. A slower flow is not a
 	// browser that opens a page.
@@ -50,8 +55,8 @@ const (
 	sniMaxHeld  = 32
 	sniMaxBytes = 64 << 10
 	// sniMaxJudges bounds the name lookups in progress. Each one goes to the
-	// upstream and can start an nft process. The query slots of the
-	// listeners do not cover these. When all are in use, a new flow is
+	// upstream and can ask netgate for a gate set write. The query slots of
+	// the listeners do not cover these. When all are in use, a new flow is
 	// refused.
 	sniMaxJudges = 256
 	// sniDone keeps a verdict for packets of the flow that were already in
@@ -67,7 +72,8 @@ const (
 	sniSweep   = time.Second
 )
 
-// sniQueue is nfq.Queue, narrowed so the tests can drive the check.
+// sniQueue is the queue as the check sees it: netgate.SNIConn in the
+// daemon, a fake in the tests.
 type sniQueue interface {
 	Recv() (nfq.Packet, error)
 	Verdict(id uint32, verdict uint32, mark *uint32) error
@@ -143,10 +149,10 @@ func newSNICheck(q sniQueue, resolve func(context.Context, netip.Addr, string) (
 }
 
 // sniLoop runs the check of a segment until ctx ends. If the queue cannot
-// open, sniLoop retries it. This is not fatal: the rest of the resolver
-// must continue to serve. Until the queue is bound, the kernel drops the
-// packets that the queue would hold. Thus the house is not more open than
-// with the old gate.
+// open (netgate is down, or refuses), sniLoop retries it. This is not
+// fatal: the rest of the resolver must continue to serve. Until the queue
+// is bound, the kernel drops the packets that the queue would hold. Thus
+// the house is not more open than with the old gate.
 func (s *Server) sniLoop(ctx context.Context, seg *Segment) {
 	ech, err := loadECH(seg.SNIECHFile)
 	if err != nil {
@@ -157,13 +163,13 @@ func (s *Server) sniLoop(ctx context.Context, seg *Segment) {
 		log.Printf("pf dns: segment %s: %v; non-TLS flows will be refused", seg.Name, err)
 	}
 	for ctx.Err() == nil {
-		q, err := nfq.Open(seg.SNIQueue)
+		q, err := s.openSNI(seg.SNIQueue)
 		if err != nil {
 			log.Printf("pf dns: segment %s: SNI queue %d: %v; its pending 443 flows are dropped until it opens", seg.Name, seg.SNIQueue, err)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(5 * time.Second):
+			case <-time.After(s.sniRetry):
 			}
 			continue
 		}

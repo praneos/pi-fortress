@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"pi-fortress/internal/gateset"
+	"pi-fortress/internal/nfq"
 )
 
 const (
@@ -164,4 +165,83 @@ func Ping(path, set string) error {
 		return err
 	}
 	return replyErr(status, why)
+}
+
+// SNIConn is the SNI side of pf dns: one queue, which netgate binds and
+// relays. It has the methods of nfq.Queue that the SNI check of pf dns
+// uses. When it closes, netgate closes the queue, and the kernel drops
+// what the queue held.
+type SNIConn struct {
+	c *net.UnixConn
+	// buf is for Recv, which one goroutine calls.
+	buf []byte
+}
+
+// DialSNI asks netgate to bind queue and relay it on a new connection.
+// It returns when the queue is bound, or with the reason that it is not.
+func DialSNI(path string, queue uint16) (*SNIConn, error) {
+	c, err := dial(path)
+	if err != nil {
+		return nil, err
+	}
+	reply, err := exchange(c, encodeSNIHello(queue), gateWait)
+	if err == nil {
+		var status byte
+		var why string
+		if status, why, err = decodeReply(reply); err == nil {
+			err = replyErr(status, why)
+		}
+	}
+	if err != nil {
+		c.Close()
+		return nil, err
+	}
+	return &SNIConn{c: c, buf: make([]byte, maxPacket+1)}, nil
+}
+
+// Recv gives the next packet of the queue. The payload is a copy.
+func (s *SNIConn) Recv() (nfq.Packet, error) {
+	msg, err := readMsg(s.c, s.buf)
+	if err != nil {
+		if errors.Is(err, net.ErrClosed) {
+			return nfq.Packet{}, nfq.ErrClosed
+		}
+		return nfq.Packet{}, err
+	}
+	return decodePacket(msg)
+}
+
+// Verdict sends the verdict for packet id. For nfq.Repeat, mark must have
+// SNIOK or SNIBad in its SNI bits. Only those bits go to netgate: netgate
+// applies them to the mark that the kernel gave the packet.
+func (s *SNIConn) Verdict(id uint32, v uint32, mark *uint32) error {
+	out := verdict{id: id, verdict: v, bits: bitsNone}
+	if v == nfq.Repeat {
+		switch {
+		case mark == nil:
+		case *mark&SNIBits == SNIOK:
+			out.bits = bitsOK
+		case *mark&SNIBits == SNIBad:
+			out.bits = bitsBad
+		}
+	}
+	msg, err := encodeVerdict(out)
+	if err != nil {
+		return err
+	}
+	if err := s.c.SetWriteDeadline(time.Now().Add(gateWait)); err != nil {
+		return sniErr(err)
+	}
+	_, err = s.c.Write(msg)
+	return sniErr(err)
+}
+
+// Close closes the connection. A Recv in progress returns nfq.ErrClosed.
+func (s *SNIConn) Close() error { return s.c.Close() }
+
+func sniErr(err error) error {
+	if errors.Is(err, net.ErrClosed) {
+		return nfq.ErrClosed
+	}
+	return err
 }

@@ -269,6 +269,11 @@ type Server struct {
 	links                           func() (map[string]int, error)
 	pinDev                          func(fd int, iface string) error
 	linkEvents                      func(ctx context.Context) (<-chan struct{}, error)
+	// openSNI binds the SNI queue of a segment through netgate, and
+	// sniRetry is the wait before the next try when it fails. A test
+	// replaces both.
+	openSNI  func(num uint16) (sniQueue, error)
+	sniRetry time.Duration
 
 	// queries counts the goroutines that each answer one query. Run can then
 	// wait for them. Otherwise Run returns into a CloseLogs that removes the
@@ -301,6 +306,10 @@ func New(cfg Config) (*Server, error) {
 		links:        ifIndexes,
 		pinDev:       pinToDevice,
 		linkEvents:   routeEvents,
+		openSNI: func(num uint16) (sniQueue, error) {
+			return netgate.DialSNI(netgate.DNSSocket, num)
+		},
+		sniRetry: 5 * time.Second,
 	}
 	if s.nft == nil {
 		s.nft = netgate.NewGateClient(netgate.DNSSocket)

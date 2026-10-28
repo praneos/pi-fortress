@@ -13,6 +13,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"pi-fortress/internal/nfq"
 )
 
 // Config is the setup of a Server.
@@ -29,9 +31,16 @@ type Config struct {
 	// Run runs nft (gateset.Cmd.Run). Nil runs the nft command. A test
 	// gives its own.
 	Run func(arg string) error
+	// OpenQueue binds an SNI queue. Nil is nfq.Open. A test gives a fake.
+	OpenQueue func(num uint16) (Queue, error)
 	// Now and Logf are time.Now and log.Printf, except in tests.
 	Now  func() time.Time
 	Logf func(format string, args ...any)
+	// sniAge, sniHeld and sniSweep are the constants of relay.go. New
+	// sets them. A test can make them small.
+	sniAge   time.Duration
+	sniHeld  int
+	sniSweep time.Duration
 }
 
 // sock is one listening socket: its file, the one peer that may use it,
@@ -62,7 +71,9 @@ type Server struct {
 
 	mu    sync.Mutex
 	conns map[*net.UnixConn]struct{}
-	wg    sync.WaitGroup
+	// queues are the SNI queues with a relay now: one client each.
+	queues map[uint16]bool
+	wg     sync.WaitGroup
 }
 
 // New checks cfg and makes a Server. It opens nothing.
@@ -79,7 +90,17 @@ func New(cfg Config) (*Server, error) {
 	if cfg.Logf == nil {
 		cfg.Logf = log.Printf
 	}
-	s := &Server{cfg: cfg, conns: map[*net.UnixConn]struct{}{}}
+	if cfg.OpenQueue == nil {
+		cfg.OpenQueue = func(num uint16) (Queue, error) { return nfq.Open(num) }
+	}
+	if cfg.sniAge == 0 {
+		cfg.sniAge, cfg.sniHeld, cfg.sniSweep = sniAge, sniHeld, sniSweep
+	}
+	s := &Server{
+		cfg:    cfg,
+		conns:  map[*net.UnixConn]struct{}{},
+		queues: map[uint16]bool{},
+	}
 	s.gate = newGateVerb(&s.cfg)
 	s.socks = []*sock{{
 		name:  "dns.sock",
@@ -222,6 +243,8 @@ func (s *Server) serveDNS(c *net.UnixConn, first, buf []byte) {
 	switch first[0] {
 	case verbGate:
 		s.gate.serve(c, first, buf, s.refuse)
+	case verbSNI:
+		s.serveSNI(c, first)
 	default:
 		s.refuse("dns.sock: first message has verb %q", first[0])
 	}

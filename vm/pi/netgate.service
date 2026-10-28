@@ -1,5 +1,5 @@
 [Unit]
-Description=pi-fortress netgate (gate set writes for pf dns)
+Description=pi-fortress netgate (gate set writes and the SNI queue for pf dns)
 After=network-online.target nftables.service
 Wants=network-online.target
 # pf dns asks netgate for each write to a gate set. Thus netgate is up
@@ -39,9 +39,12 @@ UMask=0077
 # enters this directory, and only the group of a socket opens it.
 RuntimeDirectory=pi-fortress-netgate
 RuntimeDirectoryMode=0755
-# NET_ADMIN only, as an ambient capability: the nft that netgate forks
-# needs it. nft is in /usr/sbin, which stays readable with
-# ProtectSystem=strict.
+# NET_ADMIN only. netgate binds the SNI queue of the house and gives each
+# verdict that pf dns sends back. The kernel checks NET_ADMIN on each of
+# these netlink messages, also on a socket that a different process
+# opened, so pf dns cannot get the queue as a file descriptor. It is
+# ambient, because the nft that netgate forks needs it too. nft is in
+# /usr/sbin, which stays readable with ProtectSystem=strict.
 CapabilityBoundingSet=CAP_NET_ADMIN
 AmbientCapabilities=CAP_NET_ADMIN
 # dns.json gives the nft table and the gate sets. apply writes it, and
@@ -60,8 +63,8 @@ ProtectClock=yes
 ProtectHostname=yes
 ProtectProc=invisible
 # AF_UNIX: the sockets of the clients, and stderr to the journal.
-# AF_NETLINK: nft (nfnetlink). No AF_INET: netgate and nft open no
-# network socket.
+# AF_NETLINK: nft and the SNI queue (nfnetlink). No AF_INET: netgate and
+# nft open no network socket.
 RestrictAddressFamilies=AF_UNIX AF_NETLINK
 RestrictNamespaces=yes
 RestrictRealtime=yes
