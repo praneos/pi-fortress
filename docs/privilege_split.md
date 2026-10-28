@@ -152,9 +152,12 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
     gate set (`resolved_v4`, `resolved_house_v4`, `resolved_<name>_v4`),
     or restart their timeout. It writes only a set that `dns.json` names,
     only addresses that pass the public check of the resolver
-    (`internal/gateset`), at most 64 in one request and at most 200
-    requests each second (burst 400). The write is the same `nft` command
-    that pf dns ran before, with a 3 s timeout.
+    (`internal/gateset`), at most 64 in one request, and at most 200
+    requests each second (burst 400) for each gate set. Thus a flood of
+    names on one segment cannot use the writes of a different segment. At
+    most 16 `nft` processes run at one time, for all sets together. The
+    write is the same `nft` command that pf dns ran before, with a 3 s
+    timeout.
   - SNI, for the agent resolver: netgate binds the NFQUEUE of the house
     SNI check while pf dns is connected, and relays each queued packet to
     pf dns. It reads only the id, the mark and the length of the packet,

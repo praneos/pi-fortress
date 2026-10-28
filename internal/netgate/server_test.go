@@ -237,6 +237,33 @@ func TestGateRateLimit(t *testing.T) {
 	}
 }
 
+// Each gate set has its own bucket. A flood of names on one segment uses
+// up its own writes, and the writes of each other segment still pass.
+func TestGateRateIsForEachSet(t *testing.T) {
+	h := newHarness(t, nil)
+	c := NewGateClient(h.sock("dns.sock"))
+	for i := range gateBurst {
+		if err := c.Add("resolved_v4", v4s("1.1.1.1")); err != nil {
+			t.Fatalf("request %d: %v", i, err)
+		}
+	}
+	err := c.Add("resolved_v4", v4s("1.1.1.1"))
+	if err == nil || !strings.Contains(err.Error(), "for set resolved_v4") {
+		t.Fatalf("resolved_v4 over its burst: %v", err)
+	}
+	for i := range gateBurst {
+		if err := c.Refresh("resolved_house_v4", v4s("8.8.8.8")); err != nil {
+			t.Fatalf("resolved_house_v4 request %d while resolved_v4 is at its limit: %v", i, err)
+		}
+	}
+	if err := c.Add("resolved_house_v4", v4s("8.8.8.8")); err == nil {
+		t.Fatal("resolved_house_v4 passed over its own burst")
+	}
+	if got := len(h.calls()); got != 2*gateBurst {
+		t.Fatalf("%d nft calls, want %d", got, 2*gateBurst)
+	}
+}
+
 // A failed nft (a full set) is an error for pf dns, with the nft text.
 func TestGateNftFailureIsAnError(t *testing.T) {
 	h := newHarness(t, nil)
