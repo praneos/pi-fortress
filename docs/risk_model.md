@@ -65,6 +65,11 @@ listens on UDP 123 when the Pi has a house or a plain segment:
   the Pi, whatever its destination. Thus NTP, which can carry hidden data
   in its timestamps and extension fields, never leaves those networks.
   Under strict, NTS key exchange (TCP 4460) does not leave either.
+- The one exception is a plain segment with `NTP=pass`, for a device that
+  needs NTS end to end. Its NTP and NTS go out, but only to the addresses
+  in `ntp_pass.ips` (well-known public time servers). Thus the hidden-data
+  path of that segment is open to those servers only. NTP to each other
+  address still goes to the Pi. The default is `NTP=redirect`.
 - chrony has a rate limit for each client address, no command port on the
   network, and no `local` line. Thus it serves only a clock that it
   synchronized over NTS.

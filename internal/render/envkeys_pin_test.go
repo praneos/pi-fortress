@@ -79,7 +79,7 @@ func pinHouseKeys(t *testing.T, out *strings.Builder) {
 func pinSegmentKeys(t *testing.T, out *strings.Builder) {
 	keys := []string{"IF", "NET", "IP", "ADMIN", "SSH_TO", "BLOCK_DIRECT_IP", "EGRESS", "ALLOW_PORTS", "SSH_FROM",
 		"DNS_TYPES", "PARANOID", "DHCP", "DHCP_START", "DHCP_END", "CONN_PER_IP", "NEW_PER_IP", "CONN_TOTAL",
-		"NEW_TOTAL", "BOGUS"}
+		"NEW_TOTAL", "NTP", "BOGUS"}
 	dir := t.TempDir()
 	segs := filepath.Join(dir, "segments.d")
 	if err := os.Mkdir(segs, 0755); err != nil {
@@ -97,7 +97,7 @@ func pinSegmentKeys(t *testing.T, out *strings.Builder) {
 		"SSH_FROM=10.77.0.5\n", "SSH_FROM=10.80.0.9\n", "SSH_FROM=10.78.0.9\n",
 		"DHCP=on\nDHCP_START=10.80.0.100\nDHCP_END=10.80.0.199\n",
 		"DHCP_START=10.80.0.100\n", "CONN_PER_IP=200\nCONN_TOTAL=100\n", "NEW_PER_IP=500/600\nNEW_TOTAL=300/600\n",
-		"ADMIN=yes\nSSH_TO=10.77.0.10\n", "IF=\n",
+		"ADMIN=yes\nSSH_TO=10.77.0.10\n", "IF=\n", "NTP=redirect\n", "NTP=pass\n",
 	}
 	for _, e := range extra {
 		write(t, segs, "one.env", base+e)

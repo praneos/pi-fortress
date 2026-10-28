@@ -83,7 +83,7 @@ func logTool(verb string, args map[string]string, took time.Duration, err error)
 
 const fetchUsage = "usage: pf fetch [-policy DIR] [-out DIR]"
 
-const compileUsage = "usage: pf compile --policy DIR --out-nft FILE --out-dns FILE [--out-doh-nft FILE] [--out-doh-dns FILE] [--out-house-dns FILE] [--out-house-doh-dns FILE] [--out-house-private-dns-nft FILE] [--out-direct-nft FILE] [--out-house-direct-nft FILE] [--out-house-whatsapp-nft FILE] [--out-ssh-nft FILE] [--out-domain-map FILE] [--out-ip-map FILE]"
+const compileUsage = "usage: pf compile --policy DIR --out-nft FILE --out-dns FILE [--out-doh-nft FILE] [--out-doh-dns FILE] [--out-house-dns FILE] [--out-house-doh-dns FILE] [--out-house-private-dns-nft FILE] [--out-direct-nft FILE] [--out-house-direct-nft FILE] [--out-house-whatsapp-nft FILE] [--out-ssh-nft FILE] [--out-ntp-pass-nft FILE] [--out-domain-map FILE] [--out-ip-map FILE]"
 
 const observeUsage = "usage: pf observe once|run|show|reset"
 
@@ -163,6 +163,7 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 	outHouseDirectNFT := fs.String("out-house-direct-nft", "", "house_direct_ip.allow nft elements path")
 	outHouseWhatsAppNFT := fs.String("out-house-whatsapp-nft", "", "house_whatsapp.ips nft elements path")
 	outSSHNFT := fs.String("out-ssh-nft", "", "ssh_allow.ips nft elements path")
+	outNTPPassNFT := fs.String("out-ntp-pass-nft", "", "ntp_pass.ips nft elements path")
 	outDomainMap := fs.String("out-domain-map", "", "sinkhole name → feed map path (name<TAB>feed)")
 	outIPMap := fs.String("out-ip-map", "", "blacklist prefix → feed map path (prefix<TAB>feed)")
 	if code, ok := parse(fs, args); !ok {
@@ -189,6 +190,7 @@ func runCompile(args []string, stdout, stderr io.Writer) int {
 		HouseDirectIPNFT:   *outHouseDirectNFT,
 		HouseWhatsAppNFT:   *outHouseWhatsAppNFT,
 		SSHAllowNFT:        *outSSHNFT,
+		NTPPassNFT:         *outNTPPassNFT,
 		DomainMap:          *outDomainMap,
 		IPMap:              *outIPMap,
 	})

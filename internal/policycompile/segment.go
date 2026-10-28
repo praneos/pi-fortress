@@ -66,6 +66,11 @@ const HouseVPNFile = "generated/house_vpn.domains"
 // HouseWhatsAppFile is Meta's ranges for HOUSE_ALLOW_WHATSAPP, shipped.
 const HouseWhatsAppFile = "house_whatsapp.ips"
 
+// NTPPassFile is the NTP and NTS servers that a plain segment with
+// NTP=pass can reach. It is not a list of a policed segment: no screen
+// edits it. It ships as a seed, and the copy of the operator wins.
+const NTPPassFile = "ntp_pass.ips"
+
 // Generated names the half of the block list that internal/fetch writes.
 func (s SegmentPolicy) Generated(kind string) string {
 	return filepath.Join("generated", s.Sinkhole(kind))

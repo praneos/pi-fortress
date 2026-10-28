@@ -135,6 +135,13 @@ type Segment struct {
 	// empty when that file does not exist.
 	Hosts     []SegHost
 	HostsPath string
+	// NTP is NTP=pass: NTP and NTS of the segment to the addresses in
+	// ntp_pass.ips go out (UDP 123 and 4123, TCP 4460). NTP to each other
+	// address still goes to the gateway. The blacklist still applies. It is
+	// for a device that needs NTS end to end, for example a second gateway.
+	// Empty is NTP=redirect, the default (ntpRedirect). An explicit redirect
+	// becomes empty, so it renders the same as an absent line.
+	NTP string
 }
 
 // SegmentAllowPath is the location of the paranoid allowlist of a plain
@@ -1219,6 +1226,14 @@ func (s *Segment) readEnv(file string) error {
 				}
 			}
 			s.DNSTypes = strings.Join(strings.Fields(strings.ToUpper(val)), " ")
+		case "NTP":
+			if val != "redirect" && val != "pass" {
+				return badValue(file, n, key, "redirect or pass")
+			}
+			s.NTP = ""
+			if val == "pass" {
+				s.NTP = val
+			}
 		case "DHCP":
 			if !isOnOff(val) {
 				return fmt.Errorf("%s:%d: DHCP='%s' is not on or off. Nothing was changed.", file, n, val)

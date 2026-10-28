@@ -79,6 +79,9 @@ func PiOwned() []string {
 	// Nor this: the name and type pairs the agent resolver forwards past
 	// its address-only filter.
 	add("dns_types.allow")
+	// Nor this: the NTP and NTS servers that an NTP=pass segment can reach.
+	// It ships as a seed, and the operator adds a server that is missing.
+	add(policycompile.NTPPassFile)
 	// Nor this: the core.hosts lines of the operator. Upgrades keep these
 	// lines, and replace core.hosts itself.
 	add("core.hosts.local")

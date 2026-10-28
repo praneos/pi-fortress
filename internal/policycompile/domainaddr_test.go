@@ -37,7 +37,7 @@ func compileAllErr(t *testing.T, files map[string]string) (Summary, Out, error) 
 		"h.conf": &out.HouseDNS, "hvpn.conf": &out.HouseVPNDNS, "hdoh.conf": &out.HouseDoHDNS,
 		"hpriv.nft": &out.HousePrivateDNSNFT, "direct.nft": &out.DirectIPNFT,
 		"hdirect.nft": &out.HouseDirectIPNFT, "wa.nft": &out.HouseWhatsAppNFT, "ssh.nft": &out.SSHAllowNFT,
-		"d.map": &out.DomainMap, "ip.map": &out.IPMap,
+		"ntp.nft": &out.NTPPassNFT, "d.map": &out.DomainMap, "ip.map": &out.IPMap,
 	} {
 		*p = filepath.Join(tmp, name)
 	}

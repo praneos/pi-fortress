@@ -1,0 +1,71 @@
+# OPERATOR STATE. `make pi-ship` does not overwrite the copy on the Pi
+# (PI_OWNED in the Makefile). git holds only the seed for a fresh
+# install. Edit it on the Pi, then `sudo pf apply`.
+#
+# The NTP and NTS servers that a plain segment with NTP=pass can reach
+# (segments.d, docs/user_guide/pi_setup.md step 8). Public IPv4 addresses,
+# or ranges of /24 or narrower. For such a segment, NTP (UDP 123 and 4123)
+# and NTS key exchange (TCP 4460) to these addresses go out. NTP to each
+# other address goes to the gateway. A segment without NTP=pass does not
+# use this list.
+#
+# Addresses change. When a device on an NTP=pass segment cannot sync, the
+# address of its server is possibly missing here. Find it with
+# `dig +short A <server>`, add it, and apply.
+#
+# Each block below is the A records of the names, resolved 2026-10-28.
+# One /32 per address: no operator prefix is confirmed for these servers.
+
+# Cloudflare: time.cloudflare.com (NTP and NTS)
+162.159.200.1
+162.159.200.123
+
+# Google: time.google.com, time1.google.com to time4.google.com (NTP)
+216.239.35.0
+216.239.35.4
+216.239.35.8
+216.239.35.12
+
+# Netnod: nts.netnod.se, sth1.nts.netnod.se, sth2.nts.netnod.se (NTP and NTS)
+192.36.133.195
+192.36.133.197
+192.71.80.206
+192.71.80.207
+194.58.204.203
+194.58.204.204
+194.58.207.69
+194.58.207.70
+194.58.207.74
+194.58.207.75
+194.58.207.214
+194.58.207.217
+
+# PTB: ptbtime1.ptb.de to ptbtime4.ptb.de (NTP and NTS)
+192.53.103.103
+192.53.103.104
+192.53.103.108
+194.94.95.123
+
+# Canonical: ntp.ubuntu.com, 1.ntp.ubuntu.com to 4.ntp.ubuntu.com,
+# ntp-bootstrap.ubuntu.com (NTP and NTS)
+91.189.91.111
+91.189.91.112
+91.189.91.113
+91.189.91.157
+185.125.190.56
+185.125.190.57
+185.125.190.58
+185.125.190.121
+185.125.190.122
+185.125.190.123
+
+# Apple: time.apple.com (NTP). It gives different addresses by region.
+17.253.18.99
+17.253.18.131
+17.253.60.37
+
+# Microsoft: time.windows.com (NTP)
+40.81.94.65
+
+# NIST: time.nist.gov (NTP)
+132.163.97.1

@@ -7,9 +7,10 @@ import (
 )
 
 // operatorLists are the files that the operator edits and that pf compile
-// reads: the lists of each segment, the local DoH lists and core.hosts.
+// reads: the lists of each segment, the local DoH lists, core.hosts and
+// ntp_pass.ips.
 func operatorLists() []string {
-	files := []string{"doh.ips.local", "doh.domains.local", "core.hosts", "core.hosts.local"}
+	files := []string{"doh.ips.local", "doh.domains.local", "core.hosts", "core.hosts.local", NTPPassFile}
 	for _, seg := range Segments {
 		for _, l := range seg.Lists() {
 			files = append(files, l.Name)
@@ -55,6 +56,10 @@ func TestNoLineDropsSilently(t *testing.T) {
 		{"direct_ip.allow", "93.184.216.40/24", nil, []string{`direct_ip.allow line 1: "93.184.216.40/24"`, "host bits"}},
 		{"ssh_allow.ips", "github.com", nil, []string{`ssh_allow.ips line 1: "github.com"`, "a name is not accepted"}},
 		{"ssh_allow.ips", "10.0.0.5", nil, []string{`ssh_allow.ips line 1: "10.0.0.5"`, "private or reserved"}},
+		{"ntp_pass.ips", "time.google.com", nil, []string{`ntp_pass.ips line 1: "time.google.com"`, "a name is not accepted"}},
+		{"ntp_pass.ips", "10.0.0.5", nil, []string{`ntp_pass.ips line 1: "10.0.0.5"`, "private or reserved"}},
+		{"ntp_pass.ips", "216.239.0.0/16", nil, []string{`ntp_pass.ips line 1: "216.239.0.0/16"`, "wider than /24"}},
+		{"ntp_pass.ips", "216.239.35.4/24", nil, []string{`ntp_pass.ips line 1: "216.239.35.4/24"`, "host bits"}},
 		{"allow.domains", "*.example.com", nil, []string{`allow.domains line 1: "*.example.com"`, "write example.com"}},
 		{"allow.domains", "com", nil, []string{`allow.domains line 1: "com"`, "one label"}},
 		{"allow.domains", "*.*.x.example", nil, []string{`allow.domains line 1: "*.*.x.example"`, "allows no name"}},
