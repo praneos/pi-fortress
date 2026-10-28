@@ -67,7 +67,9 @@ listens on UDP 123 when the Pi has a house or a plain segment:
   Under strict, NTS key exchange (TCP 4460) does not leave either.
 - The one exception is a plain segment with `NTP=pass`, for a device that
   needs NTS end to end. Its NTP and NTS go out, but only to the addresses
-  in `ntp_pass.ips` (well-known public time servers). Thus the hidden-data
+  in `ntp_pass.ips` (well-known public time servers, only in address space
+  that their operator holds; not a cloud provider's shared pool, so
+  `time.windows.com` is not listed). Thus the hidden-data
   path of that segment is open to those servers only. NTP to each other
   address still goes to the Pi. The default is `NTP=redirect`.
 - chrony has a rate limit for each client address, no command port on the
