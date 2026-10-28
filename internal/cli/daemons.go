@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -525,6 +526,16 @@ func acceptCapped(ctx context.Context, ln net.Listener, max int, what string, se
 		}
 		go func() {
 			defer func() { <-sem }()
+			// A panic in one connection must not stop the daemon. The broker
+			// keeps the key of a sealed store in memory only. Thus a restart
+			// stops each substitution until an operator runs pf unlock again.
+			// The engine recovers each connection in the same way.
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("%s: panic src=%s: %v\n%s", what, c.RemoteAddr(), r, debug.Stack())
+					c.Close()
+				}
+			}()
 			if err := serve(c); err != nil {
 				log.Print(err)
 			}
