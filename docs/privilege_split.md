@@ -199,9 +199,10 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   accounts and the netlink attributes of the kernel. It uses only the
   standard library and two small packages of this tree
   (`internal/netgate/imports_test.go`). pf dns still decides what goes into
-  a gate set and the SNI verdict of a queued house packet. Thus code that
-  runs in pf dns can open a public IPv4 address to its segment, as its
-  answers can. It cannot flush or change the ruleset, add a route, a link
+  a gate set and the SNI verdict of a queued house packet. One pf dns
+  process serves the agent, the house and each plain segment. Thus code
+  that runs in it can open a public IPv4 address in each gate set that
+  `dns.json` names, so to each of these segments, as its answers can. It cannot flush or change the ruleset, add a route, a link
   or a bridge, or write a set that is not a resolver set.
 - The feed refresh (`fetch.service`, `pf apply --refresh`), the signed ship
   (`ship.service`) and the ship dead-man (`ship-deadman.service`) stay root.

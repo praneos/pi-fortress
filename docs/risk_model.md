@@ -64,10 +64,12 @@ capability. One small daemon, `pf netgate`, holds `CAP_NET_ADMIN` for
 them. It takes only fixed binary messages, on one socket for each client,
 and checks the uid and gid of each peer: a write of public IPv4 addresses
 to a resolver gate set, the verdicts of the house SNI queue, and a request
-for the conntrack table (`privilege_split.md`). Code that runs in `pf dns`
-can still put a public address in the gate set of its segment and decide
-the SNI verdict of a queued house packet, as its answers can. It cannot
-change the ruleset, a route, a link or a bridge. When `pf netgate` is
+for the conntrack table (`privilege_split.md`). One `pf dns` process
+serves the agent, the house and each plain segment. Thus code that runs
+in it can still put a public IPv4 address in each gate set that
+`dns.json` names, for each of these segments, and decide the SNI verdict
+of a queued house packet, as its answers can. It cannot change the
+ruleset, a route, a link or a bridge, or write any other set. When `pf netgate` is
 down, `pf dns` answers SERVFAIL to each name that needs a set write, the
 kernel drops the queued house packets, and the flow rows of observe stop.
 
