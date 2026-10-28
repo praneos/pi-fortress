@@ -11,6 +11,25 @@ import (
 
 // TestE2EParsers needs no lab: go test -tags=vagrant -run TestE2EParsers ./vm/itest
 func TestE2EParsers(t *testing.T) {
+	t.Run("dnsmasqKeepsNetAdmin", func(t *testing.T) {
+		const opts = "\nCompile time options: IPv6 GNU-getopt DHCP DHCPv6 conntrack ipset nftset\n"
+		for v, want := range map[string]bool{
+			"Dnsmasq version 2.90  Copyright (c) 2000-2024 Simon Kelley" + opts: true,
+			"Dnsmasq version 2.91  Copyright (c) 2000-2025 Simon Kelley" + opts: false,
+			"Dnsmasq version 2.93  Copyright (c) 2000-2025 Simon Kelley" + opts: false,
+			"Dnsmasq version 2.9  Copyright (c) 2000-2004 Simon Kelley":         true,
+			"Dnsmasq version 3.0":                    false,
+			"dnsmasq: unrecognised option":           true,
+			"Dnsmasq version unknown":                true,
+			"":                                       true,
+			"bash: /usr/sbin/dnsmasq: No such file":  true,
+			opts[1:] + "Dnsmasq version 2.93" + opts: true,
+		} {
+			if got := dnsmasqKeepsNetAdmin(v); got != want {
+				t.Errorf("dnsmasqKeepsNetAdmin(%q) = %v, want %v", v, got, want)
+			}
+		}
+	})
 	t.Run("hostAliases", func(t *testing.T) {
 		got := hostAliases("Host pi\n  HostName 10.79.0.1\nhost agent agent2\nHost *\n  ControlMaster auto\n# Host gone\n")
 		for _, h := range []string{"pi", "agent", "agent2"} {

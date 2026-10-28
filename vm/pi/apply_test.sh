@@ -1646,8 +1646,8 @@ grep -qx '  dhcp_account house' "${apply}" ||
 grep -q '^Group=nogroup$' "${hunit}" ||
   fail "dns-house.service does not name a group; dnsmasq's built-in default is dip"
 for _l in \
-  'CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN' \
-  'AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN' \
+  'CapabilityBoundingSet=CAP_NET_BIND_SERVICE' \
+  'AmbientCapabilities=CAP_NET_BIND_SERVICE' \
   'RestrictAddressFamilies=AF_INET AF_NETLINK AF_UNIX' \
   'SystemCallArchitectures=native' \
   'SystemCallFilter=@system-service' \
@@ -1664,6 +1664,30 @@ for _u in dns-house dhcp@; do
     fail "${_u}.service has CAP_NET_RAW, which a DHCP server with no-ping does not need"
 done
 grep -qx 'no-ping' "${apply}" || fail "dns-house.conf has no no-ping; dnsmasq would open an ICMP socket that it has no capability for"
+# Replies as broadcast, so dnsmasq writes no ARP entry before a reply. That
+# ARP entry was the only use of NET_ADMIN. Thus no DHCP unit has
+# NET_ADMIN, and each conf has dhcp-broadcast with no tag (a tag would
+# make it conditional). A drop-in gives NET_ADMIN back only on a dnsmasq
+# older than 2.91 (dhcp_cap_dropin, checked below with seg_dhcp_sync).
+# systemd adds the lines of a drop-in to those of the unit, unless a
+# line is set to empty.
+for _u in dns-house dhcp@; do
+  grep -vE '^[[:space:]]*#' "${here}/${_u}.service" | grep -q 'CAP_NET_ADMIN' &&
+    fail "${_u}.service has CAP_NET_ADMIN, which a DHCP server with dhcp-broadcast on dnsmasq 2.91 or newer does not need"
+  grep -qE '^(CapabilityBoundingSet|AmbientCapabilities)=$' "${here}/${_u}.service" &&
+    fail "${_u}.service sets a capability line to empty"
+done
+grep -qx 'dhcp-broadcast' "${apply}" || fail "dns-house.conf has no dhcp-broadcast; dnsmasq would write an ARP entry that it has no capability for"
+grep -qE '^dhcp-broadcast=' "${apply}" "${here}/lib/dhcp.sh" && fail "dhcp-broadcast has a tag; it must apply to every client"
+# The house unit gets the drop-in (or loses it) before the daemon-reload
+# and the restart that read it.
+_hunit_line="$(grep -n '^  install -m 0644 "${PI_LIB}/dns-house.service" /etc/systemd/system/pi-fortress-dns-house.service$' "${apply}" | head -1 | cut -d: -f1 || true)"
+_hdrop_line="$(grep -n '^  dhcp_cap_dropin /etc/systemd/system/pi-fortress-dns-house.service.d$' "${apply}" | head -1 | cut -d: -f1 || true)"
+_hreload_line="$(awk -v s="${_hdrop_line:-0}" 'NR > s && /^  systemctl daemon-reload$/ { print NR; exit }' "${apply}")"
+_hrestart_line="$(grep -n '^  systemctl restart pi-fortress-dns-house.service$' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_hunit_line}" && -n "${_hdrop_line}" && -n "${_hreload_line}" && -n "${_hrestart_line}" &&
+  "${_hunit_line}" -lt "${_hdrop_line}" && "${_hdrop_line}" -lt "${_hreload_line}" && "${_hreload_line}" -lt "${_hrestart_line}" ]] ||
+  fail "apply.sh does not write the house drop-in between the unit install and the daemon-reload before the restart (lines ${_hunit_line:-?} ${_hdrop_line:-?} ${_hreload_line:-?} ${_hrestart_line:-?})"
 # A killed DHCP daemon restarts in two seconds and leaves a SECCOMP
 # audit line. EPERM in a rare renew path makes one device silently lose
 # its lease weeks later. Thus the default action stays kill.
@@ -2510,7 +2534,22 @@ droot="${tmp}/dhcproot"
 mkdir -p "${tmp}/dhcpbin" "${droot}/etc" "${droot}/lib" "${droot}/log" "${droot}/units" "${droot}/work"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"%s"\n' "${droot}/systemctl.log" >"${tmp}/dhcpbin/systemctl"
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"%s"\n' "${droot}/chown.log" >"${tmp}/dhcpbin/chown"
-printf '#!/bin/bash\n[[ "$1" == --test ]] || exit 1\nprintf "%%s\\n" "$*" >>"%s"\n' "${droot}/dnsmasq.log" >"${tmp}/dhcpbin/dnsmasq"
+# dnsmasq --version prints the file dnsmasq.version: nothing when it is
+# not there, and "not found" with exit 127 when it holds only "missing".
+cat >"${tmp}/dhcpbin/dnsmasq" <<EOF
+#!/bin/bash
+if [[ "\$1" == --version ]]; then
+  [[ -f "${droot}/dnsmasq.version" ]] || exit 0
+  if [[ "\$(cat "${droot}/dnsmasq.version")" == missing ]]; then
+    echo "dnsmasq: command not found" >&2
+    exit 127
+  fi
+  cat "${droot}/dnsmasq.version"
+  exit 0
+fi
+[[ "\$1" == --test ]] || exit 1
+printf "%s\\n" "\$*" >>"${droot}/dnsmasq.log"
+EOF
 printf '#!/bin/bash\nprintf "%%s\\n" "$*" >>"%s"\n' "${droot}/useradd.log" >"${tmp}/dhcpbin/useradd"
 printf '#!/bin/bash\n[[ "$1" == -u ]] && grep -q " ${2}$" "%s" 2>/dev/null\n' "${droot}/useradd.log" >"${tmp}/dhcpbin/id"
 chmod +x "${tmp}/dhcpbin"/*
@@ -2533,7 +2572,7 @@ dhcp_sync on 2>"${droot}/on.err" || fail "seg_dhcp_sync failed: $(cat "${droot}/
 dconf="${droot}/etc/dhcp-iot.conf"
 [[ -f "${dconf}" ]] || fail "no dnsmasq conf for the DHCP segment"
 [[ ! -e "${droot}/etc/dhcp-desk.conf" ]] || fail "a conf was written for the desk, which has no DHCP"
-for _l in 'interface=eth1.30' 'except-interface=lo' 'bind-dynamic' 'port=0' 'dhcp-range=10.30.0.100,10.30.0.199,12h' 'no-ping' \
+for _l in 'interface=eth1.30' 'except-interface=lo' 'bind-dynamic' 'port=0' 'dhcp-range=10.30.0.100,10.30.0.199,12h' 'no-ping' 'dhcp-broadcast' \
   'dhcp-option=option:router,10.30.0.1' 'dhcp-option=option:dns-server,10.30.0.1' 'dhcp-option=option:ntp-server,10.30.0.1' \
   "dhcp-leasefile=${droot}/lib/dhcp-iot.leases" "log-facility=${droot}/log/dhcp-iot.log"; do
   grep -qxF -- "${_l}" "${dconf}" || fail "dhcp-iot.conf lacks '${_l}':$(printf '\n%s' "$(cat "${dconf}")")"
@@ -2573,6 +2612,83 @@ diff <(grep -v '^#' "${here}/dns-house.service" | sed 's/house segment DHCP/DHCP
 grep -qF -- '--conf-file=/etc/pi-fortress/dhcp-%i.conf' "${here}/dhcp@.service" || fail "dhcp@.service does not read its own conf"
 grep -v '^#' "${here}/dhcp@.service" | grep -qF -- 'conf-dir' && fail "dhcp@.service reads a conf-dir"
 
+# dnsmasq before 2.91 does not start its DHCP server without CAP_NET_ADMIN,
+# also with dhcp-broadcast. On such a box, and when apply cannot read the
+# version, a drop-in gives the capability back to the unit. On 2.91 and
+# newer, there is no drop-in. The run above had a stub dnsmasq with no
+# version output.
+tdir="${droot}/units/pi-fortress-dhcp@.service.d"
+tdrop="${tdir}/net-admin.conf"
+[[ -f "${tdrop}" ]] || fail "no NET_ADMIN drop-in for the template when the dnsmasq version is not known"
+[[ "$(grep -vE '^[[:space:]]*(#|$)' "${tdrop}" | tr '\n' ' ')" == "[Service] CapabilityBoundingSet=CAP_NET_ADMIN AmbientCapabilities=CAP_NET_ADMIN " ]] ||
+  fail "the drop-in does not give exactly CAP_NET_ADMIN:$(printf '\n%s' "$(cat "${tdrop}")")"
+grep -qF 'gives CAP_NET_ADMIN to dnsmasq' "${droot}/on.err" || fail "apply wrote the NET_ADMIN drop-in without saying so"
+_rl="$(grep -n '^daemon-reload$' "${droot}/systemctl.log" | head -1 | cut -d: -f1 || true)"
+_sl="$(grep -n '^restart pi-fortress-dhcp@iot.service$' "${droot}/systemctl.log" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_rl}" && -n "${_sl}" && "${_rl}" -lt "${_sl}" ]] || fail "no daemon-reload between the drop-in and the restart: $(cat "${droot}/systemctl.log")"
+# version FIRST-LINE: the output of the stub dnsmasq --version.
+dver() { printf '%s\nCompile time options: IPv6 GNU-getopt DHCP DHCPv6 conntrack ipset nftset\n' "$1" >"${droot}/dnsmasq.version"; }
+for _c in \
+  'old:Dnsmasq version 2.90  Copyright (c) 2000-2024 Simon Kelley' \
+  'new:Dnsmasq version 2.91  Copyright (c) 2000-2025 Simon Kelley' \
+  'new:Dnsmasq version 2.93  Copyright (c) 2000-2025 Simon Kelley' \
+  'old:Dnsmasq version 2.9  Copyright (c) 2000-2004 Simon Kelley' \
+  'new:Dnsmasq version 3.0' \
+  'old:dnsmasq: unrecognised option' \
+  'old:Dnsmasq version unknown' \
+  'old:'; do
+  dver "${_c#*:}"
+  _got=new
+  (
+    # shellcheck source=lib/dhcp.sh
+    source "${dhcp_lib}"
+    PATH="${tmp}/dhcpbin:${PATH}"
+    dhcp_dnsmasq_old
+  ) && _got=old
+  [[ "${_got}" == "${_c%%:*}" ]] || fail "dhcp_dnsmasq_old calls '${_c#*:}' ${_got}, want ${_c%%:*}"
+done
+printf 'missing\n' >"${droot}/dnsmasq.version"
+(
+  # shellcheck source=lib/dhcp.sh
+  source "${dhcp_lib}"
+  PATH="${tmp}/dhcpbin:${PATH}"
+  dhcp_dnsmasq_old
+) || fail "dhcp_dnsmasq_old calls a box with no dnsmasq new; it must keep NET_ADMIN"
+# The same through seg_dhcp_sync, each version in turn.
+for _c in 'Dnsmasq version 2.91  Copyright:no' 'Dnsmasq version 2.90  Copyright:yes' 'Dnsmasq version 2.93  Copyright:no' \
+  'no version here:yes' 'Dnsmasq version 2.92  Copyright:no' 'Dnsmasq version 2.90  Copyright:yes'; do
+  dver "${_c%:*}"
+  dhcp_sync on 2>"${droot}/ver.err" || fail "seg_dhcp_sync failed with '${_c%:*}': $(cat "${droot}/ver.err")"
+  if [[ "${_c##*:}" == yes ]]; then
+    [[ -f "${tdrop}" ]] || fail "no NET_ADMIN drop-in for the template with '${_c%:*}'"
+  else
+    [[ ! -e "${tdrop}" && ! -e "${tdir}" ]] || fail "the NET_ADMIN drop-in (or its directory) stays with '${_c%:*}'"
+  fi
+done
+# The same content again: the file is not written again.
+dhcp_sync on 2>"${droot}/ver.err" || fail "seg_dhcp_sync failed with the same version again"
+grep -qF 'CAP_NET_ADMIN' "${droot}/ver.err" && fail "the unchanged NET_ADMIN drop-in was written again: $(cat "${droot}/ver.err")"
+# The house unit has its own drop-in directory (apply.sh, checked above).
+(
+  # shellcheck source=lib/dhcp.sh
+  source "${dhcp_lib}"
+  WORKDIR="${droot}/work" PATH="${tmp}/dhcpbin:${PATH}"
+  dhcp_cap_dropin "${droot}/units/pi-fortress-dns-house.service.d" 2>/dev/null
+) || fail "dhcp_cap_dropin failed for the house"
+cmp -s "${droot}/units/pi-fortress-dns-house.service.d/net-admin.conf" "${tdrop}" || fail "the house drop-in is not the same as the template drop-in"
+dver 'Dnsmasq version 2.91  Copyright (c) 2000-2025 Simon Kelley'
+(
+  # shellcheck source=lib/dhcp.sh
+  source "${dhcp_lib}"
+  WORKDIR="${droot}/work" PATH="${tmp}/dhcpbin:${PATH}"
+  dhcp_cap_dropin "${droot}/units/pi-fortress-dns-house.service.d"
+) || fail "dhcp_cap_dropin failed for the house on 2.91"
+[[ ! -e "${droot}/units/pi-fortress-dns-house.service.d" ]] || fail "the house NET_ADMIN drop-in stays on dnsmasq 2.91"
+# Back to an old dnsmasq, so DHCP off below must remove the template drop-in too.
+dver 'Dnsmasq version 2.90  Copyright (c) 2000-2024 Simon Kelley'
+dhcp_sync on 2>/dev/null || fail "seg_dhcp_sync failed on dnsmasq 2.90"
+[[ -f "${tdrop}" ]] || fail "no NET_ADMIN drop-in for the template on dnsmasq 2.90"
+
 # DHCP off: stopped, disabled, and conf, leases, enable link and template
 # removed. systemctl is a stub, so the test makes the link that enable would make.
 mkdir -p "${droot}/units/multi-user.target.wants"
@@ -2581,7 +2697,7 @@ ln -sf "${droot}/units/pi-fortress-dhcp@.service" "${droot}/units/multi-user.tar
 dhcp_sync off 2>"${droot}/off.err" || fail "seg_dhcp_sync failed with DHCP off: $(cat "${droot}/off.err")"
 grep -qx 'disable --now pi-fortress-dhcp@iot.service' "${droot}/systemctl.log" || fail "DHCP off did not stop and disable the instance"
 grep -qx 'daemon-reload' "${droot}/systemctl.log" || fail "DHCP off did not reload systemd after removing the template"
-for _f in etc/dhcp-iot.conf lib/dhcp-iot.leases units/pi-fortress-dhcp@.service units/multi-user.target.wants/pi-fortress-dhcp@iot.service; do
+for _f in etc/dhcp-iot.conf lib/dhcp-iot.leases units/pi-fortress-dhcp@.service units/pi-fortress-dhcp@.service.d units/multi-user.target.wants/pi-fortress-dhcp@iot.service; do
   [[ ! -e "${droot}/${_f}" && ! -L "${droot}/${_f}" ]] || fail "DHCP off left ${_f}"
 done
 grep -qF 'segment iot has no DHCP now' "${droot}/off.err" || fail "DHCP off removed the instance without saying so"

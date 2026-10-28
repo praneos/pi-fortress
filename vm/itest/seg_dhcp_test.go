@@ -112,7 +112,7 @@ func segDHCPTests(t *testing.T) {
 			return ""
 		})
 		conf := pi(t, "sudo cat /etc/pi-fortress/dhcp-"+name+".conf")
-		for _, want := range []string{"interface=" + segIF + "\n", "port=0\n", "dhcp-range=10.36.0.100,10.36.0.109,12h\n"} {
+		for _, want := range []string{"interface=" + segIF + "\n", "port=0\n", "dhcp-range=10.36.0.100,10.36.0.109,12h\n", "\ndhcp-broadcast\n"} {
 			if !contains(conf, want) {
 				t.Errorf("dhcp-%s.conf lacks %q:\n%s", name, want, conf)
 			}
@@ -139,8 +139,9 @@ func segDHCPTests(t *testing.T) {
 			t.Errorf("%s runs as %s, want pf-dhcp-%s", unit, u, name)
 		}
 		// The box of the house DHCP daemon (house_test.go): a seccomp
-		// filter, no_new_privs and the two net capabilities.
-		procBoxed(t, unit, capNetBindService|capNetAdmin)
+		// filter, no_new_privs and CAP_NET_BIND_SERVICE, with
+		// CAP_NET_ADMIN only on a dnsmasq older than 2.91 (dhcpCaps).
+		procBoxed(t, unit, dhcpCaps(t))
 		if s := pi(t, "sudo stat -c '%U %a' /var/lib/pi-fortress/dhcp-"+name+".leases /var/log/pi-fortress/dhcp-"+name+".log"); strings.Count(s, "pf-dhcp-"+name+" 640") != 2 {
 			t.Errorf("lease file and log are not pf-dhcp-%s 0640:\n%s", name, s)
 		}

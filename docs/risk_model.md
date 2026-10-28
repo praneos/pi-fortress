@@ -46,9 +46,12 @@ the Pi:
 - It listens on UDP 67, only on the interface of that segment.
 - A DHCP-only dnsmasq that is bound to that interface answers (`port=0`, no
   DNS).
-- It runs in the sandbox of the house unit, with two capabilities. Each
-  DHCP instance has its own account (`pf-dhcp-<name>`, `pf-dhcp-house` for
-  the house). An instance can write only its own lease file and log.
+- It runs in the sandbox of the house unit, with one capability,
+  `CAP_NET_BIND_SERVICE`. On dnsmasq older than 2.91, for example Debian
+  12, dnsmasq keeps `CAP_NET_ADMIN` too, because it does not start its
+  DHCP server without it. Each DHCP instance has its own account
+  (`pf-dhcp-<name>`, `pf-dhcp-house` for the house). An instance can
+  write only its own lease file and log.
 
 The Pi lets in the `0.0.0.0` source of a client with no lease on that port,
 and nowhere else. Forwarded traffic is still pinned to the `NET` of the
