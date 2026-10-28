@@ -15,13 +15,17 @@ Restart=always
 # Short and fixed, as for pf dns: while netgate is down, each answer that
 # is not in the cache of pf dns is SERVFAIL.
 RestartSec=1
-# Resource caps (pf-broker.service explains the scheme). netgate holds
-# small fixed messages and forks nft. The OOM rank and the CPU weight of
-# pf dns: without netgate, the segments get no new DNS answer.
-MemoryHigh=48M
-MemoryMax=64M
+# Resource caps (pf-broker.service explains the scheme). netgate itself
+# holds small fixed messages. The nft and conntrack processes that it
+# forks count in the memory of this unit: up to 16 nft at one time, each
+# with the cache of the table, and one conntrack. Thus the memory caps are
+# those of pf dns, which forked the same nft before. GOMEMLIMIT is for
+# the Go heap only. The OOM rank and the CPU weight of pf dns: without
+# netgate, the segments get no new DNS answer.
+MemoryHigh=200M
+MemoryMax=256M
 Environment=GOMEMLIMIT=40MiB
-TasksMax=64
+TasksMax=128
 LimitNOFILE=256
 OOMScoreAdjust=-500
 CPUWeight=200
