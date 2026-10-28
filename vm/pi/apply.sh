@@ -502,6 +502,11 @@ else
   # client, and the other daemons do not read them.
   getent group pf-leases >/dev/null || groupadd --system pf-leases
   usermod -aG pf-leases pf-observe
+  # pf-sidecar (the group): the alert sidecar only, through
+  # SupplementaryGroups in alert.service. It is the group of alert.url, the
+  # webhook URL, whose path is its bearer token. No account is a member.
+  # Thus monitor, which also runs as pf-sidecar, does not read it.
+  getent group pf-sidecar >/dev/null || groupadd --system pf-sidecar
   chown root:pf-fence "${LOCK_DIR}"
   chmod 0750 "${LOCK_DIR}"
   install -d -m 0755 /etc/tmpfiles.d
@@ -2207,8 +2212,9 @@ if [[ -f "${PI_LIB}/fetch.service" && -f "${PI_LIB}/fetch.timer" ]]; then
 fi
 
 # alert runs as pf-sidecar. Root keeps ownership of the state directories.
-# The sidecar owns exactly the files that it rewrites. These three are
-# also the only paths that alert.service can write.
+# The sidecar owns exactly the files that it rewrites. alert.service can
+# write these three and its StateDirectory (/var/lib/pi-fortress/alert),
+# and no other path.
 for _f in /var/lib/pi-fortress/alert.offset /var/lib/pi-fortress/alert.last /var/lib/pi-fortress/alert-notice.offset; do
   touch "${_f}"
   chown pf-sidecar:pf-fortress "${_f}"
@@ -2217,9 +2223,23 @@ done
 
 install -d -m 0755 /usr/local/lib/pi-fortress
 rm -f /usr/local/lib/pi-fortress/{alert,doh,core_policy,secrets_store,substitute,enroll,compile_policy,observe,fetch_blocklists,console,dump_streams}.py
+# alert.url is a webhook URL whose path is its bearer token. Its readers
+# are root (pf alert wg, the ship alert, the operator) and the alert
+# sidecar, through the pf-sidecar group. Thus 0640 root:pf-sidecar, also
+# for the copy in the policy tree: pf alert reads /vagrant/vm/policy
+# first, and on a hand-set Pi /vagrant is a link to /opt/pi-fortress. A
+# copy that the operator made by hand, or that a restore wrote (0600),
+# gets the same mode here.
 if [[ -f "${POLICY}/alert.url" && ! "${POLICY}/alert.url" -ef /etc/pi-fortress/alert.url ]]; then
-  install -m 0644 "${POLICY}/alert.url" /etc/pi-fortress/alert.url
+  install -m 0640 -o root -g pf-sidecar "${POLICY}/alert.url" /etc/pi-fortress/alert.url
 fi
+for _f in "${POLICY}/alert.url" /etc/pi-fortress/alert.url; do
+  if [[ -f "${_f}" && ! -L "${_f}" ]]; then
+    if ! { chown root:pf-sidecar "${_f}" && chmod 0640 "${_f}"; }; then
+      echo "pi-fortress: WARNING could not make ${_f} 0640 root:pf-sidecar; pf alert may not read it" >&2
+    fi
+  fi
+done
 if [[ -f "${PI_LIB}/alert.service" ]]; then
   install -m 0644 "${PI_LIB}/alert.service" /etc/systemd/system/pi-fortress-alert.service
   systemctl daemon-reload

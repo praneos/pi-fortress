@@ -318,7 +318,7 @@ func reboot(t *testing.T, host string) {
 
 // Capability bits, for the bounding sets the sandboxed daemons keep.
 // CapBnd in /proc/<pid>/status is that mask in hex, so the three net
-// capabilities a resolver or a DHCP server needs read 0x3400.
+// capabilities that a DHCP server needs read 0x3400.
 const (
 	capNetBindService = 1 << 10
 	capNetAdmin       = 1 << 12
@@ -374,9 +374,7 @@ func unitSandbox(t *testing.T, unit, user string, caps uint64) (string, []string
 	// these units while SystemCallFilter was missing. Thus the list that
 	// systemd merged decides. Seccomp only says that the list reached
 	// the process.
-	if got := procStatus(status, "Seccomp"); got != "2" {
-		t.Errorf("%s has Seccomp %q, want 2 (a seccomp filter is loaded)", unit, got)
-	}
+	boxedStatus(t, unit, status, caps)
 	filter := strings.Fields(pi(t, "systemctl show -p SystemCallFilter --value "+unit+".service"))
 	for _, want := range []string{"recvmsg", "openat"} {
 		if !slices.Contains(filter, want) {
@@ -398,6 +396,53 @@ func unitSandbox(t *testing.T, unit, user string, caps uint64) (string, []string
 		t.Errorf("%s bounding set is %#x, want %#x", unit, got, caps)
 	}
 	return pid, filter
+}
+
+// procBoxed asserts the sandbox of the main process of unit, as the
+// kernel sees it: a seccomp filter, no_new_privs, and exactly caps as its
+// effective set. It returns the PID, or "" when the unit has no main
+// process. It does not check the user, because www has a dynamic user.
+func procBoxed(t *testing.T, unit string, caps uint64) string {
+	t.Helper()
+	pid := mainPID(t, unit)
+	if pid == "" || pid == "0" {
+		t.Errorf("%s has no main process (%s)", unit, strings.TrimSpace(pi(t, "systemctl is-active "+unit+".service || true")))
+		return ""
+	}
+	boxedStatus(t, unit, pi(t, "sudo cat /proc/"+pid+"/status"), caps)
+	return pid
+}
+
+// boxedStatus checks one /proc/<pid>/status: Seccomp 2 (a filter is
+// loaded), NoNewPrivs 1, and CapEff equal to caps. A daemon with ambient
+// capabilities has them in CapEff. A daemon with none has 0.
+func boxedStatus(t *testing.T, unit, status string, caps uint64) {
+	t.Helper()
+	if got := procStatus(status, "Seccomp"); got != "2" {
+		t.Errorf("%s has Seccomp %q, want 2 (a seccomp filter is loaded)", unit, got)
+	}
+	if got := procStatus(status, "NoNewPrivs"); got != "1" {
+		t.Errorf("%s has NoNewPrivs %q, want 1", unit, got)
+	}
+	eff, err := strconv.ParseUint(procStatus(status, "CapEff"), 16, 64)
+	if err != nil {
+		t.Errorf("%s CapEff unreadable: %v", unit, err)
+		return
+	}
+	if eff != caps {
+		t.Errorf("%s effective capabilities are %#x, want %#x", unit, eff, caps)
+	}
+}
+
+// unitPaths is a path list property of unit (InaccessiblePaths,
+// ReadWritePaths) as systemd merged it, without the "-" and "+" prefixes.
+func unitPaths(t *testing.T, unit, prop string) []string {
+	t.Helper()
+	var out []string
+	for _, f := range strings.Fields(pi(t, "systemctl show -p "+prop+" --value "+unit+".service")) {
+		out = append(out, strings.TrimLeft(f, "-+"))
+	}
+	return out
 }
 
 // noSeccompKill fails if the kernel reported a seccomp kill for any of

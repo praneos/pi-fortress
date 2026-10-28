@@ -61,6 +61,8 @@ SystemCallFilter=~@privileged
 # @privileged includes @chown, and a filtered call kills the process. The
 # state file keeps the group of the file that it replaces (pf-fortress).
 SystemCallFilter=@chown
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
 # Its own state directory and the logs, nothing else. The other state
 # under /var/lib/pi-fortress (dns/, the alert offsets) is read-only here.
 # The www directory, with the claim codes, is not visible here. apply.sh makes the directory, owned by

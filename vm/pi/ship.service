@@ -45,13 +45,16 @@ MemoryDenyWriteExecute=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
 # A call outside the set fails with EPERM. A kill would stop the swap or
 # the apply between two steps, with no message.
 SystemCallErrorNumber=EPERM
 # The fetch.service set (it gives the reason for each), plus SYS_ADMIN for
 # kernel.kptr_restrict, kernel.dmesg_restrict and
-# kernel.unprivileged_bpf_disabled in lib/harden.sh. SYS_PTRACE also sets
-# kernel.yama.ptrace_scope there.
+# kernel.unprivileged_bpf_disabled in lib/harden.sh, and SYS_PTRACE for
+# kernel.yama.ptrace_scope there. A --local or --refresh apply (the feed
+# refresh) does not run lib/harden.sh.
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_FOWNER CAP_FSETID CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_LINUX_IMMUTABLE CAP_SYS_PTRACE CAP_AUDIT_WRITE CAP_SYS_ADMIN
 # /opt: the swap renames /opt/pi-fortress, /opt/pi-fortress.new and
 # /opt/pi-fortress.prev, so it needs the parent directory. /var/lib/pi-fortress:

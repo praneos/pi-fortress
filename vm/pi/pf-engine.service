@@ -53,12 +53,19 @@ AmbientCapabilities=
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
 ReadWritePaths=-/run/pi-fortress/broker
 # The engine is in pf-fortress, the group of the claims directories. The
 # live claim codes are in claims/ and in the ledger. Thus the engine gets no
 # path to the www directory. apply makes that directory before it starts a
 # daemon, so the optional "-" never skips it.
-InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/www
+#
+# The engine reads none of these: the logs, the observe state, the webhook
+# URL (alert.url) and the house reservations (house.hosts). Thus it gets
+# no path to them. A box with no webhook or no house has no alert.url or
+# house.hosts, hence the "-".
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/www -/var/log/pi-fortress -/var/lib/pi-fortress/observe -/etc/pi-fortress/alert.url -/etc/pi-fortress/house.hosts
 EnvironmentFile=-/etc/pi-fortress/engine.env
 EnvironmentFile=-/etc/pi-fortress/paranoid.flags
 EnvironmentFile=/etc/pi-fortress/net.env

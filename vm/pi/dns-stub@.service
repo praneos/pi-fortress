@@ -31,10 +31,11 @@ CPUWeight=200
 # (docs/user_guide/home_network.md). Only their config files are different.
 User=pf-dns
 Group=pf-fortress
-# Port 53, and NET_RAW for the SO_BINDTODEVICE pin on lo. No NET_ADMIN:
-# this segment feeds no nft set, so it never forks nft.
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_RAW
-AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_RAW
+# Port 53 only. The SO_BINDTODEVICE pin on lo needs no capability
+# (dns-agent-go.service gives the reason). No NET_ADMIN: this segment
+# feeds no nft set, so it never forks nft.
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 # One -config file for each instance. apply writes and checks it before
 # the ruleset loads. No sinkhole list and no query log, both on purpose
 # (see stub_config in apply.sh). apt and the feed fetches must not get
@@ -68,6 +69,8 @@ MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
 ReadWritePaths=
 InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www
 

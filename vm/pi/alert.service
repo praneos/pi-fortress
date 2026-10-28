@@ -35,6 +35,9 @@ Nice=-10
 LimitMEMLOCK=infinity
 User=pf-sidecar
 Group=pf-fortress
+# The group of alert.url (0640 root:pf-sidecar, apply.sh). Only this unit
+# gets it. monitor runs as the same user without it.
+SupplementaryGroups=pf-sidecar
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
@@ -61,6 +64,8 @@ CapabilityBoundingSet=
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
 # The three files that the sidecar rewrites in place, nothing else. It
 # only reads the logs. apply.sh makes the files, owned by pf-sidecar,
 # before it starts the unit. A "-" lets the unit start before the first

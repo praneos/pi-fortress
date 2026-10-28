@@ -823,6 +823,22 @@ for _u in dns-agent-go dns-house dns-stub@ dhcp@; do
 done
 grep -q '^Environment=GOMEMLIMIT=' "${here}/pf-broker.service" || fail "pf-broker.service sets no GOMEMLIMIT"
 
+# Each unit has a system-call filter. It allows only native calls, and
+# removes asynchronous I/O, the kernel keyring and userfaultfd from its
+# allowed set. The first filter line is the allow list: a first line with
+# "~" makes the full filter a deny list. The removal comes after each
+# allow line, because an allow line after it would add a call again.
+for _u in "${here}"/*.service; do
+  _n="$(basename "${_u}")"
+  grep -q '^SystemCallFilter=' "${_u}" || fail "${_n} has no system-call filter"
+  grep -qxF 'SystemCallArchitectures=native' "${_u}" || fail "${_n} has a system-call filter but no SystemCallArchitectures=native"
+  grep -m1 '^SystemCallFilter=' "${_u}" | grep -q '^SystemCallFilter=~' && fail "${_n} starts its system-call filter with a deny list"
+  _rm="$(grep -nxF 'SystemCallFilter=~@aio @keyring userfaultfd' "${_u}" | head -1 | cut -d: -f1 || true)"
+  [[ -n "${_rm}" ]] || fail "${_n} allows asynchronous I/O, the kernel keyring and userfaultfd"
+  _allow="$(grep -nE '^SystemCallFilter=[^~]' "${_u}" | tail -1 | cut -d: -f1)"
+  ((_rm > _allow)) || fail "${_n} has an allow line after the removal of @aio @keyring userfaultfd"
+done
+
 # apply writes the journal, the connection table and the sshd OOM rank on
 # each run. Thus an existing Pi gets them on its next ship.
 for _l in 'SystemMaxUse=200M' 'SystemKeepFree=1G' 'RuntimeMaxUse=64M' \
@@ -1524,8 +1540,19 @@ grep -q 'lab_echo' "${here}/apply.sh" ||
 unit="${here}/dns-agent-go.service"
 [[ -f "${unit}" ]] || fail "vm/pi/dns-agent-go.service is missing"
 grep -q '^User=pf-dns' "${unit}" || fail "dns-agent-go.service does not drop to pf-dns"
-grep -qE '^CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_NET_RAW$' "${unit}" ||
-  fail "dns-agent-go.service bounding set is not the three net capabilities"
+grep -qE '^CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN$' "${unit}" ||
+  fail "dns-agent-go.service bounding set is not port 53 and the nft fork"
+grep -qxF 'AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN' "${unit}" ||
+  fail "dns-agent-go.service does not give the two capabilities to pf dns and its nft fork"
+# pf dns pins each socket to its interface before it binds or connects it.
+# Linux 5.7 and later allow that with no capability. Thus neither pf dns
+# unit has NET_RAW.
+for _u in dns-agent-go dns-stub@; do
+  grep -vE '^[[:space:]]*#' "${here}/${_u}.service" | grep -q 'CAP_NET_RAW' &&
+    fail "${_u}.service has CAP_NET_RAW, which the device pin of a new socket does not need"
+done
+grep -qxF 'CapabilityBoundingSet=CAP_NET_BIND_SERVICE' "${here}/dns-stub@.service" ||
+  fail "dns-stub@.service bounding set is not port 53 only"
 grep -q 'CAP_SET\|CAP_CHOWN\|CAP_DAC_OVERRIDE' "${unit}" &&
   fail "dns-agent-go.service kept a dnsmasq privilege-drop capability"
 # Only the log directory and the directory of the fake-IP journal. The "-"
@@ -1695,6 +1722,21 @@ done < <(grep -E '^/' "${here}/logrotate.conf" | tr -d '{' | tr ' ' '\n' | grep 
 # postrotate runs systemctl, which needs AF_UNIX to reach systemd.
 grep -q 'systemctl kill' "${here}/logrotate.conf" ||
   fail "logrotate.conf no longer runs systemctl; check RestrictAddressFamilies of logrotate.service again"
+
+# wg-alert stays root, for wg show, with the sandbox of the other root
+# units and NET_ADMIN as its only capability. A filtered call fails with
+# EPERM, as in the other root units: the lab does not run this check.
+for _l in NoNewPrivileges=yes PrivateTmp=yes PrivateDevices=yes ProtectHome=yes ProtectSystem=strict \
+  ProtectKernelTunables=yes ProtectKernelModules=yes ProtectKernelLogs=yes ProtectControlGroups=yes \
+  ProtectClock=yes RestrictNamespaces=yes RestrictRealtime=yes RestrictSUIDSGID=yes LockPersonality=yes \
+  MemoryDenyWriteExecute=yes SystemCallArchitectures=native SystemCallFilter=@system-service \
+  SystemCallFilter=~@privileged SystemCallErrorNumber=EPERM 'CapabilityBoundingSet=CAP_NET_ADMIN' \
+  'AmbientCapabilities=CAP_NET_ADMIN' 'RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK'; do
+  grep -qxF "${_l}" "${here}/wg-alert.service" || fail "wg-alert.service has no '${_l}'"
+done
+# apply puts the WireGuard interface name in place of each wg0.
+[[ "$(grep -c wg0 "${here}/wg-alert.service")" -eq 2 ]] ||
+  fail "wg-alert.service names wg0 outside After= and ExecStart=; apply replaces each one"
 
 # usb-nic-switch.sh opens the adapter in /dev/bus/usb (usb_modeswitch,
 # usbreset) and writes its authorized file in /sys. Thus no PrivateDevices
@@ -2157,9 +2199,11 @@ cat >"${nmb}/ip" <<'EOF'
 [[ "$*" == "-o -4 addr show" ]] && cat "${IP_ADDRS}"
 exit 0
 EOF
+# ss with the port filter of ssh_local_addrs prints only the connections
+# to the local port 22. No -p: the guard reads no process data.
 cat >"${nmb}/ss" <<'EOF'
 #!/bin/bash
-[[ "$*" == "-Htnp state established" ]] && cat "${SS_OUT}"
+[[ "$*" == "-Htn state established ( sport = :22 )" ]] && awk '$3 ~ /:22$/' "${SS_OUT}"
 exit 0
 EOF
 chmod +x "${nmb}"/*
@@ -2243,18 +2287,18 @@ done
 grep -qx 'kept: desk ' "${tmp}/prune.out" || fail "the kept segment is not in SEG_KEPT: $(cat "${tmp}/prune.out")"
 
 # sudo drops SSH_CONNECTION by default. Thus the guard also reads the
-# sessions that sshd holds. Here the session address is on the interface
-# but not in the address list of the profile.
+# established connections to the sshd port. Here the session address is on
+# the interface but not in the address list of the profile.
 nmdb
 sed -i 's/^seg-desk|u-desk|eth0.79|.*/seg-desk|u-desk|eth0.79|/' "${tmp}/nm.db"
-printf '0      0         10.79.0.1:22      10.79.0.2:51234 users:(("sshd-session",pid=812,fd=4))\n0      0     192.168.1.20:22   192.168.1.5:40000 users:(("sshd-session",pid=900,fd=4))\n' >"${tmp}/ss.out"
+printf '0      0         10.79.0.1:22      10.79.0.2:51234\n0      0     192.168.1.20:22   192.168.1.5:40000\n' >"${tmp}/ss.out"
 unset SSH_CONNECTION
 prune "iot" "eth1.30" >"${tmp}/prune.out" 2>"${tmp}/prune.err" || fail "seg_prune failed guarding an sshd session"
 grep -q '^seg-desk|' "${tmp}/nm.db" || fail "seg_prune deleted seg-desk while sshd holds a session on its interface (SSH_CONNECTION unset, as under sudo)"
 grep -qF 'WARNING kept NetworkManager profile seg-desk on eth0.79' "${tmp}/prune.err" || fail "no warning for the session sshd holds: $(cat "${tmp}/prune.err")"
 # A session on the uplink protects nothing on a segment.
 nmdb
-printf '0      0     192.168.1.20:22   192.168.1.5:40000 users:(("sshd-session",pid=900,fd=4))\n' >"${tmp}/ss.out"
+printf '0      0     192.168.1.20:22   192.168.1.5:40000\n' >"${tmp}/ss.out"
 SSH_CONNECTION="192.168.1.5 40000 192.168.1.20 22" prune "iot" "eth1.30" >/dev/null 2>"${tmp}/prune.err" || fail "seg_prune failed with a session on the uplink"
 grep -q '^seg-desk|' "${tmp}/nm.db" && fail "a session on the uplink kept the removed desk's profile"
 
@@ -3311,6 +3355,36 @@ for _u in "${here}"/*.service; do
   grep -qE '^InaccessiblePaths=(.* )?-/var/lib/pi-fortress/www( |$)' "${_u}" ||
     fail "$(basename "${_u}") can read the claim codes in /var/lib/pi-fortress/www"
 done
+# The engine and www read no log, no observe state, no webhook URL and no
+# house reservation. Each of these is optional ("-"): a box with no
+# webhook or no house has no alert.url or house.hosts.
+for _u in pf-engine www; do
+  for _p in /var/log/pi-fortress /var/lib/pi-fortress/observe /etc/pi-fortress/alert.url /etc/pi-fortress/house.hosts; do
+    grep -qE "^InaccessiblePaths=(.* )?-${_p}( |\$)" "${here}/${_u}.service" ||
+      fail "${_u}.service does not hide ${_p}"
+  done
+  grep -qE '^ReadWritePaths=.*/var/log' "${here}/${_u}.service" &&
+    fail "${_u}.service writes the log directory that it hides"
+done
+# alert.url is 0640 root:pf-sidecar, in /etc/pi-fortress and in the policy
+# tree. Only alert.service gets the pf-sidecar group. monitor runs as the
+# same user, and does not get it.
+grep -qxF '  getent group pf-sidecar >/dev/null || groupadd --system pf-sidecar' "${apply}" ||
+  fail "apply.sh does not make the pf-sidecar group"
+grep -qF 'install -m 0640 -o root -g pf-sidecar "${POLICY}/alert.url" /etc/pi-fortress/alert.url' "${apply}" ||
+  fail "apply.sh does not install alert.url 0640 root:pf-sidecar"
+grep -qF 'for _f in "${POLICY}/alert.url" /etc/pi-fortress/alert.url; do' "${apply}" ||
+  fail "apply.sh does not set the mode of an alert.url that it did not install"
+grep -qE 'install -m 0?644 .*alert\.url' "${apply}" && fail "apply.sh installs alert.url readable by all"
+grep -qxF 'SupplementaryGroups=pf-sidecar' "${here}/alert.service" ||
+  fail "alert.service is not in the pf-sidecar group, so it cannot read alert.url"
+grep -q 'pf-sidecar' <(grep '^SupplementaryGroups=' "${here}/monitor.service") &&
+  fail "monitor.service gets the group of alert.url"
+grep -q 'usermod .*pf-sidecar' "${apply}" && fail "apply.sh adds an account to the pf-sidecar group"
+_mk="$(grep -nxF '  getent group pf-sidecar >/dev/null || groupadd --system pf-sidecar' "${apply}" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nxF '  systemctl restart pi-fortress-alert.service || true' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "apply does not make the pf-sidecar group before it starts alert.service"
 # systemd skips a "-" path that is missing when the unit starts. Thus apply
 # makes the www directory before it starts the first unit.
 _mk="$(grep -nxF '[[ "${LOCAL_ONLY}" -eq 1 ]] || install -d -m 0755 /var/lib/pi-fortress/www' "${apply}" | head -1 | cut -d: -f1 || true)"
@@ -3456,14 +3530,22 @@ for _u in fetch ship ship-deadman; do
   # apply writes sysctls, and makes setgid directories.
   grep -qE '^(ProtectKernelTunables|RestrictSUIDSGID)=yes' "${here}/${_u}.service" &&
     fail "${_u}.service blocks the sysctl writes or the setgid directories of apply"
-  # ss -p reads the sshd sessions of another uid only with SYS_PTRACE.
-  if grep -qF 'ss -Htnp' "${apply}"; then
-    grep '^CapabilityBoundingSet=' "${here}/${_u}.service" | grep -qw CAP_SYS_PTRACE ||
-      fail "${_u}.service takes SYS_PTRACE away, so apply cannot see the admin SSH sessions"
-  fi
 done
+# ssh_local_addrs finds the admin SSH sessions by the local port 22, not by
+# process. ss -p would read the sockets of sshd, another uid, only with
+# SYS_PTRACE, and fetch.service does not have it. ship keeps SYS_PTRACE for
+# the kernel.yama.ptrace_scope write of lib/harden.sh, which a --local or
+# --refresh apply does not run.
+grep -vE '^[[:space:]]*#' "${here}/lib/netman.sh" "${apply}" | grep -qE '(^|[^[:alnum:]_-])ss -[[:alnum:]]*p' &&
+  fail "apply reads processes with ss -p; fetch.service has no SYS_PTRACE for that"
+grep -qF "ss -Htn state established '( sport = :22 )'" "${here}/lib/netman.sh" ||
+  fail "ssh_local_addrs no longer finds the sessions on the sshd port"
+grep -qx 'kernel.yama.ptrace_scope=2' "${here}/lib/harden.sh" && {
+  grep '^CapabilityBoundingSet=' "${here}/ship.service" | grep -qw CAP_SYS_PTRACE ||
+    fail "ship.service cannot set kernel.yama.ptrace_scope without SYS_PTRACE"
+}
 [[ "$(grep '^ProtectHome=' "${here}/fetch.service")" == "ProtectHome=yes" ]] || fail "fetch.service can read /home"
-[[ "$(grep '^CapabilityBoundingSet=' "${here}/fetch.service")" == "CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_FOWNER CAP_FSETID CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_LINUX_IMMUTABLE CAP_SYS_PTRACE CAP_AUDIT_WRITE" ]] ||
+[[ "$(grep '^CapabilityBoundingSet=' "${here}/fetch.service")" == "CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_FOWNER CAP_FSETID CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_LINUX_IMMUTABLE CAP_AUDIT_WRITE" ]] ||
   fail "fetch.service has a different capability set"
 [[ "$(grep '^ReadWritePaths=' "${here}/fetch.service")" == "ReadWritePaths=/etc /usr/local /var/lib/pi-fortress /var/log/pi-fortress -/var/lib/systemd/timesync -/run/pi-fortress -/opt/pi-fortress/vm/policy/generated -/vagrant/vm/policy/generated" ]] ||
   fail "fetch.service has a different set of writable paths"
@@ -3476,6 +3558,10 @@ _local="$(sed -n '1,/^if \[\[ "${LOCAL_ONLY}" -eq 1 \]\]; then$/p' "${apply}")"
 grep -vxF '[[ "${LOCAL_ONLY}" -eq 1 ]] || install -d -m 0755 /var/lib/pi-fortress/www' <<<"${_local}" |
   grep -qE 'BROKER_DIR|ENGINE_DIR|/etc/pi-fortress/broker([/"[:space:]]|$)|/var/lib/pi-fortress/(engine|www)|[{]WWW[}]' &&
   fail "apply --local uses a path that fetch.service cannot read"
+# The kernel.* sysctls of lib/harden.sh need SYS_ADMIN and SYS_PTRACE, and
+# fetch.service has neither. Only a full apply loads them.
+grep -qE '^[[:space:]]*harden_sysctl_(write|load)([[:space:]]|$)' <<<"${_local}" &&
+  fail "apply --local loads the sysctls of lib/harden.sh, which fetch.service cannot set"
 # The swap renames below /opt. A home is read: harden_ssh counts the login keys.
 for _u in ship ship-deadman; do
   [[ "$(grep '^ProtectHome=' "${here}/${_u}.service")" == "ProtectHome=read-only" ]] ||

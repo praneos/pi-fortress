@@ -50,7 +50,14 @@ SystemCallFilter=~@privileged
 # store keeps the group of a file when it rewrites the file. Without
 # CAP_CHOWN, it can give the file only to a group that this user is in.
 SystemCallFilter=@chown
-InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
+# www reads none of these: the logs, the observe state, the webhook URL
+# (alert.url) and the house reservations (house.hosts). It cannot write the
+# log directory either (ReadWritePaths above). Thus it gets no path to
+# them. A box with no webhook or no house has no alert.url or house.hosts,
+# hence the "-".
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/log/pi-fortress -/var/lib/pi-fortress/observe -/etc/pi-fortress/alert.url -/etc/pi-fortress/house.hosts
 ExecStart=/usr/local/sbin/pf www
 
 [Install]

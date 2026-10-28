@@ -102,11 +102,18 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   with no capabilities. The state directories stay owned by root. `apply.sh`
   gives the sidecar exactly the files that the sidecar rewrites
   (`alert.offset`, `alert-notice.offset`, `alert.last`). `alert.service`
-  can write only these three files.
+  can write these three files and its `StateDirectory`,
+  `/var/lib/pi-fortress/alert` (the pressure and digest state).
+  `alert.url` (the webhook URL) is `root:pf-sidecar 0640`, in
+  `/etc/pi-fortress` and in the policy tree. Only `alert.service` gets the
+  `pf-sidecar` group (`SupplementaryGroups`). monitor runs as the same user
+  without that group, so it does not read `alert.url`.
 - A fourth user, `pf-observe`, runs observe. Its only capability is
   `CAP_NET_ADMIN` (ambient), for the conntrack netlink dump. It reads the
-  query logs and `strip.jsonl` through `pf-fortress`, the kernel log
-  through `systemd-journal`, and the DHCP lease files through `pf-leases`.
+  query logs and `strip.jsonl` through `pf-fortress`, and the DHCP lease
+  files through `pf-leases`. The `systemd-journal` group gives it read
+  access to the full system journal. Of the journal, observe reads only
+  the kernel log.
   It owns `/var/lib/pi-fortress/observe` (its ledger and checkpoints),
   `observe.jsonl` and `notice.jsonl`. `observe.service` can write only
   these paths and `/var/log/pi-fortress`, and in that directory only the
@@ -123,6 +130,12 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   `/var/lib/pi-fortress/www/claims` (`root:pf-fortress 2750`), so it cannot
   create or change a claim. `/etc/pi-fortress/broker` stays in
   `InaccessiblePaths`.
+- The engine and www read no log, no observe state, no webhook URL and no
+  house reservation. Thus both units also list these paths in
+  `InaccessiblePaths`: `/var/log/pi-fortress`,
+  `/var/lib/pi-fortress/observe`, `/etc/pi-fortress/alert.url` and
+  `/etc/pi-fortress/house.hosts`. The two files are optional (`-`),
+  because a box with no webhook or no house does not have them.
 - The claims and the ledger have the live claim codes. Their group is
   `pf-fortress`, and all daemons are in it. Thus each other daemon unit
   (engine, broker, sidecars, observe, DNS, DHCP) lists
@@ -133,11 +146,24 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   (`ship.service`) and the ship dead-man (`ship-deadman.service`) stay root.
   apply loads nft, sets sysctls, adds the daemon accounts and writes `/etc`.
   Each unit has a sandbox: `ProtectSystem=strict` with only the paths that
-  apply writes, a capability bounding set, `SystemCallFilter=@system-service`,
-  `NoNewPrivileges` and memory and task caps. The feed refresh cannot read
-  `/etc/pi-fortress/broker`, `/var/lib/pi-fortress/engine` or
-  `/var/lib/pi-fortress/www`.
-- `wg-alert.service` runs as root, for `wg show`. It can write only
+  apply writes, a capability bounding set, `SystemCallFilter=@system-service`
+  (without the calls of the item below), `NoNewPrivileges` and memory and
+  task caps. A filtered call fails with `EPERM`. `fetch.service` lists
+  `/etc/pi-fortress/broker`, `/var/lib/pi-fortress/engine` and
+  `/var/lib/pi-fortress/www` in `InaccessiblePaths`, because a `--local`
+  apply does not use them. Its bounding set has no `CAP_SYS_PTRACE` and no
+  `CAP_SYS_ADMIN`: the refresh finds the admin SSH sessions by port 22,
+  not by process, and it does not set the kernel sysctls of
+  `lib/harden.sh`.
+- Each unit with a system-call filter also removes asynchronous I/O
+  (`@aio`, with io_uring), the kernel keyring (`@keyring`) and
+  `userfaultfd` from its allowed set, and allows only native calls
+  (`SystemCallArchitectures=native`). No pf unit, and no tool that a unit
+  forks, uses these calls.
+- `wg-alert.service` runs as root, for `wg show`, with `CAP_NET_ADMIN` as
+  its only capability. It has the sandbox of the other root units, and its
+  system-call filter also removes `@privileged`. `ProtectSystem=strict`
+  makes the file system read-only for it, and `ReadWritePaths` has only
   `/var/lib/pi-fortress/wg.last`. Each DHCP dnsmasq (`dns-house.service`,
   `dhcp@.service`) can write only its own lease file under
   `/var/lib/pi-fortress` and `/var/log/pi-fortress`. apply makes each of
@@ -146,20 +172,37 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   `net.env` for `-agent-net`. With this flag, the broker refuses with 403 a
   preamble with a source outside that prefix. It does this before it parses
   a request. A house client behind a misrouted redirect never sees a slot.
-- There are two unix users:
-  - `pf engine`: has the CA key. It cannot open `secrets.env`.
-  - `pf broker`: owns `secrets.env` `0600`.
-- There are four groups:
-  - `pf-fortress` has all daemons, for the files that they share (logs,
-    state, the claims directories). Of the daemons, only www gets a path
-    to the claims directories (`InaccessiblePaths` above).
+- The daemons run as these unix users:
+  - `pf-engine`: the engine. It has the CA key. It cannot open
+    `secrets.env`.
+  - `pf-broker`: the broker. It owns `secrets.env` `0600`.
+  - `pf-sidecar`: alert and monitor.
+  - `pf-observe`: observe.
+  - `pf-dns`: `pf dns`, the agent resolver and the DoT stubs. Its
+    capabilities are `CAP_NET_BIND_SERVICE` and, for the agent resolver
+    only, `CAP_NET_ADMIN` (the nft fork that feeds `resolved_v4`, and the
+    SNI queue). It has no `CAP_NET_RAW`. It pins each new socket to its
+    interface (`SO_BINDTODEVICE`) before the bind, and Linux 5.7 and
+    later allow that with no capability.
+  - `pf-dhcp-<name>`: each DHCP dnsmasq, in the group `nogroup`.
+  - www has a dynamic user (`DynamicUser=yes`).
+- There are five groups:
+  - `pf-fortress` has all pf daemons, for the files that they share (logs,
+    state, the claims directories). The DHCP accounts are not in it. Of
+    the daemons, only www gets a path to the claims directories
+    (`InaccessiblePaths` above).
   - `pf-fence` has the engine and the broker, and nobody else. It exists to
     gate the broker socket.
   - `pf-fakeip` has the broker only. It is the group of the fake-IP journal
     that `pf dns` writes.
   - `pf-leases` has `pf-observe` only. It is the group of the DHCP lease
     files (`pf-dhcp-<name>:pf-leases 0640`). They have the MAC and the
-    name of each client, so the other daemons do not read them.
+    name of each client. Apart from the dnsmasq that writes each file,
+    only observe reads them. The reservations in `house.hosts` (`0644`,
+    for dnsmasq and observe) and the observe rows also have client names.
+    The engine and www do not see these files (`InaccessiblePaths` above).
+  - `pf-sidecar` has no member account. Only `alert.service` gets it,
+    through `SupplementaryGroups`. It is the group of `alert.url`.
 
   The broker runs `Group=pf-fence`, with `pf-fortress` as a supplementary
   group. The engine is the other way round. `/run/pi-fortress` is
@@ -189,7 +232,8 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   `Group=pf-fortress`, `UMask=0027`).
 - Both units run with:
   - An empty capability set.
-  - `@system-service` seccomp.
+  - `@system-service` seccomp, without `@aio`, `@keyring` and
+    `userfaultfd`.
   - W^X memory.
   - Private `/dev` and `/proc`.
   - Pinned address families (engine: unix + inet only).
