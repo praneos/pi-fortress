@@ -1355,7 +1355,7 @@ fi
 _own && exit 4
 exit 3
 EOF
-libs=("${here}/lib/harden.sh" "${here}/lib/dhcp.sh" "${here}/lib/netman.sh")
+libs=("${here}/lib/harden.sh" "${here}/lib/dhcp.sh" "${here}/lib/netman.sh" "${here}/lib/feeds.sh")
 mkdir -p "${tmp}/gr-none" "${tmp}/gr-desk/proc/device-tree" "${tmp}/gr-pi/proc/device-tree" \
   "${tmp}/gr-lab/vagrant/vm/pi" "${tmp}/gr-app/etc/pi-fortress" "${tmp}/gr-gw/etc/pi-fortress"
 printf 'Some Desktop\0' >"${tmp}/gr-desk/proc/device-tree/model"
@@ -3571,7 +3571,8 @@ grep -qE '^InaccessiblePaths=(.* )?-/var/lib/pi-fortress/www( |$)' "${here}/pf-e
 for _u in "${here}"/*.service; do
   [[ "$(basename "${_u}")" == www.service ]] && continue
   grep -qE '^(User=|DynamicUser=yes)' "${_u}" || continue
-  grep -qE '^InaccessiblePaths=(.* )?-/var/lib/pi-fortress/www( |$)' "${_u}" ||
+  # An empty tmpfs over all of /var/lib/pi-fortress also hides it.
+  grep -qE '^(InaccessiblePaths=(.* )?-/var/lib/pi-fortress/www( |$)|TemporaryFileSystem=/var/lib/pi-fortress(:ro)?$)' "${_u}" ||
     fail "$(basename "${_u}") can read the claim codes in /var/lib/pi-fortress/www"
 done
 # The engine and www read no log, no observe state, no webhook URL and no
@@ -3735,6 +3736,65 @@ _start="$(grep -nF 'systemctl restart pi-fortress-observe' "${here}/provision.sh
     fail "apply stopped observe with nothing to move"
   fi
 )
+
+# The feed download (feeds.service): pf fetch as pf-feeds with no
+# capability. Its view has its state directory, the inputs of root and the
+# system files of DNS and TLS. No policy tree, no log, no other part of
+# /var/lib/pi-fortress. It uses only IP sockets.
+_fu="${here}/feeds.service"
+for _l in Type=oneshot User=pf-feeds Group=pf-feeds CapabilityBoundingSet= NoNewPrivileges=yes \
+  ProtectProc=invisible ProcSubset=pid 'RestrictAddressFamilies=AF_INET AF_INET6' ProtectSystem=strict \
+  ProtectHome=yes PrivateTmp=yes PrivateDevices=yes RestrictSUIDSGID=yes ProtectKernelTunables=yes \
+  StateDirectory=pi-fortress-feeds StateDirectoryMode=0700 UMask=0077 \
+  TemporaryFileSystem=/var/lib/pi-fortress:ro BindReadOnlyPaths=/var/lib/pi-fortress/feeds-in \
+  'IPAddressDeny=link-local multicast' \
+  'InaccessiblePaths=-/etc/pi-fortress -/var/log/pi-fortress -/opt/pi-fortress -/vagrant -/etc/nftables.conf -/usr/local/lib/pi-fortress'; do
+  grep -qxF "${_l}" "${_fu}" || fail "feeds.service has no '${_l}'"
+done
+grep -qxF 'ExecStart=/usr/local/sbin/pf fetch --request /var/lib/pi-fortress/feeds-in/request --policy /var/lib/pi-fortress/feeds-in --out /var/lib/pi-fortress-feeds/stage --cache /var/lib/pi-fortress-feeds/cache --seed /var/lib/pi-fortress/feeds-in/seed' "${_fu}" ||
+  fail "feeds.service does not run pf fetch in stage mode on the fixed paths"
+grep -qE '^AmbientCapabilities=.' "${_fu}" && fail "feeds.service gives a capability"
+# pf feeds run starts this unit from the refresh, a ship and a first boot,
+# and waits. An order on a pi-fortress unit would wait for itself.
+grep -qE '^(After|Before|Requires|Requisite|BindsTo|PartOf|Wants)=.*pi-fortress' "${_fu}" &&
+  fail "feeds.service orders on a pi-fortress unit"
+(($(_oom feeds) > $(_oom fetch))) || fail "the OOM killer does not take the feed download before the refresh"
+
+# feeds_prepare (lib/feeds.sh) in a temp root: the account, the unit, the
+# input directory, and the drop-in that keeps the unit on lo, the uplink
+# and WireGuard. A second run with the same values reloads nothing. A
+# value that is not an interface name changes nothing.
+_fr="${tmp}/feeds-root"
+mkdir -p "${_fr}/units" "${_fr}/bin"
+for _c in getent id; do
+  printf '#!/bin/sh\necho "%s $*" >>"%s/calls"\nexit 2\n' "${_c}" "${_fr}" >"${_fr}/bin/${_c}"
+done
+for _c in groupadd useradd systemctl; do
+  printf '#!/bin/sh\necho "%s $*" >>"%s/calls"\nexit 0\n' "${_c}" "${_fr}" >"${_fr}/bin/${_c}"
+done
+chmod 0755 "${_fr}"/bin/*
+_fp() {
+  PATH="${_fr}/bin:${PATH}" FEEDS_UNITS="${_fr}/units" FEEDS_IN="${_fr}/feeds-in" \
+    bash -c 'set -euo pipefail; source "$1"; shift; feeds_prepare "$@"' _ "${here}/lib/feeds.sh" "${_fu}" "$@"
+}
+_drop="${_fr}/units/pi-fortress-feeds.service.d/uplink.conf"
+_fp eth0 wg0 >/dev/null 2>&1 || fail "feeds_prepare eth0 wg0 failed"
+cmp -s "${_fu}" "${_fr}/units/pi-fortress-feeds.service" || fail "feeds_prepare did not install feeds.service"
+[[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth0 wg0' ]] ||
+  fail "feeds_prepare wrote the drop-in $(printf '%q' "$(cat "${_drop}")")"
+[[ -d "${_fr}/feeds-in" ]] || fail "feeds_prepare did not make the input directory"
+grep -qxF 'useradd --system --no-create-home --gid pf-feeds --home /nonexistent --shell /usr/sbin/nologin pf-feeds' "${_fr}/calls" ||
+  fail "feeds_prepare did not add the account pf-feeds"
+[[ "$(grep -c '^systemctl daemon-reload$' "${_fr}/calls")" == 1 ]] || fail "feeds_prepare did not reload systemd one time"
+: >"${_fr}/calls"
+_fp eth0 wg0 >/dev/null 2>&1 || fail "a second feeds_prepare failed"
+grep -q 'daemon-reload' "${_fr}/calls" && fail "feeds_prepare reloads systemd with no change"
+_fp eth1 >/dev/null 2>&1 || fail "feeds_prepare eth1 failed"
+[[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth1' ]] || fail "feeds_prepare did not follow the uplink"
+for _bad in 'eth0 lo2' 'eth0;x' '' 'a-very-long-ifname0'; do
+  _fp "${_bad}" >/dev/null 2>&1 && fail "feeds_prepare took the uplink '${_bad}'"
+done
+[[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth1' ]] || fail "a refused value changed the drop-in"
 
 # The root oneshots run sandboxed. fetch runs apply --refresh, and ship and
 # ship-deadman run a full apply. All three stay root, because apply loads
