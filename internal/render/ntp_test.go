@@ -62,6 +62,9 @@ func TestNTPGoesToTheGateway(t *testing.T) {
 				`iifname "eth3" udp dport 123 counter drop`:                                       1,
 				`iifname "eth2" ip daddr 10.78.0.1 udp dport 123 accept`:                          1,
 				`iifname "eth3" ip daddr 10.79.0.1 udp dport 123 accept`:                          1,
+				// The meters of input, before the accept of each.
+				`iifname "eth2" udp dport 123 meter house_ntpflood { ip saddr limit rate over 20/second burst 40 packets } counter drop`: 1,
+				`iifname "eth3" udp dport 123 meter desk_ntpflood { ip saddr limit rate over 20/second burst 40 packets } counter drop`:  1,
 			}
 			port := regexp.MustCompile(`\b(123|4123|4460)\b`)
 			for _, l := range strings.Split(nft, "\n") {

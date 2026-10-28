@@ -59,6 +59,7 @@ Pi Fortress has several sets:
 - `resolved_v4` — the live record of the resolver gate. It holds each address that the Pi itself resolved. Each element has an expiry timer (tutorial 03).
 - `direct_ip_v4` — exemptions to that gate that the operator defines in `direct_ip.allow`.
 - DNS rate meters for each source (`<seg>_dnsflood_{udp,tcp}`, with a limit above 200 requests/second). Thus one client cannot flood the resolver.
+- NTP rate meters for each source (`house_ntpflood` and `<seg>_ntpflood`, with a limit above 20 packets/second). Thus one client cannot send more NTP to the gateway than a clock needs.
 
 Feed updates build the *contents* of these lists again. They never change the *rules*. The rules refer to a set by name. `pf apply` replaces the contents of the set.
 
@@ -160,7 +161,7 @@ This combination is what "a network your agent cannot leave" means in practice.
 | Concept | Where you see it |
 |---|---|
 | Hooks & chains | `sudo nft list ruleset` |
-| Sets & meters (`blacklist_v4`, `resolved_v4`, per-source DNS rate meters) | `sudo nft list ruleset` |
+| Sets & meters (`blacklist_v4`, `resolved_v4`, per-source DNS and NTP rate meters) | `sudo nft list ruleset` |
 | Redirect + original destination | `sudo nft list ruleset` (the tcp/443 redirect rule) |
 | Daemon confinement | `sudo nft list ruleset` (output-chain rules for the engine and broker) |
 | Apply serialization | `/run/pi-fortress/apply.lock`, held while `pf apply` runs |
