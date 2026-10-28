@@ -338,7 +338,7 @@ Edit, then apply. No VM rebuild is necessary:
 - `vm/policy/core.hosts`: `host KIND[:Header,...]...`. The credential targets for each kind. Only those kinds apply on that name. A name matches exactly. `*.name` matches all subdomains. One label, `_`, a bare `*`, a `*` after the first `*.`, an empty label, a label over 63 bytes, a host over 253 bytes and a non-ASCII host are refused with a warning, and the line is skipped. A placeholder goes only into `Authorization`, `X-Api-Key` and the headers that a line names after its kind (`docs/fence.md` §5.2). Shipped. Each ship overwrites it
 - `vm/policy/core.hosts.local`: the `core.hosts` lines of the operator, added to the shipped lines. apply installs both as `/etc/pi-fortress/core.hosts`. `pf enroll mint --header` writes here. Pi-owned
 - `vm/policy/allow.domains`: known dests. They are not logged to `unknown.jsonl`
-- `vm/policy/key_prefixes.rules.local`: the rules of the operator, added to the shipped rules. apply installs both as `/etc/pi-fortress/key_prefixes.rules`. pf compile refuses a rule that does not compile or has no literal prefix. Pi-owned
+- `vm/policy/key_prefixes.rules.local`: the rules of the operator, added to the shipped rules. apply installs both as `/etc/pi-fortress/key_prefixes.rules`. pf compile refuses a rule that does not compile, has no literal prefix, or can match a character that is not a letter, a digit, `_`, `-` or `.`. Pi-owned
 - `vm/policy/key_prefixes.rules`: `name regexp [KIND]`. Shipped. Each ship overwrites it.
   - Start each rule with a literal prefix (`ghp_`, `AKIA`). The broker does not start with a rule that has no prefix.
   - Write a body length as a minimum (`{36,}`), with no closing `\b`. Then a longer key is stripped whole.

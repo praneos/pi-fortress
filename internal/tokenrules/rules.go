@@ -90,8 +90,15 @@ func (t *TokenRules) All() *regexp.Regexp { return t.all }
 // Streamable refuses a rule with no literal prefix. Without a prefix, the
 // stream scan cannot tell where a match can start. Then a body longer than
 // maxHold goes out with only one window of hold behind it. The broker calls
-// this at start. pf dns does not, because there a rule with no prefix
-// costs speed, not a check.
+// this at start, and pf compile calls it on key_prefixes.rules.local. pf
+// dns does not, because there a rule with no prefix costs speed, not a
+// check.
+//
+// It also refuses a rule that can match a byte that is not a token byte
+// (InTokenClass), for example "/", "+", "=" or any byte ("."). For a token
+// longer than the hold, the stream and the buffered path strip to the end
+// of the run of token bytes. A match that goes past that end gets a
+// different strip on the two paths.
 func (t *TokenRules) Streamable() error {
 	for _, r := range t.Rules {
 		re, err := compile([]Rule{r}, nil)
@@ -100,6 +107,9 @@ func (t *TokenRules) Streamable() error {
 		}
 		if _, _, _, ok := PrefixInfo(re.String()); !ok {
 			return fmt.Errorf("fence: rule %s has no literal prefix; the stream scan needs one (example: ghp_[A-Za-z0-9]{36})", r.Name)
+		}
+		if _, ok := MatchBounds(re.String()); !ok {
+			return fmt.Errorf("fence: rule %s can match a character that is not a letter, a digit, _, - or .; the stream scan needs rules of only these characters (example: ghp_[A-Za-z0-9]{36})", r.Name)
 		}
 	}
 	return nil
