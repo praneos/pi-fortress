@@ -2913,6 +2913,18 @@ done
 printf '\tEGRESS =\t"strict"\n' >"${tmp}/seg2.env"
 _got="$(eval "${_sv}"; seg_val "${tmp}/seg2.env" EGRESS)"
 [[ "${_got}" == strict ]] || fail "status.sh seg_val EGRESS gives '${_got}' for '<tab>EGRESS =<tab>\"strict\"', not 'strict'"
+# status.sh prints the feed report through a filter that keeps only TAB,
+# newline and printable ASCII. ESC, BEL, CR and bytes above 0x7e go.
+_pf="$(grep -E '^printable_file\(\) \{' "${here}/status.sh" || true)"
+[[ -n "${_pf}" ]] || fail "status.sh has no one-line printable_file"
+printf 'OK a: 1 ips\nFAIL b: x\033]0;t\007y\033[31mz\r\nWARN c:\tk\303\251\n' >"${tmp}/feed.report"
+_got="$(eval "${_pf}"; printable_file "${tmp}/feed.report")"
+[[ "${_got}" == $'OK a: 1 ips\nFAIL b: x]0;ty[31mz\nWARN c:\tk' ]] ||
+  fail "status.sh printable_file gives $(printf '%q' "${_got}")"
+grep -qF 'printable_file "${P}/generated/fetch.report"' "${here}/status.sh" ||
+  fail "status.sh prints the feed report without printable_file"
+grep -qE '^ *cat "\$\{P\}/generated/' "${here}/status.sh" &&
+  fail "status.sh prints a generated file with a plain cat"
 grep -qF 'pi-fortress-dns-stub@house.service' "${apply}" \
   || fail "apply.sh never manages the house stub instance"
 
