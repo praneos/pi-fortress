@@ -121,7 +121,9 @@ func RemovePending(path string) error {
 // that has proven itself. ok is false when nothing was pending. An
 // unreadable pending file is also cleared, with the reason in the row.
 // The confirm of the operator is the decision that the file waited
-// for, whatever it said.
+// for, whatever it said. The row carries the sha of the confirmed
+// version. The pending file does not have it, so it comes from the ok
+// row of the install in the log (installedSHA).
 func (in *Installer) Confirm() (jsonl.Ship, bool, error) {
 	path := in.pendingPath()
 	p, ok, perr := ReadPending(path)
@@ -134,7 +136,7 @@ func (in *Installer) Confirm() (jsonl.Ship, bool, error) {
 	if err := RemovePending(path); err != nil {
 		return jsonl.Ship{}, false, err
 	}
-	row := jsonl.Ship{Result: "confirm", Version: p.Version, Reason: fmt.Sprintf("upgrade from %d confirmed", p.PrevVersion)}
+	row := jsonl.Ship{Result: "confirm", Version: p.Version, SHA: in.installedSHA(p.Version), Reason: fmt.Sprintf("upgrade from %d confirmed", p.PrevVersion)}
 	if perr != nil {
 		row.Reason = fmt.Sprintf("confirmed and cleared: %v", perr)
 	}
@@ -189,6 +191,18 @@ func (in *Installer) Deadman(now time.Time) (jsonl.Ship, bool, error) {
 	row := jsonl.Ship{Result: "deadman_failed", Version: p.Version, Reason: res.err.Error() + "; ship.pending kept, the next run retries"}
 	in.record(row)
 	return row, true, fmt.Errorf("pf ship deadman: the rollback to %d did not happen: %v", p.PrevVersion, res.err)
+}
+
+// installedSHA is the source revision of the install that put version
+// v live: the sha of the newest ok row for v in the log. It is empty
+// when that row is not in the tail of the log (for example, logrotate
+// moved it away).
+func (in *Installer) installedSHA(v int64) string {
+	if in.Log == "" || v <= 0 {
+		return ""
+	}
+	row, _ := jsonl.FindShip(in.Log, func(r jsonl.Ship) bool { return r.Result == "ok" && r.Version == v })
+	return row.SHA
 }
 
 func (in *Installer) pendingPath() string {
