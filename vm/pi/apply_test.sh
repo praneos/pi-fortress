@@ -821,14 +821,14 @@ for _u in dns-agent-go dns-house dns-stub@ dhcp@; do
 done
 grep -q '^Environment=GOMEMLIMIT=' "${here}/pf-broker.service" || fail "pf-broker.service sets no GOMEMLIMIT"
 
-# Each unit with a system-call filter allows only native calls, and
+# Each unit has a system-call filter. It allows only native calls, and
 # removes asynchronous I/O, the kernel keyring and userfaultfd from its
 # allowed set. The first filter line is the allow list: a first line with
 # "~" makes the full filter a deny list. The removal comes after each
 # allow line, because an allow line after it would add a call again.
 for _u in "${here}"/*.service; do
   _n="$(basename "${_u}")"
-  grep -q '^SystemCallFilter=' "${_u}" || continue
+  grep -q '^SystemCallFilter=' "${_u}" || fail "${_n} has no system-call filter"
   grep -qxF 'SystemCallArchitectures=native' "${_u}" || fail "${_n} has a system-call filter but no SystemCallArchitectures=native"
   grep -m1 '^SystemCallFilter=' "${_u}" | grep -q '^SystemCallFilter=~' && fail "${_n} starts its system-call filter with a deny list"
   _rm="$(grep -nxF 'SystemCallFilter=~@aio @keyring userfaultfd' "${_u}" | head -1 | cut -d: -f1 || true)"
@@ -1709,6 +1709,21 @@ done < <(grep -E '^/' "${here}/logrotate.conf" | tr -d '{' | tr ' ' '\n' | grep 
 # postrotate runs systemctl, which needs AF_UNIX to reach systemd.
 grep -q 'systemctl kill' "${here}/logrotate.conf" ||
   fail "logrotate.conf no longer runs systemctl; check RestrictAddressFamilies of logrotate.service again"
+
+# wg-alert stays root, for wg show, with the sandbox of the other root
+# units and NET_ADMIN as its only capability. A filtered call fails with
+# EPERM, as in the other root units: the lab does not run this check.
+for _l in NoNewPrivileges=yes PrivateTmp=yes PrivateDevices=yes ProtectHome=yes ProtectSystem=strict \
+  ProtectKernelTunables=yes ProtectKernelModules=yes ProtectKernelLogs=yes ProtectControlGroups=yes \
+  ProtectClock=yes RestrictNamespaces=yes RestrictRealtime=yes RestrictSUIDSGID=yes LockPersonality=yes \
+  MemoryDenyWriteExecute=yes SystemCallArchitectures=native SystemCallFilter=@system-service \
+  SystemCallFilter=~@privileged SystemCallErrorNumber=EPERM 'CapabilityBoundingSet=CAP_NET_ADMIN' \
+  'AmbientCapabilities=CAP_NET_ADMIN' 'RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK'; do
+  grep -qxF "${_l}" "${here}/wg-alert.service" || fail "wg-alert.service has no '${_l}'"
+done
+# apply puts the WireGuard interface name in place of each wg0.
+[[ "$(grep -c wg0 "${here}/wg-alert.service")" -eq 2 ]] ||
+  fail "wg-alert.service names wg0 outside After= and ExecStart=; apply replaces each one"
 
 # usb-nic-switch.sh opens the adapter in /dev/bus/usb (usb_modeswitch,
 # usbreset) and writes its authorized file in /sys. Thus no PrivateDevices
