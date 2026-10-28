@@ -88,6 +88,12 @@ SystemCallFilter=~@privileged
 # store keeps the group of a file when it rewrites the file. Without
 # CAP_CHOWN, it can give the file only to a group that this user is in.
 SystemCallFilter=@chown
+# No pf unit, and no tool that a unit forks, uses asynchronous I/O
+# (io_uring and the older io_* calls), the kernel keyring or userfaultfd.
+# Thus this line removes these calls from the allowed set. It comes after
+# each allow line, because an allow line after it would add a call again.
+# Each unit with a filter has this line.
+SystemCallFilter=~@aio @keyring userfaultfd
 ReadWritePaths=/etc/pi-fortress/broker /var/log/pi-fortress
 InaccessiblePaths=-/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www
 EnvironmentFile=-/etc/pi-fortress/broker.env

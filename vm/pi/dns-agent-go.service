@@ -69,6 +69,8 @@ MemoryDenyWriteExecute=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
 # The fake-IP journal (AGENT_DNS=fakeip): pf dns is its only writer. The
 # broker is its only reader, through the pf-fakeip group on the directory.
 # apply makes that directory pf-dns:pf-fakeip 2750. "-" because a forward-mode

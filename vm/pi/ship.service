@@ -45,6 +45,8 @@ MemoryDenyWriteExecute=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
 # A call outside the set fails with EPERM. A kill would stop the swap or
 # the apply between two steps, with no message.
 SystemCallErrorNumber=EPERM

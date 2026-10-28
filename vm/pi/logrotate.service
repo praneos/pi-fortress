@@ -37,6 +37,8 @@ MemoryDenyWriteExecute=yes
 RestrictAddressFamilies=AF_UNIX
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
 # A call outside the set fails with EPERM. A kill would stop a rotation
 # between the rename and the create.
 SystemCallErrorNumber=EPERM

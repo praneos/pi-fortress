@@ -61,6 +61,8 @@ CapabilityBoundingSet=
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
 # The three files that the sidecar rewrites in place, nothing else. It
 # only reads the logs. apply.sh makes the files, owned by pf-sidecar,
 # before it starts the unit. A "-" lets the unit start before the first

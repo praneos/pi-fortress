@@ -26,6 +26,8 @@ MemoryDenyWriteExecute=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
 SystemCallErrorNumber=EPERM
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_FOWNER CAP_FSETID CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_LINUX_IMMUTABLE CAP_SYS_PTRACE CAP_AUDIT_WRITE CAP_SYS_ADMIN
 ReadWritePaths=/etc /opt /usr/local /var/lib/pi-fortress /var/log/pi-fortress -/var/lib/systemd/timesync -/run/pi-fortress -/vagrant/vm/policy/generated

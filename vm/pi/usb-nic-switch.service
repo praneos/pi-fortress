@@ -40,6 +40,8 @@ MemoryDenyWriteExecute=yes
 RestrictAddressFamilies=AF_UNIX AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
 SystemCallErrorNumber=EPERM
 # The kernel asks for no capability for the usbfs calls or for the
 # authorized file: the owner of those files is root. CAP_SYS_ADMIN stays

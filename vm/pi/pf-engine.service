@@ -53,6 +53,8 @@ AmbientCapabilities=
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
 ReadWritePaths=-/run/pi-fortress/broker
 # The engine is in pf-fortress, the group of the claims directories. The
 # live claim codes are in claims/ and in the ledger. Thus the engine gets no

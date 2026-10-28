@@ -821,6 +821,22 @@ for _u in dns-agent-go dns-house dns-stub@ dhcp@; do
 done
 grep -q '^Environment=GOMEMLIMIT=' "${here}/pf-broker.service" || fail "pf-broker.service sets no GOMEMLIMIT"
 
+# Each unit with a system-call filter allows only native calls, and
+# removes asynchronous I/O, the kernel keyring and userfaultfd from its
+# allowed set. The first filter line is the allow list: a first line with
+# "~" makes the full filter a deny list. The removal comes after each
+# allow line, because an allow line after it would add a call again.
+for _u in "${here}"/*.service; do
+  _n="$(basename "${_u}")"
+  grep -q '^SystemCallFilter=' "${_u}" || continue
+  grep -qxF 'SystemCallArchitectures=native' "${_u}" || fail "${_n} has a system-call filter but no SystemCallArchitectures=native"
+  grep -m1 '^SystemCallFilter=' "${_u}" | grep -q '^SystemCallFilter=~' && fail "${_n} starts its system-call filter with a deny list"
+  _rm="$(grep -nxF 'SystemCallFilter=~@aio @keyring userfaultfd' "${_u}" | head -1 | cut -d: -f1 || true)"
+  [[ -n "${_rm}" ]] || fail "${_n} allows asynchronous I/O, the kernel keyring and userfaultfd"
+  _allow="$(grep -nE '^SystemCallFilter=[^~]' "${_u}" | tail -1 | cut -d: -f1)"
+  ((_rm > _allow)) || fail "${_n} has an allow line after the removal of @aio @keyring userfaultfd"
+done
+
 # apply writes the journal, the connection table and the sshd OOM rank on
 # each run. Thus an existing Pi gets them on its next ship.
 for _l in 'SystemMaxUse=200M' 'SystemKeepFree=1G' 'RuntimeMaxUse=64M' \

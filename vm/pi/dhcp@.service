@@ -85,6 +85,8 @@ SystemCallFilter=~@privileged
 # bounding set, so that call can only set the owner that the file
 # already has.
 SystemCallFilter=@chown
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
 # The lease file, nothing else under /var/lib/pi-fortress. dnsmasq
 # rewrites it in place. apply.sh makes it before it starts the unit. The
 # log directory, not the log file: logrotate renames the log, and dnsmasq
