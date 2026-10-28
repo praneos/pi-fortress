@@ -249,7 +249,9 @@ echo
 echo "== plain segments =="
 # Read, not sourced: apply.sh validates these files; status only displays
 # them. grep -F in all locations, because a VLAN interface name has a dot.
-seg_val() { grep -E "^$2=" "$1" | tail -1 | cut -d= -f2- | tr -cd 'A-Za-z0-9./_-'; }
+# As in pf render, spaces before the key and around = are permitted, and
+# the last line of a key wins.
+seg_val() { grep -E "^[[:space:]]*$2[[:space:]]*=" "$1" | tail -1 | cut -d= -f2- | tr -cd 'A-Za-z0-9./_-'; }
 if compgen -G "/etc/pi-fortress/segments.d/*.env" >/dev/null 2>&1; then
   for _f in /etc/pi-fortress/segments.d/*.env; do
     _name="${_f##*/}"
@@ -268,7 +270,7 @@ if compgen -G "/etc/pi-fortress/segments.d/*.env" >/dev/null 2>&1; then
       fi
     fi
     # The connection budget of the segment. An empty field means the SEG_ value of net.env.
-    if grep -qE '^(CONN_PER_IP|NEW_PER_IP|CONN_TOTAL|NEW_TOTAL)=' "${_f}"; then
+    if grep -qE '^[[:space:]]*(CONN_PER_IP|NEW_PER_IP|CONN_TOTAL|NEW_TOTAL)[[:space:]]*=' "${_f}"; then
       echo "  own budget: conn_per_ip=$(seg_val "${_f}" CONN_PER_IP) new_per_ip=$(seg_val "${_f}" NEW_PER_IP) conn_total=$(seg_val "${_f}" CONN_TOTAL) new_total=$(seg_val "${_f}" NEW_TOTAL)"
     fi
     if [[ -n "${_if}" && -e "/sys/class/net/${_if}" ]]; then

@@ -2744,6 +2744,18 @@ grep -qF '/etc/pi-fortress/dns-stub-*.json' "${here}/status.sh" \
   || fail "status.sh does not look for the dns-stub-<inst>.json files apply writes"
 grep -qF 'dns-stub.env' "${here}/status.sh" \
   && fail "status.sh still reads the retired dns-stub.env"
+# status.sh reads a segment file as pf render does: spaces before the key
+# and around = are permitted, quotes go, and the last line of a key wins.
+_sv="$(grep -E '^seg_val\(\) \{' "${here}/status.sh" || true)"
+[[ -n "${_sv}" ]] || fail "status.sh has no one-line seg_val"
+printf '# NTP=redirect\nIF=eth1.20\n NTP = pass\nNTP_X=no\n\tEGRESS =\t"strict"\nEGRESS=open\n' >"${tmp}/seg.env"
+for _c in NTP:pass IF:eth1.20 EGRESS:open NTP_X:no; do
+  _got="$(eval "${_sv}"; seg_val "${tmp}/seg.env" "${_c%%:*}")"
+  [[ "${_got}" == "${_c#*:}" ]] || fail "status.sh seg_val ${_c%%:*} gives '${_got}', not '${_c#*:}'"
+done
+printf '\tEGRESS =\t"strict"\n' >"${tmp}/seg2.env"
+_got="$(eval "${_sv}"; seg_val "${tmp}/seg2.env" EGRESS)"
+[[ "${_got}" == strict ]] || fail "status.sh seg_val EGRESS gives '${_got}' for '<tab>EGRESS =<tab>\"strict\"', not 'strict'"
 grep -qF 'pi-fortress-dns-stub@house.service' "${apply}" \
   || fail "apply.sh never manages the house stub instance"
 
