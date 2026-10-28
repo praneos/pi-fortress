@@ -223,9 +223,13 @@ func ntpTests(t *testing.T) {
 		kernLog(t, since, "pi-fortress agent-blacklist: ", "DST=192.0.2.1 ", "DPT=4460 ")
 		kernLog(t, since, "pi-fortress agent-drop: ", "DST="+piIP+" ", "DPT=123 ")
 		// Each NTP rule of nat prerouting and input is for the house or the
-		// desk address.
+		// desk address. A rule that drops (the meter for each source) gives
+		// NTP to nobody, so it can be on any interface.
 		for _, ch := range []string{"prerouting", "input"} {
 			for l := range strings.SplitSeq(pi(t, "sudo nft list chain inet fortress "+ch), "\n") {
+				if strings.HasSuffix(strings.TrimSpace(l), " drop") {
+					continue
+				}
 				if strings.Contains(l, "dport 123") && !strings.Contains(l, " "+houseGW+" ") && !strings.Contains(l, " "+deskGW+" ") &&
 					!strings.HasSuffix(l, " "+houseGW) && !strings.HasSuffix(l, " "+deskGW) {
 					t.Errorf("%s: an NTP rule that is not for the house or the desk: %s", ch, strings.TrimSpace(l))
