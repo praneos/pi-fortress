@@ -45,6 +45,7 @@ func Commands() []Command {
 		{"compile", "merge local + generated - never_block into nft/dnsmasq files", runCompile},
 		{"render", "house.env + segments.d + DoT keys -> nftables.conf, apply.env", runRender},
 		{"nftsets", "save|restore|policy: carry the resolved-address sets across a ruleset reload", runNFTSets},
+		{"netgate", "run|ping: the one daemon with CAP_NET_ADMIN for pf dns and pf observe (gate set writes)", runNetgate},
 		{"observe", "once|run|show|reset: DNS + conntrack first-seen", runObserve},
 		{"monitor", "once|run|show|avg: cpu, memory, temp, Wi-Fi, per-process CPU/RSS", runMonitor},
 		{"alert", "once|run|show|watch: strip.jsonl -> webhook; wg: handshake age", runAlert},
