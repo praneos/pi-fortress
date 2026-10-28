@@ -1077,7 +1077,9 @@ func (s *scanner) intakeBody(reserve func(n int64) bool, req *httpwire.Request, 
 			for _, f := range fields {
 				s.noteEncodedBody(f)
 			}
-		} else {
+		} else if !bud.spent {
+			// A decode that the budget stopped is a busy fence (below), not
+			// a body that does not decode.
 			s.refuse(CauseEncodedBody, "", "", "body")
 		}
 	} else {
