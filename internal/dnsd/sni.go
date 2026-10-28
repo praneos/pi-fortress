@@ -385,8 +385,9 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 //
 // ECH hides the real name behind the public name of the provider. Thus an
 // ECH flow also goes through to the published ranges of that provider:
-// the resolver of the device already filtered its inner name. The ranges
-// only add to the rules above, and the /24 rule comes before them. Chrome
+// the resolver of the device already filtered its inner name. The outer
+// name must still have an address through the house. The ranges only add
+// to the rules above, and the /24 rule comes before them. Chrome
 // and Firefox send a GREASE encrypted_client_hello extension in each hello
 // when the site has no ECH config, and that hello names the real site.
 // Before, such a hello lost the /24 rule. An ECH flow that passes by the
@@ -414,6 +415,11 @@ func (c *sniCheck) judge(ctx context.Context, key sniFlowKey, h tlssni.Hello) (u
 	}
 	if c.seen != nil && c.seen(h.ServerName, dst) {
 		return sniOK, ""
+	}
+	// NXDOMAIN, an empty answer or a SERVFAIL reply has no address and no
+	// error. Such a name passes nowhere, also not into the ECH ranges.
+	if len(addrs) == 0 {
+		return sniBad, h.ServerName + " has no address"
 	}
 	for _, a := range addrs {
 		if p, err := a.Prefix(24); err == nil && p.Contains(dst) {

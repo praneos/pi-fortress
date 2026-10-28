@@ -571,6 +571,35 @@ func TestSNISlash24BeforeECHRanges(t *testing.T) {
 	}
 }
 
+// A name with no address (NXDOMAIN, an empty answer, a SERVFAIL reply:
+// no address and no error) passes nowhere: not into the ECH ranges with
+// ECH, a GREASE ECH extension or none. A name that the house gave for
+// that address in the last day still passes by that memory.
+func TestSNINameWithNoAddressIsRefused(t *testing.T) {
+	r := &fakeResolve{ans: map[string][]netip.Addr{"gone.example": nil}}
+	c, _ := newTestCheck(t, r)
+	ctx := context.Background()
+	key := func(dst string) sniFlowKey {
+		return sniFlowKey{netip.MustParseAddrPort("10.78.0.160:1"), netip.AddrPortFrom(netip.MustParseAddr(dst), 443)}
+	}
+	for _, dst := range []string{"104.21.3.4", "198.51.100.7"} {
+		for _, ech := range []bool{true, false} {
+			for _, name := range []string{"gone.example", "nothing.example"} {
+				m, why := c.judge(ctx, key(dst), tlssni.Hello{ServerName: name, ECH: ech})
+				if m != sniBad || why != name+" has no address" {
+					t.Errorf("%s to %s (ECH %v): %#x %q, want a refusal for no address", name, dst, ech, m, why)
+				}
+			}
+		}
+	}
+	c.seen = func(name string, addr netip.Addr) bool {
+		return name == "gone.example" && addr == netip.MustParseAddr("198.51.100.7")
+	}
+	if m, why := c.judge(ctx, key("198.51.100.7"), tlssni.Hello{ServerName: "gone.example"}); m != sniOK {
+		t.Fatalf("a name with an answer of the last day for this address refused: %s", why)
+	}
+}
+
 // After a long idle, a device opens a flow with an expired answer. The CDN
 // has moved the name to a different range, so the answer now does not
 // match. The address that the same name resolved to before still passes.

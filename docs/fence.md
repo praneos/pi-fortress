@@ -601,7 +601,8 @@ with an expired answer after a long idle through, also when the CDN has moved
 the name to a different range. A flow with Encrypted Client Hello (ECH) shows only the outer name
 of the provider: it passes by the rules above, as a plain flow with that
 name does, or into the ranges of `vm/policy/house_ech.ips`, whatever the
-inner name. The /24 rule comes before the ranges: Chrome and Firefox send
+inner name. The outer name must still have an address through the house:
+a name with no address (NXDOMAIN or an empty answer) passes nowhere. The /24 rule comes before the ranges: Chrome and Firefox send
 an ECH extension with random content (GREASE) in each hello to a site with
 no ECH config, and that hello names the real site. A ClientHello that does
 not parse, or that has an extension type two times, does not pass.
