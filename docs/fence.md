@@ -603,6 +603,11 @@ of the provider: it passes to a resolved address of that name or into the
 ranges of `vm/policy/house_ech.ips`, whatever the inner name, and never by
 the /24. A ClientHello that does not parse, or that has an extension type
 two times, does not pass.
+The verdict of a flow is in its conntrack mark, and only a flow with no
+verdict goes to the check. Thus a flow that the check passed continues when
+pf dns restarts (each apply restarts it). A flow that is in its check at the
+restart gets a TCP reset (`data with no SYN before it` in the journal), and
+the client opens it again.
 `direct_ip.allow` ships empty: nothing that an agent runs has needed it.
 
 A plain segment (`segments.d/<name>.env`, the desk) has the gate from its own
