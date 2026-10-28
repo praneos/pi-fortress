@@ -33,12 +33,14 @@ func isJSONBody(req *httpwire.Request, body []byte) bool {
 // only an escaped match refuses: a placeholder as in noteEncodedBody, a
 // live value or token-prefix match as CauseEncodedBodyToken. The fence
 // never substitutes into a decoded string. A body with no backslash has no
-// escape, and costs one byte search.
-func (s *scanner) noteJSONBody(req *httpwire.Request, body []byte) {
+// escape, and costs one byte search. The unescaped text can be rounds times
+// the body, so each string takes its bytes from bud first. After a
+// refusal, the scan stops, and the caller answers busy.
+func (s *scanner) noteJSONBody(req *httpwire.Request, body []byte, bud *scanBudget) {
 	if bytes.IndexByte(body, '\\') < 0 || !isJSONBody(req, body) {
 		return
 	}
-	if dec := jsonEscaped(s.strip(body), jsonRounds, nil); len(dec) > 0 {
+	if dec := jsonEscaped(s.strip(body), jsonRounds, nil, bud); len(dec) > 0 && !bud.spent {
 		s.noteEncodedBody(dec)
 	}
 }
@@ -49,8 +51,9 @@ func (s *scanner) noteJSONBody(req *httpwire.Request, body []byte) {
 // holds a backslash gets the same pass again, for at most rounds passes in
 // all. The decode uses the standard rules of encoding/json. A string that
 // does not decode is skipped: a JSON parser rejects it. The work is linear
-// in the body size for each round.
-func jsonEscaped(b []byte, rounds int, out []byte) []byte {
+// in the body size for each round. Each decoded string takes its length
+// from bud before it goes into out. When bud refuses, jsonEscaped stops.
+func jsonEscaped(b []byte, rounds int, out []byte, bud *scanBudget) []byte {
 	for i := 0; i < len(b); i++ {
 		if b[i] != '"' {
 			continue
@@ -72,9 +75,12 @@ func jsonEscaped(b []byte, rounds int, out []byte) []byte {
 		if !esc || json.Unmarshal(lit, &s) != nil {
 			continue
 		}
+		if !bud.take(int64(len(s)) + 1) {
+			return out
+		}
 		out = append(append(out, s...), '\n')
 		if rounds > 1 && strings.IndexByte(s, '\\') >= 0 {
-			out = jsonEscaped([]byte(s), rounds-1, out)
+			out = jsonEscaped([]byte(s), rounds-1, out, bud)
 		}
 	}
 	return out
