@@ -1781,9 +1781,11 @@ _start="$(grep -nF 'systemctl enable --now pi-fortress-update-check.timer' "${ap
 for _l in NoNewPrivileges=yes ProtectHome=yes ProtectSystem=strict ProtectKernelModules=yes ProtectKernelLogs=yes \
   ProtectControlGroups=yes RestrictNamespaces=yes RestrictSUIDSGID=yes SystemCallArchitectures=native \
   SystemCallFilter=@system-service SystemCallErrorNumber=EPERM 'RestrictAddressFamilies=AF_UNIX AF_NETLINK' \
-  'CapabilityBoundingSet=CAP_SYS_ADMIN'; do
+  'CapabilityBoundingSet=' 'AmbientCapabilities='; do
   grep -qxF "${_l}" "${here}/usb-nic-switch.service" || fail "usb-nic-switch.service has no '${_l}'"
 done
+grep -qE '^(CapabilityBoundingSet|AmbientCapabilities)=.' "${here}/usb-nic-switch.service" &&
+  fail "usb-nic-switch.service gives a capability; the usbfs calls and the authorized write need none"
 grep -qE '^(PrivateDevices|ProtectKernelTunables)=yes' "${here}/usb-nic-switch.service" &&
   fail "usb-nic-switch.service blocks /dev/bus/usb or the writes to /sys"
 grep -qF '/authorized' "${here}/usb-nic-switch.sh" ||
