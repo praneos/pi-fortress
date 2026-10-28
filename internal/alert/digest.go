@@ -37,6 +37,11 @@ const (
 	digestSeen = 16
 	// digestMaxState bounds the read of the state file.
 	digestMaxState = 1 << 20
+	// digestNameMax is the longest name that a post shows (postName).
+	digestNameMax = 64
+	// digestHidden is what a post shows for a name that does not have the
+	// shape of a host name.
+	digestHidden = "(not shown)"
 )
 
 // Digest collects the Blocks rows of pf observe (jsonl.BlocksThreat) from
@@ -274,17 +279,56 @@ func (d *Digest) render(now time.Time) string {
 				b.WriteString(", ")
 			}
 			if seg == "agent" {
-				b.WriteString(tailer.Printable(redactName(h.Src)) + " -> ")
+				b.WriteString(postName(h.Src) + " -> ")
 			}
-			b.WriteString(tailer.Printable(redactName(h.Dst)))
+			b.WriteString(postName(h.Dst))
 			src := h.Feed
 			if src == "" || src == "local" {
 				src = h.Class
 			}
-			b.WriteString(" (" + tailer.Printable(redactName(src)) + ") x" + strconv.Itoa(h.N))
+			b.WriteString(" (" + postName(src) + ") x" + strconv.Itoa(h.N))
 		}
 	}
 	return b.String()
+}
+
+// postName is a name as a post shows it. Only a name with the shape of a
+// host name (hostShaped) is shown, after redactName. Any other name is
+// digestHidden. Thus a name cannot put a scheme, a port, a path or markup
+// in a post, and no sink can make a link from it. A name longer than
+// digestNameMax keeps its right end, which has the zone, after "...". The
+// fixed words of pf observe for blocks that the resolver did not log stay.
+func postName(s string) string {
+	switch s {
+	case "(not logged)", "(untracked)":
+		return s
+	}
+	if !hostShaped(s) {
+		return digestHidden
+	}
+	if r := redactName(s); r != s {
+		return r
+	}
+	if len(s) > digestNameMax {
+		return "..." + s[len(s)-(digestNameMax-3):]
+	}
+	return s
+}
+
+// hostShaped tells whether s has only ASCII letters, digits, "-", "_" and
+// ".". An IPv4 address has this shape too.
+func hostShaped(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range []byte(s) {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_', c == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // redactName gives a name that can go in a post. An agent selects the

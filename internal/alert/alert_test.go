@@ -118,8 +118,8 @@ func TestCanarySurvivesAnOrdinaryRefusalOnTheSameHost(t *testing.T) {
 	if len(bodies) != 2 {
 		t.Fatalf("posted %d of 2 alerts: %q", len(bodies), bodies)
 	}
-	if !strings.HasPrefix(bodies[1], "CANARY ") {
-		t.Fatalf("second post was not the canary: %q", bodies[1])
+	if strings.HasPrefix(bodies[0], "CANARY ") == strings.HasPrefix(bodies[1], "CANARY ") {
+		t.Fatalf("want one canary post and one ordinary post: %q", bodies)
 	}
 }
 

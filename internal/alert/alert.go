@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf16"
 
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/tailer"
@@ -48,6 +49,23 @@ const (
 // errUndelivered stands for a post the operator did not get. The drain
 // pass reports it; the row itself was recorded locally already.
 var errUndelivered = errors.New("alert not delivered")
+
+// errRefused is a post that the webhook refused for its body: status 400,
+// 413 or 422. The same body gets the same answer each time, so a retry
+// cannot deliver it. flush drops it.
+var errRefused = fmt.Errorf("%w: the webhook refused the body", errUndelivered)
+
+// The body limits of the sinks, measured after the escape of the sink.
+// Discord refuses content over 2000 characters. A self-hosted ntfy refuses
+// a message over 4096 bytes, and ntfy.sh changes it into an attachment.
+// Slack takes more, but 3000 characters keeps a post short to read.
+const (
+	discordMax = 2000
+	ntfyMax    = 4096
+	slackMax   = 3000
+	// postCut ends a post that PostMessage cut to the limit of its sink.
+	postCut = " (cut)"
+)
 
 type Alerter struct {
 	StripLog   string
@@ -588,6 +606,8 @@ func (a *Alerter) PostWebhook(hook string, event map[string]any) error {
 // PostMessage returns whether the operator got the message. Nothing to
 // send is not a failure. A webhook that refused or never answered is a
 // failure. The caller uses that to decide if the event may be checkpointed.
+// A message over the body limit of the sink is cut to fit (fit), so the
+// sink does not refuse it for its size.
 func (a *Alerter) PostMessage(hook, msg string) error {
 	if hook == "" || msg == "" {
 		return nil
@@ -600,18 +620,20 @@ func (a *Alerter) PostMessage(hook, msg string) error {
 	}
 	// ntfy shows a text/plain body as text (Markdown only with a
 	// Markdown header, which is never sent). So it needs no escape
-	// beyond the control runes that Printable already removed.
-	msg = tailer.Printable(msg)
+	// beyond the control runes that Printable already removed. ntfy
+	// changes a body that is not UTF-8 into an attachment, so an invalid
+	// byte becomes U+FFFD.
+	msg = strings.ToValidUTF8(tailer.Printable(msg), "\uFFFD")
 	var body []byte
 	switch {
 	case slack(hook):
-		body, _ = json.Marshal(map[string]any{"text": slackEscape(msg), "mrkdwn": false})
+		body, _ = json.Marshal(map[string]any{"text": fit(msg, slackEscape, utf16Len, slackMax), "mrkdwn": false})
 		headers["Content-Type"] = "application/json"
 	case discord(hook):
-		body, _ = json.Marshal(map[string]any{"content": discordEscape(msg), "allowed_mentions": map[string]any{"parse": []string{}}})
+		body, _ = json.Marshal(map[string]any{"content": fit(msg, discordEscape, utf16Len, discordMax), "allowed_mentions": map[string]any{"parse": []string{}}})
 		headers["Content-Type"] = "application/json"
 	default:
-		body = []byte(msg)
+		body = []byte(fit(msg, func(s string) string { return s }, func(s string) int { return len(s) }, ntfyMax))
 		headers["Content-Type"] = "text/plain"
 	}
 	req, err := http.NewRequest(http.MethodPost, hook, bytes.NewReader(body))
@@ -635,9 +657,43 @@ func (a *Alerter) PostMessage(hook, msg string) error {
 	// dropped connection.
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		fmt.Fprintf(a.errw(), "alert webhook failed: %s: status %d\n", endpoint(hook), resp.StatusCode)
+		switch resp.StatusCode {
+		case http.StatusBadRequest, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+			return errRefused
+		}
 		return errUndelivered
 	}
 	return nil
+}
+
+// fit gives esc(msg) at a maximum size of limit. When it is larger, fit
+// cuts msg before the escape, at a rune boundary, and adds postCut. Each
+// escape here changes one rune at a time, so a cut is never inside an
+// escape sequence.
+func fit(msg string, esc func(string) string, size func(string) int, limit int) string {
+	out := esc(msg)
+	if size(out) <= limit {
+		return out
+	}
+	mark := esc(postCut)
+	room, n := limit-size(mark), 0
+	for i, r := range msg {
+		if n += size(esc(string(r))); n > room {
+			return esc(msg[:i]) + mark
+		}
+	}
+	return out
+}
+
+// utf16Len counts the characters of s as Discord and Slack can count them.
+// A rune above U+FFFF counts as two. Thus the count is never less than the
+// count of the sink.
+func utf16Len(s string) int {
+	n := 0
+	for _, r := range s {
+		n += utf16.RuneLen(r)
+	}
+	return n
 }
 
 func (a *Alerter) saveLast(event map[string]any) error {
@@ -752,12 +808,17 @@ func (a *Alerter) dropped(kind string) {
 	}
 }
 
-// next is what flush posts now: the summary of a window when its hour is
-// up, else the oldest queued post. Nothing while the retry floor of a
-// failed post holds. Called under mu.
+// next is what flush posts now: the oldest canary post, then the summary
+// of a window when its hour is up, else the oldest queued post. Nothing
+// while the retry floor of a failed post holds. A canary goes first,
+// because docs/fence.md promises that it arrives, and older posts must not
+// delay it. Called under mu.
 func (a *Alerter) next() (p pending, summary bool, ok bool) {
 	if a.holdingOff() {
 		return pending{}, false, false
+	}
+	if i := slices.IndexFunc(a.queue, func(q pending) bool { return q.canary }); i >= 0 {
+		return a.queue[i], false, true
 	}
 	if a.capExpired() {
 		if a.cap.suppressed > 0 {
@@ -771,10 +832,17 @@ func (a *Alerter) next() (p pending, summary bool, ok bool) {
 	return a.queue[0], false, true
 }
 
-// flush posts what is queued, in order, until the queue is empty or a post
-// fails. A failure delays the next attempt for retryAfter, and keeps the
-// post at the head. flush never touches the network under mu. So handle
-// (and with it the other tail) continues while a post is out.
+// flush posts what is queued, in the order of next, until the queue is
+// empty or a post fails. A failure delays the next attempt for retryAfter,
+// and keeps the post at the head. A post that the webhook refused for its
+// body (errRefused) is not a failure of the webhook: flush drops it, counts
+// it as suppressed for the summary, and continues. A retry of that post
+// cannot succeed, and it would hold each post after it. The summary is not
+// dropped: it is the one message that says that alerts were missed, and
+// only pf writes its text, cut to fit. So a refusal of it is a problem of
+// the webhook, and it gets the retry. flush never touches the network
+// under mu. So handle (and with it the other tail) continues while a post
+// is out.
 func (a *Alerter) flush(url string) error {
 	if url == "" || !a.postMu.TryLock() {
 		return nil
@@ -796,16 +864,22 @@ func (a *Alerter) flush(url string) error {
 		}
 		err := a.PostMessage(url, p.msg)
 		a.mu.Lock()
-		if err != nil {
+		if err != nil && (summary || !errors.Is(err, errRefused)) {
 			a.retryAt = a.clock().Add(retryAfter)
 			a.mu.Unlock()
 			return err
 		}
 		a.retryAt = time.Time{}
+		if err != nil {
+			fmt.Fprintln(a.errw(), "alert post dropped: the webhook refused its body; the next summary counts it")
+		}
 		if summary {
 			a.cap = a.cap.after(snap, a.clock())
 		} else if i := slices.IndexFunc(a.queue, func(q pending) bool { return q.id == p.id }); i >= 0 {
 			a.queue = slices.Delete(a.queue, i, i+1)
+			if err != nil {
+				a.dropped(p.kind)
+			}
 		}
 		a.mu.Unlock()
 	}
