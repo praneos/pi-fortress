@@ -193,6 +193,33 @@ func TestStageRunReadsTheSeedCopy(t *testing.T) {
 	}
 }
 
+// A second stage run within -fresh serves the feeds from the copies in
+// -cache, and does not download them again.
+func TestStageRunReusesTheCacheCopy(t *testing.T) {
+	d := newStageDirs(t)
+	if _, _, _, err := d.fetcher(strings.Repeat("aa", 16)).Run(); err != nil {
+		t.Fatal(err)
+	}
+	f := d.fetcher(strings.Repeat("bb", 16))
+	f.FreshFor = 30 * time.Minute
+	f.Get = func(url, ua string, to time.Duration) (string, error) {
+		if url != "https://tls.test/" {
+			t.Errorf("%s downloaded again within -fresh", url)
+		}
+		return stageBodies(url, ua, to)
+	}
+	report, _, _, err := f.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(report, "\n"), "OK ips: 2 ips (last good") {
+		t.Fatalf("report:\n%s", strings.Join(report, "\n"))
+	}
+	if got := testsupport.ReadFile(t, filepath.Join(d.stage, "blacklist.ips")); !strings.Contains(got, "1.2.3.0/24\n") {
+		t.Fatalf("ips %q", got)
+	}
+}
+
 func TestReportTextHasOnlyPrintableASCII(t *testing.T) {
 	got := reportText([]string{"FAIL x: a\x1b]0;t\x07b\r", "OK y: caf\xc3\xa9"})
 	if want := "FAIL x: a?]0;t?b?\nOK y: caf??\n"; got != want {
