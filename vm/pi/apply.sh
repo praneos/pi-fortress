@@ -270,6 +270,11 @@ if [[ "${EYEBALL}" != off && "${EYEBALL}" != audit && "${EYEBALL}" != refuse ]];
   echo "pi-fortress: EYEBALL='${EYEBALL}' is not off, audit or refuse (net.env or ${NET_ENV_LOCAL})" >&2
   exit 1
 fi
+JOURNAL_PERSIST="${JOURNAL_PERSIST:-0}"
+if [[ "${JOURNAL_PERSIST}" != 0 && "${JOURNAL_PERSIST}" != 1 ]]; then
+  echo "pi-fortress: JOURNAL_PERSIST='${JOURNAL_PERSIST}' is not 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
+  exit 1
+fi
 HW_WATCHDOG="${HW_WATCHDOG:-auto}"
 if [[ "${HW_WATCHDOG}" != auto && "${HW_WATCHDOG}" != 0 && "${HW_WATCHDOG}" != 1 ]]; then
   echo "pi-fortress: HW_WATCHDOG='${HW_WATCHDOG}' is not auto, 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
@@ -1631,9 +1636,19 @@ sysctl -p /etc/sysctl.d/97-pi-fortress-conntrack.conf >/dev/null 2>&1 ||
 # the drop-in shows all limits of the journal in one place: for a
 # unit that logs more than 10000 lines in 30 s, journald suppresses the rest,
 # with a count, until the interval ends.
+# JOURNAL_PERSIST=1 adds Storage=persistent. Raspberry Pi OS sets
+# Storage=volatile in /usr/lib/systemd/journald.conf.d/40-rpi-volatile-storage.conf.
+# journald reads the drop-ins of all directories in the order of their
+# file names, and pi-fortress.conf comes after 40-*, so this line wins.
+# With 0, the drop-in has no Storage= line and the OS default stays.
 install -d -m 0755 /etc/systemd/journald.conf.d
-printf '%s\n' '[Journal]' 'SystemMaxUse=200M' 'SystemKeepFree=1G' 'RuntimeMaxUse=64M' \
-  'RateLimitIntervalSec=30s' 'RateLimitBurst=10000' >"${WORKDIR}/journald-pi-fortress.conf"
+{
+  printf '%s\n' '[Journal]' 'SystemMaxUse=200M' 'SystemKeepFree=1G' 'RuntimeMaxUse=64M' \
+    'RateLimitIntervalSec=30s' 'RateLimitBurst=10000'
+  if [[ "${JOURNAL_PERSIST}" == 1 ]]; then
+    printf '%s\n' 'Storage=persistent'
+  fi
+} >"${WORKDIR}/journald-pi-fortress.conf"
 if ! cmp -s "${WORKDIR}/journald-pi-fortress.conf" /etc/systemd/journald.conf.d/pi-fortress.conf; then
   install -m 0644 "${WORKDIR}/journald-pi-fortress.conf" /etc/systemd/journald.conf.d/pi-fortress.conf
   # A restart, not a reload: journald reads its limits at start. Only
@@ -1641,6 +1656,11 @@ if ! cmp -s "${WORKDIR}/journald-pi-fortress.conf" /etc/systemd/journald.conf.d/
   # no reason. Services keep their stdout across it (the fd store).
   systemctl restart systemd-journald.service >/dev/null 2>&1 ||
     echo "pi-fortress: systemd-journald did not restart; the journal cap applies from the next boot" >&2
+  # The boot moves the RAM journal to the disk (systemd-journal-flush).
+  # A change on a running box must do that step itself.
+  if [[ "${JOURNAL_PERSIST}" == 1 ]]; then
+    journalctl --flush >/dev/null 2>&1 || true
+  fi
 fi
 
 # Time. systemd-timesyncd asked a Debian pool over plain NTP. Thus the
