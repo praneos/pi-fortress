@@ -76,10 +76,10 @@ func TestPrefilterWindowStopsAtTheToken(t *testing.T) {
 // on a stream, the remainder of the token did not arrive yet.
 func TestPrefilterKeepsARunThatReachesTheEnd(t *testing.T) {
 	ts := benchTokenSet(t)
-	if _, ok := ts.span([]byte("xx ghp_abc"), 3); !ok {
+	if _, ok := ts.span([]byte("xx ghp_abc"), 3, new(tokenRun)); !ok {
 		t.Fatal("a truncated hit at the buffer end was dropped")
 	}
-	if _, ok := ts.span([]byte("xx ghp_abc "), 3); ok {
+	if _, ok := ts.span([]byte("xx ghp_abc "), 3, new(tokenRun)); ok {
 		t.Fatal("a hit whose run ends short was kept")
 	}
 }

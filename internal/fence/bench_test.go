@@ -210,3 +210,55 @@ func BenchmarkStreamPrefixNoiseWithTokens(b *testing.B) {
 func BenchmarkDecideForeignBody1MNoise(b *testing.B) {
 	runDecide(b, "example.com", postReq("example.com", benchPrefixNoiseBody()))
 }
+
+// A megabyte that is one run of token bytes with a rule prefix every four
+// bytes. Each prefix opens a window, and all of them end where the run
+// ends.
+func benchPrefixRunBody() string { return strings.Repeat("ghp_", (1<<20)/4) }
+
+// The same, cut into runs that are shorter than maxHold. Thus the stream
+// holds each run and does not strip it as one long token.
+func benchPrefixRunsBody() string {
+	run := strings.Repeat("ghp_", (maxHold-64)/4) + " "
+	return strings.Repeat(run, (1<<20)/len(run))
+}
+
+// benchTokenReads measures the token stream alone in reads of n bytes.
+func benchTokenReads(b *testing.B, body string, n int) {
+	ts := tokensFor(benchRE(b))
+	sink := make([]byte, 32<<10)
+	b.SetBytes(int64(len(body)))
+	for b.Loop() {
+		s := newTokenStream(&stepReader{src: []byte(body), n: n}, ts, true)
+		for {
+			_, err := s.Read(sink)
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				b.Fatal(err)
+			}
+		}
+	}
+}
+
+// benchTokenReplace measures the buffered path: one replace of body.
+func benchTokenReplace(b *testing.B, body string) {
+	ts := tokensFor(benchRE(b))
+	src := []byte(body)
+	b.SetBytes(int64(len(body)))
+	for b.Loop() {
+		ts.replace(src, stripRepl)
+	}
+}
+
+func BenchmarkTokenPrefixRunReads16K(b *testing.B) { benchTokenReads(b, benchPrefixRunBody(), 16<<10) }
+func BenchmarkTokenPrefixRunsReads16K(b *testing.B) {
+	benchTokenReads(b, benchPrefixRunsBody(), 16<<10)
+}
+func BenchmarkTokenCleanReads16K(b *testing.B)     { benchTokenReads(b, benchCleanBody(), 16<<10) }
+func BenchmarkTokenTokensReads16K(b *testing.B)    { benchTokenReads(b, benchTokenBody(), 16<<10) }
+func BenchmarkTokenPrefixRunReplace(b *testing.B)  { benchTokenReplace(b, benchPrefixRunBody()) }
+func BenchmarkTokenPrefixRunsReplace(b *testing.B) { benchTokenReplace(b, benchPrefixRunsBody()) }
+func BenchmarkTokenCleanReplace(b *testing.B)      { benchTokenReplace(b, benchCleanBody()) }
+func BenchmarkTokenTokensReplace(b *testing.B)     { benchTokenReplace(b, benchTokenBody()) }

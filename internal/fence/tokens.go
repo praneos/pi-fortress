@@ -252,9 +252,19 @@ const window = 4096
 // candidates returns sorted, merged [start,end) regions around every
 // literal prefix hit, or nil,false when the prefilter is disabled.
 func (t *tokenSet) candidates(b []byte) ([][2]int, bool) {
+	wins, ok, _ := t.candidatesWalk(b)
+	return wins, ok
+}
+
+// candidatesWalk is candidates, and also the number of bytes that span
+// walked. The hits of one prefix come in order, and they share one
+// tokenRun. Thus span walks each byte of b at most one time for each
+// prefix, also when a run of token bytes has a prefix every few bytes.
+func (t *tokenSet) candidatesWalk(b []byte) ([][2]int, bool, int) {
 	if !t.complete {
-		return nil, false
+		return nil, false, 0
 	}
+	var r tokenRun
 	var wins [][2]int
 	for i, p := range t.prefixes {
 		back := 1
@@ -267,14 +277,14 @@ func (t *tokenSet) candidates(b []byte) ([][2]int, bool) {
 				break
 			}
 			s := k + j
-			if hi, ok := t.span(b, s); ok {
+			if hi, ok := t.span(b, s, &r); ok {
 				wins = append(wins, [2]int{max(s-back, 0), hi})
 			}
 			k = s + 1
 		}
 	}
 	if len(wins) == 0 {
-		return nil, true
+		return nil, true, r.walked
 	}
 	sort.Slice(wins, func(i, j int) bool { return wins[i][0] < wins[j][0] })
 	var out [][2]int
@@ -285,7 +295,19 @@ func (t *tokenSet) candidates(b []byte) ([][2]int, bool) {
 		}
 		out = append(out, w)
 	}
-	return out, true
+	return out, true, r.walked
+}
+
+// tokenRun is the part of b that the last walk of span found: each byte
+// of b[lo:hi] is in tokenClass. end says that hi is the end of the run:
+// b[hi] is not in tokenClass, or hi is len(b). For a hit in [lo, hi], span
+// does not walk these bytes again. It continues the walk at hi, or, when
+// end is true, it does not walk. walked is the number of bytes that span
+// walked. A tokenRun is for one b only.
+type tokenRun struct {
+	lo, hi int
+	end    bool
+	walked int
 }
 
 // span is the slice that the NFA runs over for a prefix hit at s. Each rule
@@ -297,15 +319,27 @@ func (t *tokenSet) candidates(b []byte) ([][2]int, bool) {
 // "ghp_short", "AKIA!". There, a body full of near-misses stops costing
 // anything. A run that reaches the end of b stays, for any length: the
 // remainder can still be in transit.
-func (t *tokenSet) span(b []byte, s int) (int, bool) {
+//
+// r keeps what the earlier walks over b found. Thus the hits in one run
+// share one walk of the run. The walk for each hit still stops at its
+// window.
+func (t *tokenSet) span(b []byte, s int, r *tokenRun) (int, bool) {
 	lim := min(s+window, len(b))
 	if !t.bounded {
 		return lim, true
 	}
-	i := s
-	for i < lim && inTokenClass(b[i]) {
-		i++
+	if s < r.lo || s > r.hi {
+		r.lo, r.hi, r.end = s, s, false
 	}
+	if !r.end && r.hi < lim {
+		i := r.hi
+		for i < lim && inTokenClass(b[i]) {
+			i++
+		}
+		r.walked += i - r.hi
+		r.hi, r.end = i, i < lim || i == len(b)
+	}
+	i := min(r.hi, lim)
 	if i-s < t.minLen && i < len(b) {
 		return 0, false
 	}
