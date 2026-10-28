@@ -513,6 +513,10 @@ func parseEyeballToken(token, kind string) (string, bool) {
 // last-good copy. when is the time of the data: now for a fresh answer,
 // the time of the copy otherwise. ok is false when there is neither.
 func (f *Fetcher) eyeballItems(outDir, ua string, timeout time.Duration, feed Feed, limit int, report *[]string) (items []string, when time.Time, ok bool) {
+	if items, fresh, when, ok := f.freshCopy(outDir, feed); ok {
+		*report = append(*report, fmt.Sprintf("OK %s: %d %s%s", feed.ID, len(items), eyeballLabel(feed.Kind), fresh))
+		return items, when, true
+	}
 	why := ""
 	cut := false
 	pg, gerr := f.getLimit(feed.URL, ua, timeout, eyeballBodyCap(feed.Format))
