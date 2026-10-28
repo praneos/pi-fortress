@@ -165,6 +165,36 @@ func TestTwoClientsOneName(t *testing.T) {
 	}
 }
 
+// TestNameSrcsCapped: each query can come from a different address of the
+// segment. The row of one name keeps a maximum of maxNameSrcs queriers,
+// and the busiest querier stays.
+func TestNameSrcsCapped(t *testing.T) {
+	o := &Observer{Now: time.Now}
+	st := o.empty()
+	for i := 0; i < 3; i++ {
+		o.touchDNSSeg(st, "house", "shared.test", "10.78.0.20", "A", false)
+	}
+	for i := 0; i < 1000; i++ {
+		src := fmt.Sprintf("10.78.%d.%d", 1+i/250, 1+i%250)
+		o.touchDNSSeg(st, "house", "shared.test", src, "A", false)
+	}
+	rec := st.DNS["house/shared.test"]
+	if len(rec.Srcs) > maxNameSrcs {
+		t.Fatalf("one name counts %d queriers, want at most %d", len(rec.Srcs), maxNameSrcs)
+	}
+	if rec.Srcs["10.78.0.20"] != 3 || rec.Count != 1003 {
+		t.Fatalf("busiest querier %d, count %d", rec.Srcs["10.78.0.20"], rec.Count)
+	}
+	// A row from a state file written before the limit gets back to it.
+	for i := 0; i < 500; i++ {
+		rec.Srcs[fmt.Sprintf("10.78.9.%d", i)] = 1
+	}
+	o.touchDNSSeg(st, "house", "shared.test", "10.78.0.21", "A", false)
+	if len(rec.Srcs) > maxNameSrcs || rec.Srcs["10.78.0.20"] != 3 {
+		t.Fatalf("loaded row: %d queriers, busiest %d", len(rec.Srcs), rec.Srcs["10.78.0.20"])
+	}
+}
+
 func TestClientCapsAndEviction(t *testing.T) {
 	t.Run("names cap by count then key", func(t *testing.T) {
 		m := map[string]uint32{}
