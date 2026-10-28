@@ -163,6 +163,12 @@ the rule, and on to the first byte outside the charset. Thus the fence strips
 the whole key, and does not miss it, if the key is longer than the minimum or
 is glued to the next word.
 
+A match that is longer than 16 KiB is not one key. The fence strips it on to
+the end of its run of token bytes (letters, digits, `_`, `-` and `.`). A
+streamed body holds at most 16 KiB of a match that is not complete. At that
+limit, the fence strips the part that it holds, and then the rest of the run
+as it comes. Thus a streamed body and a buffered body strip the same bytes.
+
 A distinctive prefix (`ghp_`, `sk-ant-`, `glpat-`) matches at any position.
 A prefix that sits inside ordinary words (`sk-`, `AIza`, `npm_`) needs one of
 these before it:

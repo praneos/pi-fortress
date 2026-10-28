@@ -26,14 +26,46 @@ type fullScan struct {
 	cut    bool
 	from   int
 	hits   map[string]int
+	// run and done are as in tokenStream: inside a token longer than
+	// maxHold, and the bytes of it that went out.
+	run  bool
+	done int
+}
+
+// part is the replacement of the next k bytes of a token, after done bytes
+// of it: one marker at the start, or padRepl of the full token in parts.
+func (t *fullScan) part(k int) []byte {
+	off := t.done
+	t.done += k
+	if !t.pad {
+		if off == 0 {
+			return stripRepl
+		}
+		return nil
+	}
+	return padRepl(off + k)[off:]
 }
 
 func (t *fullScan) scan() {
 	if len(t.Buf) == 0 {
 		return
 	}
+	var out []byte
+	if t.run {
+		e := t.pre
+		for e < len(t.Buf) && inTokenClass(t.Buf[e]) {
+			e++
+		}
+		out = append(t.outBuf[:0], t.part(e-t.pre)...)
+		if e == len(t.Buf) && !t.EOF {
+			t.commit(out, e, e)
+			return
+		}
+		t.run, t.pre, t.from = false, e, e
+	}
 	ms := t.ts.matchesFrom(t.Buf, t.from, !t.cut)
 	n := len(t.Buf)
+	long := -1
 	if !t.EOF {
 		if !t.ts.complete {
 			n = max(n-window, 0)
@@ -44,40 +76,57 @@ func (t *fullScan) scan() {
 			}
 			n = max(n, 0)
 		}
-		for _, m := range ms {
+		k, end := -1, 0
+		for i, m := range ms {
 			if lo, hi := t.ts.token(m); lo < n && hi > n {
-				n = lo
+				n, k, end = lo, i, hi
 			}
 		}
-		if len(t.Buf) > maxHold && n <= 0 {
-			n = len(t.Buf) - window
-		}
-		if n <= 0 {
+		// The hold limit: the part of the token before the last tail bytes
+		// stays in it, and is longer than maxHold.
+		tail := t.ts.minLen + t.ts.maxPrefix + tokenrules.LeadMax + 1
+		if k >= 0 && min(end, len(t.Buf)-tail)-n > maxHold {
+			long = k
+		} else if n <= t.pre {
+			t.commit(out, t.pre, t.from)
 			return
 		}
 	}
-	if n <= t.pre {
-		return
-	}
-	out := t.outBuf[:0]
 	pos, end := t.pre, t.from
-	for _, m := range ms {
+	for i, m := range ms {
 		lo, hi := t.ts.token(m)
-		if lo < t.pre {
-			continue
+		if lo < pos {
+			if i != long || hi <= pos {
+				continue
+			}
+			for hi-lo > maxHold && hi < len(t.Buf) && inTokenClass(t.Buf[hi]) {
+				hi++
+			}
+			lo = pos
 		}
-		if hi > n {
+		if hi > n && i != long {
 			break
 		}
-		repl := stripRepl
-		if t.pad {
-			repl = padRepl(hi - lo)
+		if hi-lo > maxHold {
+			for hi < len(t.Buf) && inTokenClass(t.Buf[hi]) {
+				hi++
+			}
 		}
-		out = append(append(out, t.Buf[pos:lo]...), repl...)
-		pos, end = hi, hi
+		t.done = 0
+		out = append(append(out, t.Buf[pos:lo]...), t.part(hi-lo)...)
+		pos, end, n = hi, hi, max(n, hi)
 		t.hits[t.ts.ruleName(m)]++
+		if hi == len(t.Buf) && !t.EOF {
+			t.run = true
+			break
+		}
 	}
-	t.outBuf = append(out, t.Buf[pos:n]...)
+	n = max(n, pos)
+	t.commit(append(out, t.Buf[pos:n]...), n, end)
+}
+
+func (t *fullScan) commit(out []byte, n, end int) {
+	t.outBuf = out
 	t.Out = t.outBuf
 	keep := max(n-tokenrules.LeadMax, 0)
 	t.Buf = t.Buf[:copy(t.Buf, t.Buf[keep:])]
