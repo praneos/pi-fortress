@@ -168,6 +168,12 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   `dhcp@.service`) can write only its own lease file under
   `/var/lib/pi-fortress` and `/var/log/pi-fortress`. apply makes each of
   these files before it starts the unit.
+- `update-check.service` (`pf alert updates`) runs as `pf-sidecar`, the
+  one user other than root that can read `alert.url`, with no capability.
+  `ReadWritePaths` has only `/var/lib/pi-fortress/updates.last`. It does
+  not set `ProtectKernelModules=yes`, because that hides `/lib/modules`
+  and the check compares the running kernel with the installed ones. With
+  no capability, it cannot load a module.
 - The broker serves one source prefix. The unit reads `AGENT_NET` from
   `net.env` for `-agent-net`. With this flag, the broker refuses with 403 a
   preamble with a source outside that prefix. It does this before it parses

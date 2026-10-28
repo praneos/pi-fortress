@@ -87,7 +87,7 @@ const compileUsage = "usage: pf compile --policy DIR --out-nft FILE --out-dns FI
 
 const observeUsage = "usage: pf observe once|run|show|reset"
 
-const alertUsage = "usage: pf alert run|show|once|watch|wg"
+const alertUsage = "usage: pf alert run|show|once|watch|wg|updates"
 
 func runFetch(args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("fetch", stderr)
@@ -262,7 +262,7 @@ func runObserve(args []string, _, stderr io.Writer) int {
 	return 0
 }
 
-func runAlert(args []string, _, stderr io.Writer) int {
+func runAlert(args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("alert", stderr)
 	strip := fs.String("strip", "", "strip.jsonl path")
 	offset := fs.String("offset", "", "offset file")
@@ -270,6 +270,7 @@ func runAlert(args []string, _, stderr io.Writer) int {
 	policy := fs.String("policy", "", "directory containing alert.url")
 	ifname := fs.String("if", "wg0", "wireguard interface for alert wg")
 	maxAge := fs.Duration("max", 3*time.Minute, "handshake age that counts as down")
+	updLast := fs.String("updates-last", DefaultUpdatesLast, "state file of alert updates")
 	// The pressure watch of run (docs/user_guide/pi_setup.md "Pressure
 	// alerts"). alert.service reads PF_ALERT_FLAGS from
 	// /etc/pi-fortress/alert.env.
@@ -341,6 +342,8 @@ func runAlert(args []string, _, stderr io.Writer) int {
 		}
 	case "wg":
 		return a.WGOnce(*ifname, *maxAge)
+	case "updates":
+		return alertUpdates(a, *updLast, stdout, stderr)
 	default:
 		fmt.Fprintln(stderr, alertUsage)
 		return 2

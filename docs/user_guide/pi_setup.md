@@ -437,7 +437,7 @@ Then build and sign as above, and copy the new bundle to the Pi. On the Pi, `sud
 
 Check the box. Then run `sudo pf upgrade -confirm` on the Pi within ten minutes. If an upgrade fails its own health check, it rolls back immediately. If an upgrade passes, it reverts automatically after ten minutes, unless you confirm it. Thus an upgrade that disconnects you undoes itself.
 
-`pf upgrade` does not update the OS packages. Run `sudo apt update && sudo apt full-upgrade`, or let the daily `unattended-upgrades` run install the security updates. Reboot when `pf doctor` tells you to (rung `reboot`).
+`pf upgrade` does not update the OS packages. Run `sudo apt update && sudo apt full-upgrade`, or let the daily `unattended-upgrades` run install the security updates. Reboot when `pf doctor` tells you to (rung `reboot`). With a webhook in `alert.url`, a daily check also posts when a reboot, a bootloader image or an update waits for you ([gateway_install.md](../gateway_install.md#os-packages-and-reboots)).
 
 `sudo pf rollback` goes back one version manually, to the version before this one. You cannot go back further. If rollback cannot run because a different apply is running, it tells you. It then exits non-zero and keeps the pending upgrade armed. Run it again.
 
