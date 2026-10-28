@@ -434,19 +434,28 @@ func (t *tokenSet) matches(b []byte) [][]int {
 // has. The buffered path continues its search after each match. Thus a
 // match that starts inside an earlier match is not a match of the text.
 func (t *tokenSet) matchesFrom(b []byte, from int, head bool) [][]int {
+	ms, _ := t.matchesWork(b, from, head)
+	return ms
+}
+
+// matchesWork is matchesFrom, and also the number of bytes that the
+// regexp searched. The token stream adds them up for its work budget.
+func (t *tokenSet) matchesWork(b []byte, from int, head bool) ([][]int, int) {
 	if t == nil {
-		return nil
+		return nil, 0
 	}
 	wins, ok := t.candidates(b)
 	if !ok {
 		wins = [][2]int{{0, len(b)}}
 	}
 	var out [][]int
+	work := 0
 	for _, w := range wins {
 		lo := max(w[0], from)
 		if lo >= w[1] {
 			continue
 		}
+		work += w[1] - lo
 		re := t.inner
 		if lo == 0 && head {
 			re = t.re
@@ -460,7 +469,7 @@ func (t *tokenSet) matchesFrom(b []byte, from int, head bool) [][]int {
 			out = append(out, m)
 		}
 	}
-	return out
+	return out, work
 }
 
 func (t *tokenSet) match(b []byte) bool {

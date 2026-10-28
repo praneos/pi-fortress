@@ -1,6 +1,7 @@
 package broker
 
 import (
+	"io"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -157,12 +158,31 @@ func (b *Broker) logMemBudget(ip, host, where string) {
 const busyBody = "pi-fortress: busy, retry shortly\n"
 
 func (b *Broker) refuseBusy(c *call) error {
-	return b.answer(c.client, c.req, c.expect, func() error {
-		resp := &httpwire.Response{Proto: "HTTP/1.1", Status: "503 Service Unavailable", Code: 503, Body: []byte(busyBody)}
-		resp.SetInPlace("Content-Type", "text/plain")
-		resp.SetInPlace("Retry-After", "5")
-		resp.SetInPlace("Connection", "close")
-		_, err := resp.WriteTo(c.client)
+	return b.answer(c.client, c.req, c.expect, func() error { return writeBusy(c.client) })
+}
+
+func writeBusy(w io.Writer) error {
+	resp := &httpwire.Response{Proto: "HTTP/1.1", Status: "503 Service Unavailable", Code: 503, Body: []byte(busyBody)}
+	resp.SetInPlace("Content-Type", "text/plain")
+	resp.SetInPlace("Retry-After", "5")
+	resp.SetInPlace("Connection", "close")
+	_, err := resp.WriteTo(w)
+	return err
+}
+
+// ruleScanBudget is the strip.jsonl rule of a streamed request body that
+// the token scan stopped at its work budget (fence.ErrScanBudget).
+const ruleScanBudget = "scan_budget"
+
+// refuseStreamBusy answers a request whose streamed body stopped at the
+// work budget of the token scan. The head and the scanned part of the body
+// went to the origin. The origin connection is gone, so the request cannot
+// complete there. The body cannot be read on, so the agent gets the busy
+// 503 at once, as for the byte budget. It is not a refusal of the body.
+func (b *Broker) refuseStreamBusy(c *call) error {
+	_ = b.logStrip(&c.strips, clientIP(c.p), c.host, "body", ruleScanBudget)
+	if err := writeBusy(c.client); err != nil {
 		return err
-	})
+	}
+	return errRefused
 }
