@@ -2,6 +2,7 @@ package alert
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -48,5 +49,40 @@ func TestKeyAlertsHaveTheirOwnCap(t *testing.T) {
 	sum := posts[len(posts)-1]
 	if len(posts) != 7 || !strings.Contains(sum, "3 alerts suppressed") || !strings.Contains(sum, "dns_tunnel 2") || !strings.Contains(sum, "strip 1") {
 		t.Fatalf("summary %q", sum)
+	}
+}
+
+// The broker marks an eyeball row to alert one time for each new name. A
+// run of new names gives a run of those rows. They go on the ordinary
+// budget, so a stripped secret and a key in a DNS name in the same hour
+// still post.
+func TestEyeballRowsKeepKeyBudget(t *testing.T) {
+	now := t0
+	a := &Alerter{Now: func() time.Time { return now }, Stdout: io.Discard, Stderr: io.Discard}
+	url := "https://ntfy.example/topic"
+	for i := range defaultCapPosts + 5 {
+		row := fmt.Sprintf(`{"ev":"substitution_refused","cause":"eyeball_network","where":"audit","kind":"AS64496","host":"n%d.example","client_ip":"10.77.0.10","dest_ip":"192.0.2.1","alert":true}`, i)
+		now = now.Add(time.Second)
+		if err := a.handleFrom(row, url, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, row := range []string{
+		`{"ev":"strip","rule":"secret:d0d1_OPENAI","where":"header","host":"k1.example"}`,
+		`{"threat":"dns_key","where":"agent","client_ip":"10.77.0.10","host":"k2.example","detail":"refused"}`,
+	} {
+		now = now.Add(time.Second)
+		if err := a.handleFrom(row, url, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var keys []string
+	for _, p := range a.queue {
+		if strings.Contains(p.msg, "k1.example") || strings.Contains(p.msg, "k2.example") {
+			keys = append(keys, p.msg)
+		}
+	}
+	if len(keys) != 2 || a.cap.keyPosted != 2 || a.cap.posted != defaultCapPosts || a.cap.by["refused"] != 5 {
+		t.Fatalf("key posts %q, cap %+v", keys, a.cap)
 	}
 }
