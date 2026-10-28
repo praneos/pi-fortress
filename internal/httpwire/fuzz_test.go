@@ -94,6 +94,30 @@ func FuzzScrubber(f *testing.F) {
 	})
 }
 
+// overLimit reports whether err is the refusal of a head that is over a
+// limit of the parser, and the head of out is over that limit. The writer
+// can make a head larger than the head that it read. SetBody and
+// Response.WriteTo add a Content-Length field when the message has none,
+// and they write "Content-Length:5" as "Content-Length: 5". Thus a head
+// at exactly the field limit or the byte limit is over it after the
+// write, and the parser refuses its own output. That refusal is the limit
+// and not a different reading of the message: the next hop is an origin
+// server or a client, which has its own limits. Each other refusal of the
+// output is still a failure.
+func overLimit(err error, out []byte, maxFields int) bool {
+	i := bytes.Index(out, []byte("\r\n\r\n"))
+	if i < 0 {
+		return false
+	}
+	switch err {
+	case ErrTooManyHdr:
+		return bytes.Count(out[:i], []byte("\r\n")) > maxFields
+	case ErrHeaderLimit:
+		return i+4 > maxHeaderBytes
+	}
+	return false
+}
+
 func FuzzReadRequest(f *testing.F) {
 	f.Add([]byte("GET / HTTP/1.1\r\nHost: a\r\n\r\n"))
 	f.Add([]byte("POST /x HTTP/1.1\r\nHost: a\r\nContent-Length: 3\r\n\r\nabc"))
@@ -112,9 +136,13 @@ func FuzzReadRequest(f *testing.F) {
 		if _, err := req.WriteTo(&out); err != nil {
 			t.Fatal(err)
 		}
-		again, err := ReadRequest(bufio.NewReader(&out))
+		wire := out.Bytes()
+		again, err := ReadRequest(bufio.NewReader(bytes.NewReader(wire)))
 		if err != nil {
-			t.Fatalf("re-read of own output failed: %v\n%q", err, out.Bytes())
+			if overLimit(err, wire, maxHeaders) {
+				return
+			}
+			t.Fatalf("re-read of own output failed: %v\n%q", err, wire)
 		}
 		if again.Method != req.Method || again.Target != req.Target || len(again.Fields) != len(req.Fields) {
 			t.Fatalf("round trip changed request: %+v vs %+v", again, req)
@@ -142,9 +170,13 @@ func FuzzReadResponseHead(f *testing.F) {
 		if _, err := resp.WriteTo(&out); err != nil {
 			t.Fatal(err)
 		}
-		again, err := ReadResponseHead(bufio.NewReader(&out), false)
+		wire := out.Bytes()
+		again, err := ReadResponseHead(bufio.NewReader(bytes.NewReader(wire)), false)
 		if err != nil {
-			t.Fatalf("re-read failed: %v\n%q", err, out.Bytes())
+			if overLimit(err, wire, maxRespHeaders) {
+				return
+			}
+			t.Fatalf("re-read failed: %v\n%q", err, wire)
 		}
 		if again.Code != resp.Code {
 			t.Fatalf("code %d -> %d", resp.Code, again.Code)
