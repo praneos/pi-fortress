@@ -72,11 +72,114 @@ var reNTPReply = regexp.MustCompile(`^reply from=(\S+) leap=(\d) version=\d mode
 // ntpQuery asks addr from vm and gives the reply line, or "" with no reply.
 func ntpQuery(t *testing.T, probe func(string) string, vm, addr string) string {
 	t.Helper()
-	out, err := ssh(t, 30*time.Second, vm, probe(vm)+" query -timeout 3s -tries 2 "+addr)
+	return ntpAsk(t, probe(vm), vm, addr, 2)
+}
+
+// ntpNoReply is ntpQuery for a check that no reply comes. bin is
+// probe(vm), from the test goroutine; ntpNoReply itself can run on any
+// goroutine. It sends one query and waits 3 s. When the drop fails, chrony
+// on the gateway answers through the redirect in milliseconds. A second
+// try helps only a check that wants a reply (a lost datagram). The kernel
+// log line of the drop is the proof that the caller reads.
+func ntpNoReply(t *testing.T, bin, vm, addr string) string {
+	t.Helper()
+	return ntpAsk(t, bin, vm, addr, 1)
+}
+
+func ntpAsk(t *testing.T, bin, vm, addr string, tries int) string {
+	t.Helper()
+	out, err := sshNoSkip(t, 30*time.Second, vm, bin+" query -timeout 3s -tries "+strconv.Itoa(tries)+" "+addr)
 	if err != nil {
 		return ""
 	}
 	return strings.TrimSpace(out)
+}
+
+// uplinkCapture runs tcpdump on the uplink wan of the gateway, and counts
+// the packets that match filter. It returns when tcpdump listens: a probe
+// sent after the return is in the capture.
+//
+// With want above zero, tcpdump stops at want packets (-c). This is for a
+// check that packets leave: the capture ends at the packets, not at a
+// fixed time. With want zero, the capture runs until the caller stops it.
+// This is for a check that no packet leaves: the capture covers all the
+// probes, however long they take. Stop it 2 s after the last probe. A
+// leak packet leaves the uplink within milliseconds of its probe. max is
+// the upper bound of the capture in both cases.
+//
+// The returned function waits for the end of the capture (want above
+// zero) or stops it with SIGINT (want zero; timeout sends the signal on to
+// tcpdump). Then it gives the count. With want zero, it is an error when
+// the capture ended before the stop: then the last probes were not seen.
+func uplinkCapture(t *testing.T, wan, filter string, want int, max time.Duration) func() (string, error) {
+	t.Helper()
+	tmp := fmt.Sprintf("/run/pf-itest-capture-%d", time.Now().UnixNano())
+	count := ""
+	if want > 0 {
+		count = " -c " + strconv.Itoa(want)
+	}
+	inner := "echo $$ > " + tmp + ".pid; exec timeout " + strconv.Itoa(int(max/time.Second)) +
+		" tcpdump -i " + wan + count + " -n -l " + shellQuote(filter) + " 2> " + tmp + ".err"
+	var seen string
+	var capErr error
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		seen, capErr = sshNoSkip(t, max+30*time.Second, "pi", "sudo sh -c "+shellQuote(inner)+" | grep -c ' IP ' || true")
+	}()
+	var once sync.Once
+	var stopErr error
+	end := func(kill bool) {
+		once.Do(func() {
+			select {
+			case <-done:
+				if kill {
+					stopErr = fmt.Errorf("the capture ended before the stop (upper bound %s)", max)
+				}
+			default:
+				if kill {
+					out, err := sshNoSkip(t, 15*time.Second, "pi", "sudo sh -c "+shellQuote("kill -INT \"$(cat "+tmp+".pid)\" 2>/dev/null && echo stopped"))
+					if err != nil {
+						stopErr = err
+					} else if !strings.Contains(out, "stopped") {
+						stopErr = fmt.Errorf("the capture ended before the stop (upper bound %s)", max)
+					}
+				}
+				<-done
+			}
+			_, _ = sshNoSkip(t, 15*time.Second, "pi", "sudo rm -f "+tmp+".pid "+tmp+".err")
+		})
+	}
+	// A test that stops early must not leave tcpdump to its upper bound.
+	t.Cleanup(func() { end(true) })
+	result := func() (string, error) {
+		end(want == 0)
+		if capErr != nil {
+			return seen, capErr
+		}
+		return seen, stopErr
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		select {
+		case <-done:
+			// The capture did not start (sudo refused it, or tcpdump
+			// failed). result gives the error to the caller.
+			if capErr == nil {
+				capErr = fmt.Errorf("tcpdump ended before it listened on %s", wan)
+			}
+			return result
+		default:
+		}
+		if out, _ := sshNoSkip(t, 10*time.Second, "pi", "sudo cat "+tmp+".err 2>/dev/null"); strings.Contains(out, "listening on") {
+			return result
+		}
+		if time.Now().After(deadline) {
+			end(true)
+			t.Fatalf("tcpdump on %s did not listen in 20 s", wan)
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
 }
 
 // gwRefID is the reference ID of the clock of the gateway, as the address
@@ -150,14 +253,9 @@ func ntpTests(t *testing.T) {
 			}
 			before := ntpRedirects(t, c.gw)
 			// The capture runs while the client asks. It counts NTP to the two
-			// outside addresses on the uplink.
-			var seen string
-			var capErr error
-			var wg sync.WaitGroup
-			wg.Go(func() {
-				seen, capErr = sshNoSkip(t, 40*time.Second, "pi", "sudo timeout 25 tcpdump -i "+wan+" -n -l 'udp port 123 and (host 192.0.2.1 or host 216.239.35.4)' 2>/dev/null | grep -c ' IP ' || true")
-			})
-			time.Sleep(3 * time.Second)
+			// outside addresses on the uplink. Its upper bound is more than
+			// the longest poll below, and it stops 2 s after the last query.
+			capture := uplinkCapture(t, wan, "udp port 123 and (host 192.0.2.1 or host 216.239.35.4)", 0, 4*time.Minute)
 			eventuallyEvery(t, 2*time.Minute, 5*time.Second, func() string {
 				ref := gwRefID(t)
 				for _, dst := range []string{"216.239.35.4", c.gw} {
@@ -178,7 +276,8 @@ func ntpTests(t *testing.T) {
 				}
 				return ""
 			})
-			wg.Wait()
+			time.Sleep(2 * time.Second)
+			seen, capErr := capture()
 			sudoSkip(t, "pi", "tcpdump", capErr)
 			if capErr != nil {
 				t.Fatalf("the uplink capture failed: %v", capErr)
@@ -191,8 +290,9 @@ func ntpTests(t *testing.T) {
 			}
 		})
 		t.Run(c.vm+" NTP to a blacklisted address is dropped, not answered", func(t *testing.T) {
+			bin := probe(c.vm)
 			since := piClock(t)
-			if line := ntpQuery(t, probe, c.vm, "192.0.2.1"); reNTPReply.MatchString(line) {
+			if line := ntpNoReply(t, bin, c.vm, "192.0.2.1"); reNTPReply.MatchString(line) {
 				t.Fatalf("%s: NTP to 192.0.2.1 got a reply: %q", c.vm, line)
 			}
 			kernLog(t, since, "pi-fortress "+c.vm+"-blacklist: ", "DST=192.0.2.1 ", "DPT=123 ")
@@ -201,8 +301,7 @@ func ntpTests(t *testing.T) {
 
 	t.Run("NTS key exchange does not leave the house or the desk", func(t *testing.T) {
 		since := piClock(t)
-		mustFailOn(t, "house", "nc -z -w3 162.159.200.1 4460")
-		mustFailOn(t, "desk", "nc -z -w3 162.159.200.1 4460")
+		mustFailOnEach(t, "nc -z -w3 162.159.200.1 4460", "house", "desk")
 		if strings.Contains(pi(t, "sudo nft list chain inet fortress house_egress 2>/dev/null || true"), "house-port") {
 			kernLog(t, since, "pi-fortress house-port: ", "DST=162.159.200.1 ", "DPT=4460 ")
 		}
@@ -212,20 +311,34 @@ func ntpTests(t *testing.T) {
 	// probe lifts the lock, and the gateway must drop and log them.
 	t.Run("the agent gets no NTP", func(t *testing.T) {
 		liftAgentLock(t)
+		bin := probe("agent")
 		since := piClock(t)
-		for _, dst := range []string{"192.0.2.1", piIP} {
-			if line := ntpQuery(t, probe, "agent", dst); line != "" && line != "no reply" {
-				t.Errorf("agent: NTP to %s got %q", dst, line)
-			}
+		// The probes do not depend on each other. Thus they run at the
+		// same time, and the wait is that of the slowest one.
+		dsts := []string{"192.0.2.1", piIP}
+		lines := make([]string, len(dsts))
+		var wg sync.WaitGroup
+		for i, dst := range dsts {
+			wg.Go(func() { lines[i] = ntpNoReply(t, bin, "agent", dst) })
 		}
 		mustFailOn(t, "agent", "nc -z -w3 192.0.2.1 4460")
+		wg.Wait()
+		for i, dst := range dsts {
+			if lines[i] != "" && lines[i] != "no reply" {
+				t.Errorf("agent: NTP to %s got %q", dst, lines[i])
+			}
+		}
 		kernLog(t, since, "pi-fortress agent-blacklist: ", "DST=192.0.2.1 ", "DPT=123 ")
 		kernLog(t, since, "pi-fortress agent-blacklist: ", "DST=192.0.2.1 ", "DPT=4460 ")
 		kernLog(t, since, "pi-fortress agent-drop: ", "DST="+piIP+" ", "DPT=123 ")
 		// Each NTP rule of nat prerouting and input is for the house or the
-		// desk address.
+		// desk address. A rule that drops (the meter for each source) gives
+		// NTP to nobody, so it can be on any interface.
 		for _, ch := range []string{"prerouting", "input"} {
 			for l := range strings.SplitSeq(pi(t, "sudo nft list chain inet fortress "+ch), "\n") {
+				if strings.HasSuffix(strings.TrimSpace(l), " drop") {
+					continue
+				}
 				if strings.Contains(l, "dport 123") && !strings.Contains(l, " "+houseGW+" ") && !strings.Contains(l, " "+deskGW+" ") &&
 					!strings.HasSuffix(l, " "+houseGW) && !strings.HasSuffix(l, " "+deskGW) {
 					t.Errorf("%s: an NTP rule that is not for the house or the desk: %s", ch, strings.TrimSpace(l))
@@ -283,13 +396,8 @@ func ntpPassTests(t *testing.T, probe func(string) string, gw string) {
 	}
 
 	t.Run("NTP to a listed server leaves and gets its answer", func(t *testing.T) {
-		var seen string
-		var capErr error
-		var wg sync.WaitGroup
-		wg.Go(func() {
-			seen, capErr = sshNoSkip(t, 50*time.Second, "pi", "sudo timeout 35 tcpdump -i "+wan+" -n -l 'udp port 123 and host 216.239.35.4' 2>/dev/null | grep -c ' IP ' || true")
-		})
-		time.Sleep(3 * time.Second)
+		// The capture stops at the query and its reply.
+		capture := uplinkCapture(t, wan, "udp port 123 and host 216.239.35.4", 2, 35*time.Second)
 		eventuallyEvery(t, 30*time.Second, 5*time.Second, func() string {
 			ref := gwRefID(t)
 			line := ntpQuery(t, probe, "desk", "216.239.35.4")
@@ -305,7 +413,7 @@ func ntpPassTests(t *testing.T, probe func(string) string, gw string) {
 			}
 			return ""
 		})
-		wg.Wait()
+		seen, capErr := capture()
 		sudoSkip(t, "pi", "tcpdump", capErr)
 		if capErr != nil {
 			t.Fatalf("the uplink capture failed: %v", capErr)
@@ -335,8 +443,9 @@ func ntpPassTests(t *testing.T, probe func(string) string, gw string) {
 	})
 
 	t.Run("NTP to a blacklisted address is still dropped", func(t *testing.T) {
+		bin := probe("desk")
 		since := piClock(t)
-		if line := ntpQuery(t, probe, "desk", "192.0.2.1"); reNTPReply.MatchString(line) {
+		if line := ntpNoReply(t, bin, "desk", "192.0.2.1"); reNTPReply.MatchString(line) {
 			t.Fatalf("desk: NTP to 192.0.2.1 got a reply: %q", line)
 		}
 		kernLog(t, since, "pi-fortress desk-blacklist: ", "DST=192.0.2.1 ", "DPT=123 ")
@@ -345,15 +454,10 @@ func ntpPassTests(t *testing.T, probe func(string) string, gw string) {
 	t.Run("NTS key exchange to a listed server leaves the gateway", func(t *testing.T) {
 		// Only the uplink of the gateway is checked: a network behind it can
 		// still drop TCP 4460.
-		var seen string
-		var capErr error
-		var wg sync.WaitGroup
-		wg.Go(func() {
-			seen, capErr = sshNoSkip(t, 30*time.Second, "pi", "sudo timeout 15 tcpdump -i "+wan+" -n -l 'tcp dst port 4460 and dst host 162.159.200.1' 2>/dev/null | grep -c ' IP ' || true")
-		})
-		time.Sleep(3 * time.Second)
+		// The capture stops at the first SYN.
+		capture := uplinkCapture(t, wan, "tcp dst port 4460 and dst host 162.159.200.1", 1, 15*time.Second)
 		_, _ = ssh(t, 20*time.Second, "desk", "nc -z -w5 162.159.200.1 4460")
-		wg.Wait()
+		seen, capErr := capture()
 		sudoSkip(t, "pi", "tcpdump", capErr)
 		if capErr != nil {
 			t.Fatalf("the uplink capture failed: %v", capErr)

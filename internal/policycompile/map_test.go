@@ -5,34 +5,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-)
 
-func TestParseMap(t *testing.T) {
-	cases := []struct {
-		name, text string
-		want       map[string]string
-	}{
-		{"plain", "evil.example\turlhaus-domains-online\n192.0.2.0/24\tspamhaus-drop\n",
-			map[string]string{"evil.example": "urlhaus-domains-online", "192.0.2.0/24": "spamhaus-drop"}},
-		{"first feed wins", "a.example\tx\na.example\ty\n", map[string]string{"a.example": "x"}},
-		{"blank and malformed skipped", "\n \nnofeed\n\tnoitem\na.example\tx\n", map[string]string{"a.example": "x"}},
-		{"padding trimmed", "  a.example \t x \r\n", map[string]string{"a.example": "x"}},
-		{"empty", "", map[string]string{}},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := ParseMap(c.text)
-			if len(got) != len(c.want) {
-				t.Fatalf("%v", got)
-			}
-			for k, v := range c.want {
-				if got[k] != v {
-					t.Fatalf("%v", got)
-				}
-			}
-		})
-	}
-}
+	"pi-fortress/internal/base"
+)
 
 func TestCompileEmitsFeedMaps(t *testing.T) {
 	pol := t.TempDir()
@@ -76,7 +51,7 @@ func TestCompileEmitsFeedMaps(t *testing.T) {
 		}
 		return string(raw)
 	}
-	wantDomains := "evil.example\turlhaus-domains-online\nstale.example\tlocal\nmine.example\tlocal\n" + MapHouseMark + "\nads.example\thagezi-pro\nhouse.example\tlocal\n"
+	wantDomains := "evil.example\turlhaus-domains-online\nstale.example\tlocal\nmine.example\tlocal\n" + base.MapHouseMark + "\nads.example\thagezi-pro\nhouse.example\tlocal\n"
 	if got := read(out.DomainMap); got != wantDomains {
 		t.Fatalf("domain map:\n%s", got)
 	}
@@ -138,7 +113,7 @@ func TestFeedMapsLabelOperatorEntriesLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	dm, _ := os.ReadFile(out.DomainMap)
-	if want := "both.example\tlocal\nfeed.example\turlhaus-domains-online\n" + MapHouseMark + "\nads.example\tlocal\n"; string(dm) != want {
+	if want := "both.example\tlocal\nfeed.example\turlhaus-domains-online\n" + base.MapHouseMark + "\nads.example\tlocal\n"; string(dm) != want {
 		t.Fatalf("domain map:\n%s", dm)
 	}
 	im, _ := os.ReadFile(out.IPMap)

@@ -139,3 +139,63 @@ func TestStripOPTLeavesAMessageWithoutOne(t *testing.T) {
 		t.Fatal("a message with no OPT was rewritten")
 	}
 }
+
+// An A record with an RDLENGTH other than 4 is refused. The parser reads
+// 4 bytes as the address and then steps over RDLENGTH bytes. With
+// RDLENGTH 0, the address is the first 4 bytes of the next record, which
+// is not the rdata of any record. The input is a fuzz input: six A
+// records with RDLENGTH 0 and no question.
+func TestARecordsRefusesAnRDLengthOtherThan4(t *testing.T) {
+	rr := func(rdata ...byte) []byte {
+		return append([]byte{0, 0, 1, 0, 1, 0, 0, 1, 0x2C, 0, byte(len(rdata))}, rdata...)
+	}
+	head := func(an int) []byte { return []byte{0, 7, 0x81, 0x80, 0, 0, 0, byte(an), 0, 0, 0, 0} }
+	msg := head(6)
+	for range 6 {
+		msg = append(msg, rr()...)
+	}
+	msg = append(msg, 0x5d, 0xb8, 0xd8, 0x22)
+	if addrs, _, ok := aRecords(msg); ok {
+		t.Fatalf("six A records with RDLENGTH 0 gave %v", addrs)
+	}
+	if got := answerOf(msg); got != "NODATA" {
+		t.Fatalf("answerOf logs %q for an A record with RDLENGTH 0", got)
+	}
+	for _, n := range []int{0, 2, 3, 5, 8} {
+		rdata := make([]byte, n)
+		msg := append(append(head(2), rr(rdata...)...), rr(1, 2, 3, 4)...)
+		if addrs, _, ok := aRecords(msg); ok {
+			t.Errorf("RDLENGTH %d: gave %v", n, addrs)
+		}
+	}
+	msg = append(append(head(2), rr(9, 9, 9, 9)...), rr(1, 2, 3, 4)...)
+	addrs, _, ok := aRecords(msg)
+	if !ok || len(addrs) != 2 || addrs[0].String() != "9.9.9.9" || addrs[1].String() != "1.2.3.4" {
+		t.Fatalf("two good A records: %v %v", addrs, ok)
+	}
+}
+
+// A reply with no OPT and bytes after its last record is refused.
+// withCallerOPT would put the OPT after those bytes. A client then reads
+// the bytes and the OPT as one record, or as a record and an OPT that no
+// one wrote. The forwarder answers such a reply as it is and does not
+// cache it.
+func TestStripOPTRefusesBytesAfterTheLastRecord(t *testing.T) {
+	answer := []byte{0, 7, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0,
+		7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1,
+		0xC0, 12, 0, 1, 0, 1, 0, 0, 1, 0x2C, 0, 4, 93, 184, 216, 34}
+	if _, ok := stripOPT(answer); !ok {
+		t.Fatal("a whole reply with no OPT was refused")
+	}
+	for name, tail := range map[string][]byte{
+		"one zero byte":            {0},
+		"a record start":           {0xC0, 12, 0, 1, 0, 1},
+		"an OPT type in the bytes": {0, 0, 0x29},
+	} {
+		msg := append(append([]byte(nil), answer...), tail...)
+		out, ok := stripOPT(msg)
+		if ok {
+			t.Errorf("%s: accepted, and the OPT then goes after the bytes: %x", name, withCallerOPT(out, ednsOPT{present: true, size: 1232}))
+		}
+	}
+}

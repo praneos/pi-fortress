@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"pi-fortress/internal/placeholder"
 	"pi-fortress/internal/secrets"
 )
 
@@ -101,7 +102,7 @@ func TestPlaceholderGuardHoldsAChainOfDecoysBounded(t *testing.T) {
 	if !errors.Is(err, ErrPlaceholderInStream) {
 		t.Fatalf("a %d-byte chain was held to EOF: %v", len(body), err)
 	}
-	if spans := secrets.FindPlaceholderSpans(out); len(spans) != 0 {
+	if spans := placeholder.FindPlaceholderSpans(out); len(spans) != 0 {
 		t.Fatalf("emitted a placeholder: %q", out)
 	}
 }
@@ -123,7 +124,7 @@ func FuzzPlaceholderGuard(f *testing.F) {
 		}
 		g := newPlaceholderGuard(&chunkReader{src: []byte(body), sizes: sizes})
 		out, err := io.ReadAll(g)
-		spans := secrets.FindPlaceholderSpans([]byte(body))
+		spans := placeholder.FindPlaceholderSpans([]byte(body))
 		if err == nil {
 			if out := string(out); out != body || len(spans) > 0 {
 				t.Fatalf("passed %q as %q, spans %v", body, out, spans)
@@ -133,7 +134,7 @@ func FuzzPlaceholderGuard(f *testing.F) {
 		if !errors.Is(err, ErrPlaceholderInStream) || !strings.HasPrefix(body, string(out)) {
 			t.Fatalf("%v %q of %q", err, out, body)
 		}
-		if len(secrets.FindPlaceholderSpans(out)) > 0 {
+		if len(placeholder.FindPlaceholderSpans(out)) > 0 {
 			t.Fatalf("emitted a placeholder: %q", out)
 		}
 		if len(spans) > 0 && len(out) > spans[0][0] {

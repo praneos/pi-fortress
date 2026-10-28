@@ -1,0 +1,13 @@
+[Unit]
+Description=pi-fortress check for updates that wait for the operator, each day
+
+[Timer]
+# After a boot, so that a reboot that cleared the list is told soon.
+OnBootSec=15min
+# After the morning run of unattended-upgrades (apt-daily-upgrade.timer).
+OnCalendar=*-*-* 12:00
+RandomizedDelaySec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -162,8 +162,8 @@ if ! id -u agent >/dev/null 2>&1; then
 fi
 passwd -l agent >/dev/null
 passwd -l vagrant >/dev/null
-# bento ships root locked. debian/bookworm64 (the cloud lab box) ships it
-# with the password "vagrant". That is the same `su` that the lock above closes.
+# bento ships root locked. The debian/* boxes (the cloud lab) ship it with
+# the password "vagrant". That is the same `su` that the lock above closes.
 passwd -l root >/dev/null
 if [[ -s /home/vagrant/.ssh/authorized_keys ]]; then
   install -d -m 0700 -o agent -g agent /home/agent/.ssh

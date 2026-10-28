@@ -244,6 +244,34 @@ func TestOverBudgetRefreshRefused503(t *testing.T) {
 	}
 }
 
+// TestOverBudgetEncodedBodyRefused503: a gzip body of a few KiB can decode
+// to megabytes, and the scan holds the decoded bytes. Thus the decode takes
+// from the budget too, not only the bytes on the wire. If the budget has
+// no room, the agent gets the busy 503, the origin gets nothing, and the
+// budget is whole after.
+func TestOverBudgetEncodedBodyRefused503(t *testing.T) {
+	b, _ := testBroker(t)
+	stripLog(t, b)
+	b.MemBudget = 4 << 20
+	hits := lengthUpstream(t, b, 10)
+	body := gz(t, make([]byte, 8<<20-64))
+	raw := "POST /v1/x HTTP/1.1\r\nHost: api.anthropic.com\r\nContent-Type: application/json\r\nContent-Encoding: gzip\r\nContent-Length: " +
+		strconv.Itoa(len(body)) + "\r\n\r\n" + string(body)
+	resp, got, err := exchange(b, raw)
+	if err != nil || resp.Code != 503 || string(got) != busyBody {
+		t.Fatalf("wire %d B: err=%v resp=%+v body=%q", len(body), err, resp, got)
+	}
+	if hits.Load() != 0 {
+		t.Fatal("the origin saw a body that the scan could not hold")
+	}
+	if rows := memRows(t, b); !strings.Contains(rows, ruleMemBudget) || !strings.Contains(rows, `"where":"body"`) {
+		t.Fatal(rows)
+	}
+	if b.MemInUse() != 0 {
+		t.Fatalf("inUse=%d", b.MemInUse())
+	}
+}
+
 // TestWSOverBudgetCloses1013: a message within its own bound but past the
 // byte budget ends the session with 1013. The origin gets a going-away
 // close and none of the message, and the budget is whole.

@@ -247,8 +247,11 @@ func parseALPN(body []byte) []string {
 // leading dot or ".."). A label walk reads an empty label as its parent. All
 // other names are not names that a policy can match or a certificate can
 // hold. JSON would change them to U+FFFD on the path to the broker.
+//
+// The length check is on the name without one trailing dot, as for DNS
+// names. internal/tlssni does the same check in the same sequence.
 func ValidHostName(s string) bool {
-	if len(s) > 253 || strings.HasPrefix(s, ".") || strings.Contains(s, "..") {
+	if len(strings.TrimSuffix(s, ".")) > 253 || strings.HasPrefix(s, ".") || strings.Contains(s, "..") {
 		return false
 	}
 	for i := 0; i < len(s); i++ {

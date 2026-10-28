@@ -134,6 +134,32 @@ func TestParseRefuses(t *testing.T) {
 	}
 }
 
+// A '# built' time with a fraction of a second is refused. Write keeps
+// the time to the second, so the fraction would not survive a round
+// trip. pf fetch never writes one. A fraction of zero is the same time
+// as none.
+func TestParseRefusesAFractionOfASecond(t *testing.T) {
+	for _, stamp := range []string{"2026-10-01T00:00:00.5Z", "2026-10-01T00:00:00.999999999Z", "2026-10-01T02:00:00.25+02:00"} {
+		in := Magic + "\n# built " + stamp + "\n192.0.2.0 192.0.2.255 64496\n"
+		if _, err := Parse(strings.NewReader(in)); err == nil {
+			t.Errorf("%s: accepted", stamp)
+		}
+	}
+	in := Magic + "\n# built 2026-10-01T00:00:00.000Z\n192.0.2.0 192.0.2.255 64496\n"
+	tab, err := Parse(strings.NewReader(in))
+	if err != nil || !tab.Built.Equal(built) {
+		t.Fatalf("a fraction of zero: %v, %v", tab, err)
+	}
+	var b bytes.Buffer
+	if err := Write(&b, tab.Built, tab.ranges); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Parse(&b)
+	if err != nil || !again.Built.Equal(tab.Built) || again.Len() != tab.Len() {
+		t.Fatalf("round trip: %v, %v", again, err)
+	}
+}
+
 func TestParseASN(t *testing.T) {
 	for in, want := range map[string]uint32{"AS64496": 64496, "as64511": 64511, "64496": 64496, " 64500 ": 64500} {
 		if got, ok := ParseASN(in); !ok || got != want {
@@ -144,5 +170,38 @@ func TestParseASN(t *testing.T) {
 		if _, ok := ParseASN(in); ok {
 			t.Errorf("ParseASN(%q) accepted", in)
 		}
+	}
+}
+
+// A range of more than one /8 is not in a table. Select drops it, also
+// when it is the join of smaller ranges, and Parse refuses a table with
+// it. One /8 is the limit, and it stays.
+func TestRangeWiderThanSlash8IsDropped(t *testing.T) {
+	rs := []Range{
+		mustRange(t, "0.0.0.0", "255.255.255.255", "64497"),
+		mustRange(t, "20.0.0.0", "20.127.255.255", "64496"),
+		mustRange(t, "20.128.0.0", "20.255.255.255", "64496"),
+		mustRange(t, "21.0.0.0", "21.0.0.255", "64496"),
+		mustRange(t, "73.0.0.0", "73.255.255.255", "64498"),
+	}
+	got := Select(rs[1:], func(uint32) bool { return true })
+	if len(got) != 1 || got[0].String() != "73.0.0.0 73.255.255.255 64498" {
+		t.Fatalf("Select: %v", got)
+	}
+	got = Select(rs[:1], func(uint32) bool { return true })
+	if len(got) != 0 {
+		t.Fatalf("Select kept %v", got)
+	}
+	head := Magic + "\n# built 2026-10-01T00:00:00Z\n"
+	for _, body := range []string{
+		head + "0.0.0.0 255.255.255.255 64497\n",
+		head + "20.0.0.0 21.0.0.0 64496\n",
+	} {
+		if _, err := Parse(strings.NewReader(body)); err == nil {
+			t.Errorf("Parse accepted %q", body)
+		}
+	}
+	if tab, err := Parse(strings.NewReader(head + "73.0.0.0 73.255.255.255 64498\n")); err != nil || tab.Len() != 1 {
+		t.Fatalf("one /8: %v, %v", tab, err)
 	}
 }

@@ -1,0 +1,6 @@
+go test fuzz v1
+byte('\x15')
+[]byte("\xff\xff\xff\xffz0")
+uint64(91)
+uint16(2)
+bool(false)

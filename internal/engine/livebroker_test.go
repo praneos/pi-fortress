@@ -16,10 +16,10 @@ import (
 	"pi-fortress/internal/broker"
 	"pi-fortress/internal/ca"
 	"pi-fortress/internal/corepolicy"
-	"pi-fortress/internal/fence"
 	"pi-fortress/internal/httpwire"
 	"pi-fortress/internal/secrets"
 	"pi-fortress/internal/testsupport"
+	"pi-fortress/internal/tokenrules"
 )
 
 func startLiveBroker(t *testing.T) (string, string) {
@@ -40,7 +40,7 @@ func startLiveBroker(t *testing.T) (string, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	re, err := fence.LoadTokenRE(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
+	re, err := tokenrules.LoadTokenRE(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}

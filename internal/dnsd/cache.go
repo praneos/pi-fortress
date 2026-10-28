@@ -34,6 +34,14 @@ type cacheKey struct {
 	qtype uint16
 }
 
+// maxCacheMsg is the longest message that the cache keeps: two times the
+// datagram that this resolver offers. The cache counts entries, not bytes.
+// An answer over TCP can be 64 KiB. A client that asks for many names in a
+// zone that it controls could otherwise fill the cache with approximately
+// 125 MiB, more than the memory cap of the DoT stub. A longer answer goes
+// to the client and is not cached. It costs one more upstream query.
+const maxCacheMsg = 2 * udpMax
+
 type entry struct {
 	msg     []byte
 	stored  time.Time
@@ -92,7 +100,7 @@ func (c *cache) get(k cacheKey) ([]byte, time.Duration, bool) {
 }
 
 func (c *cache) put(k cacheKey, msg []byte, ttl time.Duration, gen uint64) {
-	if ttl <= 0 || c.max <= 0 {
+	if ttl <= 0 || c.max <= 0 || len(msg) > maxCacheMsg {
 		return
 	}
 	c.mu.Lock()

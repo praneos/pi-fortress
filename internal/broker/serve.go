@@ -206,6 +206,8 @@ func (b *Broker) serve(ctx context.Context, client net.Conn, br *bufio.Reader, p
 			return ErrBusy
 		}
 		defer b.Store.Release(c.harvestSlot)
+		b.harvesting.Add(1)
+		defer b.harvesting.Add(-1)
 		if done, err := b.spentRefuse(c); done {
 			return err
 		}
@@ -724,6 +726,9 @@ func (b *Broker) roundTrip(ctx context.Context, c *call) (*httpwire.Response, er
 			// cannot complete.
 			return nil, b.refuseStreamPlaceholder(c, err)
 		}
+		if errors.Is(err, fence.ErrScanBudget) {
+			return nil, b.refuseStreamBusy(c)
+		}
 		if reused && replayable && attempt == 0 && (wrote == 0 || idempotent(c.req.Method)) {
 			continue
 		}
@@ -768,6 +773,9 @@ func (b *Broker) echoBody(c *call, stream *fence.StreamStrips) (done bool, err e
 	if _, err := io.Copy(io.Discard, c.req.Body); err != nil {
 		if errors.Is(err, fence.ErrPlaceholderInStream) {
 			return true, b.refuseStreamPlaceholder(c, err)
+		}
+		if errors.Is(err, fence.ErrScanBudget) {
+			return true, b.refuseStreamBusy(c)
 		}
 		_ = writeErr(c.client, 502, "502 Bad Gateway", "origin\n")
 		return true, err

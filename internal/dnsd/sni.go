@@ -15,8 +15,8 @@ import (
 
 	"golang.org/x/net/dns/dnsmessage"
 
+	"pi-fortress/internal/base"
 	"pi-fortress/internal/nfq"
-	"pi-fortress/internal/policycompile"
 	"pi-fortress/internal/tlssni"
 )
 
@@ -596,7 +596,7 @@ func loadECH(path string) ([]netip.Prefix, error) {
 	}
 	var out []netip.Prefix
 	for line := range strings.SplitSeq(string(raw), "\n") {
-		tok := policycompile.StripLine(line)
+		tok := base.StripLine(line)
 		if tok == "" {
 			continue
 		}

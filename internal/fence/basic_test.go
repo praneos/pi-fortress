@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/httpwire"
+	"pi-fortress/internal/placeholder"
 	"pi-fortress/internal/secrets"
 )
 
@@ -185,6 +187,14 @@ func TestBasicGrowthPastLineLimit(t *testing.T) {
 // FuzzBasicNeverLeaks: for any user and password, scheme case, whitespace
 // and destination, a forwarded Basic credential decodes to no placeholder,
 // and to no live value that the destination cannot carry.
+//
+// A token rule can match the encoded token or the decoded credentials of a
+// value that holds no secret (the fold rule matches "akIA" and 16 more
+// characters). The fence then strips it, and the forwarded value does not
+// decode. This breaks the Basic auth of the agent, but it sends no secret.
+// Thus the property accepts it, but only if a rule matches one of the two
+// forms, the value holds the strip marker, and the value holds no
+// placeholder and no live value, as text or as base64.
 func FuzzBasicNeverLeaks(f *testing.F) {
 	f.Add("x-access-token", "", uint8(0), uint8(0), uint8(0), uint8(1))
 	f.Add("", ":x-oauth-basic", uint8(0x1f), uint8(1), uint8(1), uint8(2))
@@ -230,9 +240,13 @@ func FuzzBasicNeverLeaks(f *testing.F) {
 		auth := req.Get("Authorization")
 		dec, _, ok := BasicCredentials("Authorization", auth)
 		if !ok {
-			t.Fatalf("forwarded credential no longer decodes\nraw=%q\nauth=%q", raw, auth)
+			if !re.MatchString(tok) && !re.Match(cred) {
+				t.Fatalf("forwarded credential no longer decodes\nraw=%q\nauth=%q", raw, auth)
+			}
+			stripNoLeak(t, pol, sni, raw, auth, phs)
+			return
 		}
-		if len(secrets.FindPlaceholderSpans(dec)) > 0 || len(secrets.FindPlaceholderSpans([]byte(auth))) > 0 {
+		if len(placeholder.FindPlaceholderSpans(dec)) > 0 || len(placeholder.FindPlaceholderSpans([]byte(auth))) > 0 {
 			t.Fatalf("placeholder forwarded\nraw=%q\ndec=%q", raw, dec)
 		}
 		kinds := pol.KindsFor(sni)
@@ -245,6 +259,52 @@ func FuzzBasicNeverLeaks(f *testing.F) {
 			}
 		}
 	})
+}
+
+// stripNoLeak checks a Basic value that a token rule stripped so that it
+// does not decode. It must hold the strip marker. It must hold no
+// placeholder and no live value that sni cannot carry, as text or as
+// base64 at each of the three byte alignments.
+func stripNoLeak(t *testing.T, pol *corepolicy.Policy, sni, raw, auth string, phs []string) {
+	t.Helper()
+	if !strings.Contains(auth, StripRepl) {
+		t.Fatalf("credential does not decode and has no strip marker\nraw=%q\nauth=%q", raw, auth)
+	}
+	if len(placeholder.FindPlaceholderSpans([]byte(auth))) > 0 {
+		t.Fatalf("placeholder forwarded\nraw=%q\nauth=%q", raw, auth)
+	}
+	for _, ph := range phs {
+		if ph != "" && containsB64(auth, ph) {
+			t.Fatalf("placeholder %s forwarded as base64\nraw=%q\nauth=%q", ph, raw, auth)
+		}
+	}
+	kinds := pol.KindsFor(sni)
+	for _, sl := range labSlots() {
+		if pol.Authority(sni, sni) && containsKind(kinds, sl.Kind) {
+			continue
+		}
+		if strings.Contains(auth, sl.Live) || containsB64(auth, sl.Live) {
+			t.Fatalf("live %s leaked to %s\nraw=%q\nauth=%q", sl.Kind, sni, raw, auth)
+		}
+	}
+}
+
+// containsB64 reports whether v holds s encoded as base64 at any of the
+// three byte alignments. Only the characters that s alone sets count: at
+// each end, the 4 characters that can hold bytes next to s are not part
+// of the compare.
+func containsB64(v, s string) bool {
+	for a := 0; a < 3; a++ {
+		enc := base64.StdEncoding.EncodeToString(append(make([]byte, a), s...))
+		lo, hi := 0, len(enc)-4
+		if a > 0 {
+			lo = 4
+		}
+		if hi-lo >= 8 && strings.Contains(v, enc[lo:hi]) {
+			return true
+		}
+	}
+	return false
 }
 
 func containsKind(kinds []string, k string) bool {

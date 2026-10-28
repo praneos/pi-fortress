@@ -21,9 +21,10 @@ apply_usage() {
   cat <<'EOF'
 usage: pf apply [--local | --refresh | --render-nft]
 
-  (no flag)     fetch feeds, compile policy, load nft + dnsmasq, restart the fence
+  (no flag)     fetch feeds, compile policy, load nft + dnsmasq, restart the fence;
+                a feed downloaded less than 30 minutes ago uses that copy
   --local       compile and reload nft + dnsmasq only; no feed fetch
-  --refresh     --local plus the feed download; the unattended timer path
+  --refresh     --local plus the feed download of all feeds; the unattended timer path
   --render-nft  print the ruleset that would be loaded and exit, changing nothing
 EOF
 }
@@ -270,6 +271,11 @@ if [[ "${EYEBALL}" != off && "${EYEBALL}" != audit && "${EYEBALL}" != refuse ]];
   echo "pi-fortress: EYEBALL='${EYEBALL}' is not off, audit or refuse (net.env or ${NET_ENV_LOCAL})" >&2
   exit 1
 fi
+JOURNAL_PERSIST="${JOURNAL_PERSIST:-0}"
+if [[ "${JOURNAL_PERSIST}" != 0 && "${JOURNAL_PERSIST}" != 1 ]]; then
+  echo "pi-fortress: JOURNAL_PERSIST='${JOURNAL_PERSIST}' is not 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
+  exit 1
+fi
 HW_WATCHDOG="${HW_WATCHDOG:-auto}"
 if [[ "${HW_WATCHDOG}" != auto && "${HW_WATCHDOG}" != 0 && "${HW_WATCHDOG}" != 1 ]]; then
   echo "pi-fortress: HW_WATCHDOG='${HW_WATCHDOG}' is not auto, 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
@@ -431,7 +437,17 @@ else
   rm -f /usr/local/sbin/pi-fortress-{apply,status,observe,alert,enroll,www,console}
 
   if [[ "${LOCAL_ONLY}" -eq 0 || "${REFRESH}" -eq 1 ]]; then
-    if ! "${PF}" fetch --policy "${POLICY}" --out "${POLICY}/generated"; then
+    # A full apply uses the last good copy of a feed that is less than 30
+    # minutes old. A ship, its rollback and a dead-man revert each run a
+    # full apply in a few minutes, and a feed server that limits the
+    # request rate refuses the repeated download. --refresh (the timer)
+    # always downloads. A copy that is missing, old or does not parse
+    # gets the usual download.
+    _fresh=30m
+    if [[ "${REFRESH}" -eq 1 ]]; then
+      _fresh=0
+    fi
+    if ! "${PF}" fetch --policy "${POLICY}" --out "${POLICY}/generated" --fresh "${_fresh}"; then
       echo "pi-fortress: feed fetch failed; compiling from the last generated lists" >&2
       if [[ ! -s "${POLICY}/generated/blacklist.domains" ]]; then
         echo "pi-fortress: ${POLICY}/generated/blacklist.domains missing or empty; nothing to fall back on" >&2
@@ -502,6 +518,11 @@ else
   # client, and the other daemons do not read them.
   getent group pf-leases >/dev/null || groupadd --system pf-leases
   usermod -aG pf-leases pf-observe
+  # pf-sidecar (the group): the alert sidecar only, through
+  # SupplementaryGroups in alert.service. It is the group of alert.url, the
+  # webhook URL, whose path is its bearer token. No account is a member.
+  # Thus monitor, which also runs as pf-sidecar, does not read it.
+  getent group pf-sidecar >/dev/null || groupadd --system pf-sidecar
   chown root:pf-fence "${LOCK_DIR}"
   chmod 0750 "${LOCK_DIR}"
   install -d -m 0755 /etc/tmpfiles.d
@@ -922,18 +943,32 @@ install -m 0644 "${POLICY}/house_ech.ips" /etc/pi-fortress/house-ech.ips
 # go when HOUSE_ALLOW_WHATSAPP is on. They ship for the same reason.
 install -m 0644 "${POLICY}/house_whatsapp.ips" /etc/pi-fortress/house-whatsapp.ips
 install -m 0644 "${WORKDIR}/house-doh.domains" /etc/pi-fortress/house-doh-domains.conf
+# install_atomic MODE SRC DST copies SRC to DST with one rename. The copy
+# goes to DST.new in the same directory, and is on the disk before the
+# rename. Thus a process that reads DST at any time gets the old file or
+# the full new file. It never gets no file or a part of a file. A copy
+# that fails leaves DST as it was.
+install_atomic() {
+  local tmp="${3}.new"
+  if ! install -m "${1}" "${2}" "${tmp}" || ! sync "${tmp}"; then
+    rm -f "${tmp}"
+    return 1
+  fi
+  mv -f "${tmp}" "${3}"
+}
 # The table of eyeball networks that pf fetch built, and the exemptions
 # of the operator. The broker loads both again when they change, so
-# neither is a fence input and neither restarts the fence. No table
-# leaves the installed copy. Its age stops its use in the broker. No
-# eyeball.allow in the policy directory means no exemptions.
+# neither is a fence input and neither restarts the fence. The broker can
+# read them during the copy, so the copy is atomic. No table leaves the
+# installed copy. Its age stops its use in the broker. No eyeball.allow in
+# the policy directory means no exemptions.
 if [[ -s "${POLICY}/generated/eyeball.table" ]]; then
   cmp -s "${POLICY}/generated/eyeball.table" /etc/pi-fortress/eyeball.table ||
-    install -m 0644 "${POLICY}/generated/eyeball.table" /etc/pi-fortress/eyeball.table
+    install_atomic 0644 "${POLICY}/generated/eyeball.table" /etc/pi-fortress/eyeball.table
 fi
 if [[ -f "${POLICY}/eyeball.allow" ]]; then
   if [[ ! "${POLICY}/eyeball.allow" -ef /etc/pi-fortress/eyeball.allow ]]; then
-    install -m 0644 "${POLICY}/eyeball.allow" /etc/pi-fortress/eyeball.allow
+    install_atomic 0644 "${POLICY}/eyeball.allow" /etc/pi-fortress/eyeball.allow
   fi
 else
   rm -f /etc/pi-fortress/eyeball.allow
@@ -1626,9 +1661,19 @@ sysctl -p /etc/sysctl.d/97-pi-fortress-conntrack.conf >/dev/null 2>&1 ||
 # the drop-in shows all limits of the journal in one place: for a
 # unit that logs more than 10000 lines in 30 s, journald suppresses the rest,
 # with a count, until the interval ends.
+# JOURNAL_PERSIST=1 adds Storage=persistent. Raspberry Pi OS sets
+# Storage=volatile in /usr/lib/systemd/journald.conf.d/40-rpi-volatile-storage.conf.
+# journald reads the drop-ins of all directories in the order of their
+# file names, and pi-fortress.conf comes after 40-*, so this line wins.
+# With 0, the drop-in has no Storage= line and the OS default stays.
 install -d -m 0755 /etc/systemd/journald.conf.d
-printf '%s\n' '[Journal]' 'SystemMaxUse=200M' 'SystemKeepFree=1G' 'RuntimeMaxUse=64M' \
-  'RateLimitIntervalSec=30s' 'RateLimitBurst=10000' >"${WORKDIR}/journald-pi-fortress.conf"
+{
+  printf '%s\n' '[Journal]' 'SystemMaxUse=200M' 'SystemKeepFree=1G' 'RuntimeMaxUse=64M' \
+    'RateLimitIntervalSec=30s' 'RateLimitBurst=10000'
+  if [[ "${JOURNAL_PERSIST}" == 1 ]]; then
+    printf '%s\n' 'Storage=persistent'
+  fi
+} >"${WORKDIR}/journald-pi-fortress.conf"
 if ! cmp -s "${WORKDIR}/journald-pi-fortress.conf" /etc/systemd/journald.conf.d/pi-fortress.conf; then
   install -m 0644 "${WORKDIR}/journald-pi-fortress.conf" /etc/systemd/journald.conf.d/pi-fortress.conf
   # A restart, not a reload: journald reads its limits at start. Only
@@ -1636,6 +1681,11 @@ if ! cmp -s "${WORKDIR}/journald-pi-fortress.conf" /etc/systemd/journald.conf.d/
   # no reason. Services keep their stdout across it (the fd store).
   systemctl restart systemd-journald.service >/dev/null 2>&1 ||
     echo "pi-fortress: systemd-journald did not restart; the journal cap applies from the next boot" >&2
+  # The boot moves the RAM journal to the disk (systemd-journal-flush).
+  # A change on a running box must do that step itself.
+  if [[ "${JOURNAL_PERSIST}" == 1 ]]; then
+    journalctl --flush >/dev/null 2>&1 || true
+  fi
 fi
 
 # Time. systemd-timesyncd asked a Debian pool over plain NTP. Thus the
@@ -2033,6 +2083,22 @@ if [[ -n "${HOUSE_IF}" ]]; then
   # rotates it (internal/dnsd sweepLogs). A dnsmasq with an fd to
   # the same inode would continue to write to the rotated file, and
   # observe tails that log by byte offset.
+  #
+  # no-ping: dnsmasq does not send an ICMP echo to an address before it
+  # offers that address. The check needs a raw ICMP socket, and thus
+  # CAP_NET_RAW. Without the check, the unit does not have that
+  # capability. Most clients probe a new address with ARP and decline it
+  # (DHCPDECLINE) if a different device answers. dnsmasq then offers a
+  # different address. Keep the static addresses of the house out of
+  # the DHCP range, or reserve them in house.hosts.
+  #
+  # dhcp-broadcast (no tag): offers and acks to a client with no address
+  # go as broadcast. Without it, dnsmasq writes an ARP entry for the
+  # client before a unicast reply, and that needs CAP_NET_ADMIN. Thus the
+  # unit does not have that capability on dnsmasq 2.91 or newer
+  # (dhcp_cap_dropin, lib/dhcp.sh). On Wi-Fi a broadcast frame goes at the
+  # lowest rate with no retry, so a client on a weak link can need one
+  # more DISCOVER before it gets a lease.
   cat >"${WORKDIR}/dns-house.conf" <<EOF
 interface=${HOUSE_IF}
 except-interface=lo
@@ -2040,6 +2106,8 @@ bind-dynamic
 port=0
 dhcp-range=${HOUSE_DHCP_START},${HOUSE_DHCP_END},12h
 dhcp-authoritative
+no-ping
+dhcp-broadcast
 dhcp-option=option:router,${HOUSE_IP}
 dhcp-option=option:dns-server,${HOUSE_IP}
 dhcp-option=option:ntp-server,${HOUSE_IP}
@@ -2055,6 +2123,7 @@ EOF
   fi
   install -m 0644 "${WORKDIR}/dns-house.conf" /etc/pi-fortress/dns-house.conf
   install -m 0644 "${PI_LIB}/dns-house.service" /etc/systemd/system/pi-fortress-dns-house.service
+  dhcp_cap_dropin /etc/systemd/system/pi-fortress-dns-house.service.d
   systemctl daemon-reload
   systemctl enable pi-fortress-dns-house.service >/dev/null 2>&1 || true
   systemctl restart pi-fortress-dns-house.service
@@ -2207,19 +2276,48 @@ if [[ -f "${PI_LIB}/fetch.service" && -f "${PI_LIB}/fetch.timer" ]]; then
 fi
 
 # alert runs as pf-sidecar. Root keeps ownership of the state directories.
-# The sidecar owns exactly the files that it rewrites. These three are
-# also the only paths that alert.service can write.
+# The sidecar owns exactly the files that it rewrites. alert.service can
+# write these three and its StateDirectory (/var/lib/pi-fortress/alert),
+# and no other path.
 for _f in /var/lib/pi-fortress/alert.offset /var/lib/pi-fortress/alert.last /var/lib/pi-fortress/alert-notice.offset; do
   touch "${_f}"
   chown pf-sidecar:pf-fortress "${_f}"
   chmod 0644 "${_f}"
 done
 
+# The daily update check (pf alert updates) also runs as pf-sidecar. Its
+# state file is the one path that update-check.service can write, and the
+# unit does not start without it.
+if [[ -f "${PI_LIB}/update-check.service" && -f "${PI_LIB}/update-check.timer" ]]; then
+  install -m 0644 "${PI_LIB}/update-check.service" /etc/systemd/system/pi-fortress-update-check.service
+  install -m 0644 "${PI_LIB}/update-check.timer" /etc/systemd/system/pi-fortress-update-check.timer
+  touch /var/lib/pi-fortress/updates.last
+  chown pf-sidecar:pf-fortress /var/lib/pi-fortress/updates.last
+  chmod 0644 /var/lib/pi-fortress/updates.last
+  systemctl daemon-reload
+  systemctl enable --now pi-fortress-update-check.timer >/dev/null 2>&1 \
+    || echo "pi-fortress: pi-fortress-update-check.timer did not start; no post tells a reboot or update that waits (journalctl -u pi-fortress-update-check.timer)" >&2
+fi
+
 install -d -m 0755 /usr/local/lib/pi-fortress
 rm -f /usr/local/lib/pi-fortress/{alert,doh,core_policy,secrets_store,substitute,enroll,compile_policy,observe,fetch_blocklists,console,dump_streams}.py
+# alert.url is a webhook URL whose path is its bearer token. Its readers
+# are root (pf alert wg, the ship alert, the operator) and the alert
+# sidecar, through the pf-sidecar group. Thus 0640 root:pf-sidecar, also
+# for the copy in the policy tree: pf alert reads /vagrant/vm/policy
+# first, and on a hand-set Pi /vagrant is a link to /opt/pi-fortress. A
+# copy that the operator made by hand, or that a restore wrote (0600),
+# gets the same mode here.
 if [[ -f "${POLICY}/alert.url" && ! "${POLICY}/alert.url" -ef /etc/pi-fortress/alert.url ]]; then
-  install -m 0644 "${POLICY}/alert.url" /etc/pi-fortress/alert.url
+  install -m 0640 -o root -g pf-sidecar "${POLICY}/alert.url" /etc/pi-fortress/alert.url
 fi
+for _f in "${POLICY}/alert.url" /etc/pi-fortress/alert.url; do
+  if [[ -f "${_f}" && ! -L "${_f}" ]]; then
+    if ! { chown root:pf-sidecar "${_f}" && chmod 0640 "${_f}"; }; then
+      echo "pi-fortress: WARNING could not make ${_f} 0640 root:pf-sidecar; pf alert may not read it" >&2
+    fi
+  fi
+done
 if [[ -f "${PI_LIB}/alert.service" ]]; then
   install -m 0644 "${PI_LIB}/alert.service" /etc/systemd/system/pi-fortress-alert.service
   systemctl daemon-reload

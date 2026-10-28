@@ -81,18 +81,19 @@ func logTool(verb string, args map[string]string, took time.Duration, err error)
 	_ = audit.Default().Append(e)
 }
 
-const fetchUsage = "usage: pf fetch [-policy DIR] [-out DIR]"
+const fetchUsage = "usage: pf fetch [-policy DIR] [-out DIR] [-fresh DURATION]"
 
 const compileUsage = "usage: pf compile --policy DIR --out-nft FILE --out-dns FILE [--out-doh-nft FILE] [--out-doh-dns FILE] [--out-house-dns FILE] [--out-house-doh-dns FILE] [--out-house-private-dns-nft FILE] [--out-direct-nft FILE] [--out-house-direct-nft FILE] [--out-house-whatsapp-nft FILE] [--out-ssh-nft FILE] [--out-ntp-pass-nft FILE] [--out-domain-map FILE] [--out-ip-map FILE]"
 
 const observeUsage = "usage: pf observe once|run|show|reset"
 
-const alertUsage = "usage: pf alert run|show|once|watch|wg"
+const alertUsage = "usage: pf alert run|show|once|watch|wg|updates"
 
 func runFetch(args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("fetch", stderr)
 	policy := fs.String("policy", "", "policy directory")
 	out := fs.String("out", "", "generated output directory")
+	fresh := fs.Duration("fresh", 0, "serve a feed from its last good copy when that copy is younger than this; 0 always downloads")
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}
@@ -108,6 +109,7 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 		o = filepath.Join(p, "generated")
 	}
 	f := fetch.Defaults(p, o)
+	f.FreshFor = *fresh
 	start := time.Now()
 	report, nIPs, nDoms, err := f.Run()
 	fields := map[string]string{
@@ -262,7 +264,7 @@ func runObserve(args []string, _, stderr io.Writer) int {
 	return 0
 }
 
-func runAlert(args []string, _, stderr io.Writer) int {
+func runAlert(args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("alert", stderr)
 	strip := fs.String("strip", "", "strip.jsonl path")
 	offset := fs.String("offset", "", "offset file")
@@ -270,6 +272,7 @@ func runAlert(args []string, _, stderr io.Writer) int {
 	policy := fs.String("policy", "", "directory containing alert.url")
 	ifname := fs.String("if", "wg0", "wireguard interface for alert wg")
 	maxAge := fs.Duration("max", 3*time.Minute, "handshake age that counts as down")
+	updLast := fs.String("updates-last", DefaultUpdatesLast, "state file of alert updates")
 	// The pressure watch of run (docs/user_guide/pi_setup.md "Pressure
 	// alerts"). alert.service reads PF_ALERT_FLAGS from
 	// /etc/pi-fortress/alert.env.
@@ -341,6 +344,8 @@ func runAlert(args []string, _, stderr io.Writer) int {
 		}
 	case "wg":
 		return a.WGOnce(*ifname, *maxAge)
+	case "updates":
+		return alertUpdates(a, *updLast, stdout, stderr)
 	default:
 		fmt.Fprintln(stderr, alertUsage)
 		return 2

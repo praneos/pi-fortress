@@ -52,3 +52,48 @@ func FuzzSNIAgree(f *testing.F) {
 		}
 	})
 }
+
+// dnsName is a name of n bytes: labels of 63 letters or less, with dots
+// between them. The last label is not empty.
+func dnsName(n int) string {
+	var b strings.Builder
+	for b.Len() < n {
+		if b.Len() > 0 {
+			b.WriteByte('.')
+		}
+		b.WriteString(strings.Repeat("a", min(63, n-b.Len())))
+	}
+	name := b.String()
+	if strings.HasSuffix(name, ".") {
+		name = name[:len(name)-2] + "aa"
+	}
+	return name
+}
+
+// Both parsers check the length of the name after they remove one
+// trailing dot. Thus a name of 253 bytes and a dot is valid in both, and a
+// name of 254 bytes is valid in neither.
+func TestSNILengthAgree(t *testing.T) {
+	base := captureClientHello(t, &tls.Config{InsecureSkipVerify: true})
+	for _, n := range []int{252, 253, 254} {
+		for _, dot := range []string{"", "."} {
+			name := dnsName(n)
+			if len(name) != n {
+				t.Fatalf("dnsName(%d) has %d bytes", n, len(name))
+			}
+			name += dot
+			b := insertExt(t, base, sniExt(name))
+			ts, need, terr := Parse(b)
+			hs, herr := hello.Parse(b)
+			if need != 0 || herr != nil {
+				t.Fatalf("%d%q: need=%d hello err=%v", n, dot, need, herr)
+			}
+			tOK := terr == nil && ts.ServerName != ""
+			hOK := hs.SNI != ""
+			want := n <= 253
+			if tOK != want || hOK != want {
+				t.Errorf("%d bytes%q: tlssni %v (%v), hello %v; want %v", n, dot, tOK, terr, hOK, want)
+			}
+		}
+	}
+}

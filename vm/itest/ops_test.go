@@ -32,6 +32,31 @@ func opsTests(t *testing.T) {
 			t.Fatal(strings.Join(bad, "\n"))
 		}
 	})
+	t.Run("MPTCP, io_uring and user namespaces are off, and no socket is MPTCP", func(t *testing.T) {
+		for k, want := range map[string]string{"net/mptcp/enabled": "0", "kernel/io_uring_disabled": "2", "user/max_user_namespaces": "0"} {
+			// A kernel with no such key has nothing to turn off.
+			if out := strings.TrimSpace(pi(t, "cat /proc/sys/"+k+" 2>/dev/null || echo none")); out != want && out != "none" {
+				t.Errorf("%s is %q, not %s", k, out, want)
+			}
+		}
+		if out := strings.TrimSpace(pi(t, "ss -HMan")); out != "" {
+			t.Errorf("MPTCP sockets:\n%s", out)
+		}
+	})
+	t.Run("the update check runs clean and keeps its state", func(t *testing.T) {
+		if out, err := ssh(t, 3*time.Minute, "pi", "sudo systemctl start pi-fortress-update-check.service"); err != nil {
+			t.Fatalf("update check: %v\n%s", err, out)
+		}
+		if out := strings.TrimSpace(pi(t, "systemctl show -p Result --value pi-fortress-update-check.service")); out != "success" {
+			t.Errorf("update check result %q", out)
+		}
+		if out := pi(t, "cat /var/lib/pi-fortress/updates.last"); !strings.HasPrefix(out, "posted ") {
+			t.Errorf("updates.last: %q", out)
+		}
+		if out := pi(t, "sudo journalctl -u pi-fortress-update-check.service -n 20 --no-pager -o cat"); strings.Contains(out, "apt-get -s:") {
+			t.Errorf("the package check did not run in the unit sandbox:\n%s", out)
+		}
+	})
 	t.Run("key file is private", func(t *testing.T) {
 		if out := strings.TrimSpace(pi(t, "sudo stat -c '%a %U' /etc/pi-fortress/broker/secrets.env")); out != "600 pf-broker" {
 			t.Fatal(out)

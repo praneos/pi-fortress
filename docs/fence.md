@@ -163,6 +163,24 @@ the rule, and on to the first byte outside the charset. Thus the fence strips
 the whole key, and does not miss it, if the key is longer than the minimum or
 is glued to the next word.
 
+A match that is longer than 16 KiB is not one key. The fence strips it on to
+the end of its run of token bytes (letters, digits, `_`, `-` and `.`). A
+streamed body holds at most 16 KiB of a match that is not complete. At that
+limit, the fence strips the part that it holds, and then the rest of the run
+as it comes. Thus a streamed body and a buffered body strip the same bytes.
+
+The token strip of a streamed body has a work budget. Each time that the
+output moves, the stream searches the prefix windows that it holds again.
+Thus a body with a prefix every few bytes, in very small reads, costs about
+one window of search for each byte. The fence counts the bytes that the
+token regexp searches. Each body byte gives 64 bytes of credit, and the
+credit is at most 1 MiB. When the credit is spent, the stream stops. No byte
+after the stop goes out. The origin connection closes, the agent gets the
+busy `503` (`pi-fortress: busy, retry shortly`), and the strip log gets a
+`scan_budget` row with `where` `body`. This is not a refusal of the body.
+In reads of 1448 bytes or more, a body costs at most about 4 bytes of search
+for each byte.
+
 A distinctive prefix (`ghp_`, `sk-ant-`, `glpat-`) matches at any position.
 A prefix that sits inside ordinary words (`sk-`, `AIza`, `npm_`) needs one of
 these before it:
@@ -367,7 +385,10 @@ The fence does not scan trailers or chunk extensions. The broker reads each
 trailer field after the last chunk of a body, checks that it has the shape
 of a header field, and then discards it. A chunk extension (the text after
 `;` on a chunk size line) is discarded in the same way. A trailer field
-with a bad shape, or a control byte in a chunk extension, ends the request.
+with a bad shape, a trailer block larger than 4 KiB, or a control byte in
+a chunk extension, ends the request. A `Trailer` header that names
+`Content-Length`, `Transfer-Encoding` or `Trailer` also ends it. net/http
+has the same two trailer limits.
 No trailer field and no chunk extension goes to the origin server or to the
 agent. The broker also drops the `Trailer` header, which announces trailer
 fields, in the request and in the response. Thus a placeholder or a live
@@ -582,6 +603,11 @@ of the provider: it passes to a resolved address of that name or into the
 ranges of `vm/policy/house_ech.ips`, whatever the inner name, and never by
 the /24. A ClientHello that does not parse, or that has an extension type
 two times, does not pass.
+The verdict of a flow is in its conntrack mark, and only a flow with no
+verdict goes to the check. Thus a flow that the check passed continues when
+pf dns restarts (each apply restarts it). A flow that is in its check at the
+restart gets a TCP reset (`data with no SYN before it` in the journal), and
+the client opens it again.
 `direct_ip.allow` ships empty: nothing that an agent runs has needed it.
 
 A plain segment (`segments.d/<name>.env`, the desk) has the gate from its own
@@ -689,6 +715,11 @@ that the agent dialed. A segment with `INSPECT=on` does not get the check.
 | `refuse` | The broker does not dial that address. In fakeip mode it dials the next address of the name that is not a hit. If no address is left, the agent gets the 502 of a name with no dialable address, and the row has `where` `resolve`. In forward mode, the agent gets the 403 `ssrf` of `dest.Allowed`, and the row has `where` `preamble`. |
 | `off` | No check. |
 
+A `core.hosts` name is never refused. In refuse mode, a hit for a
+`core.hosts` name gets the `audit` row, and the broker dials. The agent
+needs these hosts, and a bad table must not cut them. The dial still
+verifies the certificate of the name.
+
 The row has `cause` `eyeball_network`, `host` (the name), `sni`, `dest_ip`
 (the address), and `kind` (the ASN, for example `AS64496`). It alerts one
 time for each name and ASN while the broker runs. The next rows for that
@@ -697,7 +728,10 @@ first one.
 
 The table: `pf fetch` builds `generated/eyeball.table` from the `eyeball`
 section of `sources.json`. `pf apply` installs it as
-`/etc/pi-fortress/eyeball.table`.
+`/etc/pi-fortress/eyeball.table`. The copy goes to a temp file in the same
+directory, then to the disk, then into place with one rename. Thus the
+broker reads the old table or the full new table, never no table or a part
+of a table. `eyeball.allow` goes in the same way.
 
 - The ranges feed maps each announced IPv4 range to its ASN (iptoasn.com,
   public domain).
@@ -708,6 +742,16 @@ section of `sources.json`. `pf apply` installs it as
   it. bgp.tools class Content excludes. Thus a host of servers that calls
   itself an ISP in PeeringDB stays out.
 - An unknown ASN is not in the table, so it is never a hit.
+- A range of more than one /8 (16,777,216 addresses) is not in the table.
+  `pf fetch` drops such a row of the ranges feed, and such a range after
+  the join of adjacent rows. The broker refuses a table file with such a
+  range, and keeps the last good table. In the feed, the widest range of an
+  eyeball network is one /8.
+
+All the feeds of the `eyeball` section get the `user_agent` of that
+section as their User-Agent. bgp.tools asks for a contact in it. If you put
+a contact there, it goes to each publisher of the section (iptoasn.com,
+bgp.tools and PeeringDB), not only to bgp.tools.
 
 Each feed has its own last-good copy, as a blocklist feed has. The table
 has the time of its oldest data. The broker loads the table again when the

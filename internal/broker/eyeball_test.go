@@ -237,6 +237,41 @@ func TestEyeballSkipsFenceSegment(t *testing.T) {
 	}
 }
 
+// Refuse mode never stops a core.hosts name, also when each of its
+// addresses is in the table. The broker dials, and the row is an audit
+// row. The same holds for a connection to a real address.
+func TestEyeballRefuseAuditsACoreHost(t *testing.T) {
+	const core = "api.anthropic.com"
+	req := "GET / HTTP/1.1\r\nHost: " + core + "\r\n\r\n"
+	r := newFakeRig(t, "1.1.1.1")
+	r.b.Eyeball = eyeball.Static(eyeball.Refuse, eyeTable(t), nil)
+	p := preamble.Preamble{SNI: core, OrigDst: r.assign(t, core)}
+	if body := roundtrip(t, r.b, p, req); body != upstreamOK {
+		t.Fatalf("fakeip: body=%q", body)
+	}
+	if d := r.dials(); len(d) != 1 || d[0].Addr() != netip.MustParseAddr("1.1.1.1") {
+		t.Fatalf("fakeip: dialed %v", d)
+	}
+	rows := eyeRows(t, r.strip)
+	if len(rows) != 1 {
+		t.Fatalf("fakeip: rows %v", rows)
+	}
+	wantEyeRow(t, rows[0], "audit", core, "1.1.1.1", "AS64496", true)
+
+	r = newFakeRig(t)
+	r.b.FakeIP = nil
+	r.b.Eyeball = eyeball.Static(eyeball.Refuse, eyeTable(t), nil)
+	p = preamble.Preamble{SNI: core, OrigDst: netip.MustParseAddrPort("1.1.1.1:443")}
+	if body := roundtrip(t, r.b, p, req); body != upstreamOK {
+		t.Fatalf("forward: body=%q", body)
+	}
+	rows = eyeRows(t, r.strip)
+	if len(rows) != 1 {
+		t.Fatalf("forward: rows %v", rows)
+	}
+	wantEyeRow(t, rows[0], "audit", core, "1.1.1.1", "AS64496", true)
+}
+
 // The debounce set of the alerts never grows past its bound.
 func TestEyeballAlertMemoryBounded(t *testing.T) {
 	b := &Broker{}

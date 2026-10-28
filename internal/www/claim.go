@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"pi-fortress/internal/enroll"
+	"pi-fortress/internal/agentcreds"
 	"pi-fortress/internal/secrets"
 )
 
@@ -381,12 +381,12 @@ curl -fsS "http://$PI/setup.sh" -o "$S"
 sudo bash "$S" "$PI" '` + c.CASHA256 + `'
 `)
 	if hasKind(c.Kinds, "CLAUDE_OAT") {
-		raw, _ := json.MarshalIndent(enroll.AgentCredentialsDoc(c.Slot), "", "  ")
+		raw, _ := json.MarshalIndent(agentcreds.Doc(c.Slot), "", "  ")
 		b.WriteString("mkdir -p \"$HOME/.claude\"\ncat >\"$HOME/.claude/.credentials.json\" <<'PFEOF'\n" + string(raw) + "\nPFEOF\n")
 	}
 	b.WriteString("mkdir -p \"$HOME/.pi-fortress\"\ncat >\"$HOME/.pi-fortress/env.sh\" <<'PFEOF'\n")
 	for _, k := range c.Kinds {
-		b.WriteString("export " + k + "='" + enroll.Placeholder(c.Slot, k) + "'\n")
+		b.WriteString("export " + k + "='" + secrets.Placeholder(c.Slot, k) + "'\n")
 	}
 	b.WriteString("PFEOF\necho 'pi-fortress: enrolled slot " + c.Slot + "; source ~/.pi-fortress/env.sh'\n")
 	if hasKind(c.Kinds, "GITHUB_TOKEN") {
@@ -431,7 +431,7 @@ func gitCredentials(slot string, hosts []string) string {
 			continue
 		}
 		names = append(names, h)
-		lines = append(lines, "https://x-access-token:"+enroll.Placeholder(slot, "GITHUB_TOKEN")+"@"+h)
+		lines = append(lines, "https://x-access-token:"+secrets.Placeholder(slot, "GITHUB_TOKEN")+"@"+h)
 		pats = append(pats, strings.ReplaceAll(h, ".", `\.`))
 	}
 	if len(lines) == 0 {

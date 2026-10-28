@@ -40,6 +40,8 @@ CapabilityBoundingSet=
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
 ReadWritePaths=/var/log/pi-fortress
 InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www
 ExecStart=/usr/local/sbin/pf monitor run

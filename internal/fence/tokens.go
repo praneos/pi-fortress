@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"pi-fortress/internal/httpwire"
+	"pi-fortress/internal/tokenrules"
 )
 
 // tokenSet puts a literal prefilter in front of a token-prefix regexp.
@@ -18,7 +19,11 @@ import (
 // Run the regexp only when a literal is present. If a branch has no
 // literal prefix, the prefilter is disabled and the regexp always runs.
 type tokenSet struct {
-	re        *regexp.Regexp
+	re *regexp.Regexp
+	// inner is re for a slice that does not start at the start of the text
+	// (innerRE). A candidate window and the buffer of a stream after its
+	// first cut are such slices.
+	inner     *regexp.Regexp
 	prefixes  [][]byte
 	complete  bool
 	maxPrefix int
@@ -34,8 +39,8 @@ type tokenSet struct {
 	minLen  int
 	bounded bool
 	// lead says, for each prefix, that a rule that starts with it has a lead
-	// (leadExpr). Thus its window starts leadMax bytes early, so the lead
-	// sees the escape.
+	// (tokenrules.leadExpr). Thus its window starts tokenrules.LeadMax
+	// bytes early, so the lead sees the escape.
 	lead []bool
 }
 
@@ -48,11 +53,11 @@ func tokensFor(re *regexp.Regexp) *tokenSet {
 	if v, ok := tokenCache.Load(re); ok {
 		return v.(*tokenSet)
 	}
-	ts := &tokenSet{re: re}
+	ts := &tokenSet{re: re, inner: innerRE(re)}
 	var all [][]byte
 	var lead []bool
-	all, lead, ts.fold, ts.complete = prefixInfo(re.String())
-	ts.minLen, ts.bounded = matchBounds(re.String())
+	all, lead, ts.fold, ts.complete = tokenrules.PrefixInfo(re.String())
+	ts.minLen, ts.bounded = tokenrules.MatchBounds(re.String())
 	for _, p := range all {
 		if len(p) > ts.maxPrefix {
 			ts.maxPrefix = len(p)
@@ -64,43 +69,45 @@ func tokensFor(re *regexp.Regexp) *tokenSet {
 	return v.(*tokenSet)
 }
 
-func literalPrefixes(expr string) ([][]byte, bool, bool) {
-	out, _, fold, ok := prefixInfo(expr)
-	return out, fold, ok
+// innerRE is re for a slice that starts after the start of the text. Go
+// takes the start of a slice as the start of the text, \A. The lead of a
+// rule (tokenrules.leadExpr) accepts \A. But the start of such a slice
+// has bytes before it that are not in the slice. innerRE is re with each
+// \A changed to a class that matches nothing. At each position after the
+// start of the text, \A is false, so the two regexps find the same
+// matches there. A caller that needs the lead of a prefix keeps the bytes
+// before the prefix in the slice. A regexp that compiled always parses
+// again. If the change does not compile, innerRE returns re.
+func innerRE(re *regexp.Regexp) *regexp.Regexp {
+	r, err := syntax.Parse(re.String(), syntax.Perl)
+	if err != nil || !noBeginText(r) {
+		return re
+	}
+	out, err := regexp.Compile(r.String())
+	if err != nil {
+		return re
+	}
+	return out
 }
 
-// prefixInfo is literalPrefixes, plus for each branch whether it starts
-// with the lead of a rule (leadExpr). A lead needs the bytes before the prefix.
-func prefixInfo(expr string) ([][]byte, []bool, bool, bool) {
-	r, err := syntax.Parse(expr, syntax.Perl)
-	if err != nil {
-		return nil, nil, false, false
-	}
-	r = r.Simplify()
-	branches := []*syntax.Regexp{r}
-	if r.Op == syntax.OpAlternate {
-		branches = r.Sub
-	}
-	var out [][]byte
-	var lead []bool
-	fold := false
-	for _, br := range branches {
-		p, f, ok := branchPrefix(br)
-		if !ok || len(p) == 0 {
-			return nil, nil, false, false
+// noBeginText changes each \A below r to a class that matches nothing. It
+// reports whether it found one.
+func noBeginText(r *syntax.Regexp) bool {
+	found := false
+	for i, sub := range r.Sub {
+		if sub.Op == syntax.OpBeginText {
+			r.Sub[i] = &syntax.Regexp{Op: syntax.OpNoMatch}
+			found = true
+			continue
 		}
-		out = append(out, p)
-		lead = append(lead, br.Op == syntax.OpConcat && len(br.Sub) > 1 && isLead(br.Sub[0]))
-		fold = fold || f
+		found = noBeginText(sub) || found
 	}
-	// One fold search for the full set. A folded search for an exact prefix
-	// finds a superset. This costs a candidate, never a match.
-	if fold {
-		for i, p := range out {
-			out[i] = bytes.ToLower(p)
-		}
-	}
-	return out, lead, fold, true
+	return found
+}
+
+func literalPrefixes(expr string) ([][]byte, bool, bool) {
+	out, _, fold, ok := tokenrules.PrefixInfo(expr)
+	return out, fold, ok
 }
 
 // leadsFor says, for each searched prefix, whether a rule for which it opens
@@ -139,122 +146,114 @@ next:
 	return out
 }
 
-// branchPrefix is the literal at the start of the match of a branch, and
-// whether any of it matches either ASCII case: a (?i) literal, or a [Kk]
-// class. foldASCII uses this class for the two letters whose Unicode fold
-// goes past ASCII.
-func branchPrefix(r *syntax.Regexp) ([]byte, bool, bool) {
-	for r.Op == syntax.OpCapture {
-		r = r.Sub[0]
-	}
-	// The lead of a rule (leadExpr) comes before its prefix and is not part
-	// of it. The literal is what follows.
-	if r.Op == syntax.OpConcat && len(r.Sub) > 1 && isLead(r.Sub[0]) {
-		if len(r.Sub) == 2 {
-			return branchPrefix(r.Sub[1])
-		}
-		return branchPrefix(&syntax.Regexp{Op: syntax.OpConcat, Sub: r.Sub[1:]})
-	}
-	subs := []*syntax.Regexp{r}
-	if r.Op == syntax.OpConcat {
-		subs = r.Sub
-	}
-	var lit []byte
-	fold := false
-	for _, s := range subs {
-		switch s.Op {
-		case syntax.OpWordBoundary, syntax.OpBeginText, syntax.OpBeginLine, syntax.OpEmptyMatch:
-			continue
-		case syntax.OpLiteral:
-			if s.Flags&syntax.FoldCase != 0 {
-				if !asciiRunes(s.Rune) {
-					return lit, fold, len(lit) > 0
-				}
-				fold = true
-			}
-			lit = append(lit, string(s.Rune)...)
-			continue
-		case syntax.OpCharClass:
-			if c, ok := casePair(s.Rune); ok {
-				lit = append(lit, c)
-				fold = true
-				continue
-			}
-		}
-		break
-	}
-	return lit, fold, len(lit) > 0
-}
-
-func asciiRunes(rs []rune) bool {
-	for _, r := range rs {
-		if r >= 0x80 {
-			return false
-		}
-	}
-	return true
-}
-
-// casePair reports a class that is one ASCII letter in both cases, [Kk],
-// as that letter in lower case.
-func casePair(rs []rune) (byte, bool) {
-	if len(rs) != 4 || rs[0] != rs[1] || rs[2] != rs[3] {
-		return 0, false
-	}
-	up, lo := rs[0], rs[2]
-	if up < 'A' || up > 'Z' || lo != up+'a'-'A' {
-		return 0, false
-	}
-	return byte(lo), true
-}
-
 // indexFold is httpwire.Index with ASCII case folded. needle is lower
 // case. It scans for one byte of the needle in both cases and examines
 // each hit. Thus a byte with no case (a digit, '_', '-') is the cheapest
 // anchor: one memchr, not two.
 func indexFold(src, needle []byte) int {
-	n := len(needle)
-	if n == 0 {
-		return 0
+	f := newFoldIndex(src, needle)
+	return f.next(0)
+}
+
+// foldIndex is indexFold for all the hits of one needle in one b. next(i)
+// is indexFold(b[i:], needle) as a position in b. A pass over b asks for
+// the hits in order. foldIndex keeps the next position of each case of the
+// anchor byte from one call to the next. Thus the scans of a pass read
+// each byte of b at most one time for each case. A new indexFold for each
+// hit scanned again for both cases. When one case was not in b, each of
+// those scans went on to the end of b. Then a body with a hit every few
+// bytes cost the square of its length.
+type foldIndex struct {
+	b, needle []byte
+	// k is the anchor: the byte of needle that next scans for. lo and up
+	// are that byte in each case. Byte k of a match sits before end.
+	k, end int
+	lo, up byte
+	// nl is the first lo at or after il, or end. nu is the first up at or
+	// after iu, or end. -1 is no scan yet.
+	nl, il, nu, iu int
+	// searched is the number of bytes that the scans went past. The tests
+	// of the cost of a pass read it.
+	searched int
+}
+
+func newFoldIndex(b, needle []byte) foldIndex {
+	f := foldIndex{b: b, needle: needle, nl: -1, nu: -1}
+	if len(needle) == 0 || len(b) < len(needle) {
+		return f
 	}
-	if len(src) < n {
+	f.k = foldAnchor(needle)
+	f.lo = needle[f.k]
+	f.up = f.lo
+	if 'a' <= f.lo && f.lo <= 'z' {
+		f.up = f.lo - 'a' + 'A'
+	}
+	f.end = len(b) - len(needle) + f.k + 1
+	return f
+}
+
+// next is the first hit at or after from, or -1. A scan result stays in
+// use while the search position is between the start of that scan and its
+// result. Thus next gives the same hit for from in any order. In a pass,
+// from does not go back, and each scan starts after the result of the
+// scan before.
+func (f *foldIndex) next(from int) int {
+	n := len(f.needle)
+	if n == 0 {
+		return from
+	}
+	if len(f.b)-from < n {
 		return -1
 	}
-	k := foldAnchor(needle)
-	lo := needle[k]
-	up := lo
-	if 'a' <= lo && lo <= 'z' {
-		up = lo - 'a' + 'A'
+	// The loop runs on locals, as indexFold did before foldIndex. On the
+	// fields of f, it was about 10% slower for ordinary JSON.
+	b, k, end, lo, up := f.b, f.k, f.end, f.lo, f.up
+	nl, il, nu, iu := f.nl, f.il, f.nu, f.iu
+	at, searched := -1, 0
+	// A result from before the start of its scan is not of use. In the
+	// loop, i only grows, and each scan starts at i. Thus this test is
+	// necessary only here.
+	i := from + k
+	if il > i {
+		nl = -1
 	}
-	// Byte k of a match sits in [k, end).
-	end := len(src) - n + k + 1
-	nl, nu := -1, -1
-	for i := k; i < end; {
+	if iu > i {
+		nu = -1
+	}
+	for i < end {
 		if nl < i {
-			nl = nextByte(src, i, end, lo)
+			il, nl = i, i+indexOrLen(b[i:end], lo)
+			searched += nl - i
 		}
-		if up == lo {
-			nu = nl
-		} else if nu < i {
-			nu = nextByte(src, i, end, up)
+		p := nl
+		if up != lo {
+			if nu < i {
+				iu, nu = i, i+indexOrLen(b[i:end], up)
+				searched += nu - i
+			}
+			p = min(p, nu)
 		}
-		p := min(nl, nu)
 		if p >= end {
-			return -1
+			break
 		}
-		if equalFoldASCII(src[p-k:p-k+n], needle) {
-			return p - k
+		if equalFoldASCII(b[p-k:p-k+n], f.needle) {
+			at = p - k
+			break
 		}
 		i = p + 1
 	}
-	return -1
+	f.nl, f.il, f.nu, f.iu = nl, il, nu, iu
+	f.searched += searched
+	return at
 }
 
-func nextByte(src []byte, i, end int, c byte) int {
-	if j := bytes.IndexByte(src[i:end], c); j >= 0 {
-		return i + j
+// indexOrLen is the index of the first c in s, or len(s). It is small
+// enough for the compiler to inline it into the loop of foldIndex.next.
+func indexOrLen(s []byte, c byte) int {
+	if j := bytes.IndexByte(s, c); j >= 0 {
+		return j
 	}
-	return end
+	return len(s)
 }
 
 func equalFoldASCII(b, lower []byte) bool {
@@ -289,129 +288,92 @@ func foldAnchor(needle []byte) int {
 	return best
 }
 
-// index is the prefix search the set was built for.
-func (t *tokenSet) index(b, p []byte) int {
+// prefixIndex is the prefix search that the set was built for, for all the
+// hits of one prefix p in one b. next(i) is the first hit at or after i, or
+// -1. A folded search keeps what its scans found (foldIndex). The exact
+// search scans for one byte only, and each scan stops at the next hit.
+type prefixIndex struct {
+	fold   foldIndex
+	b, p   []byte
+	folded bool
+}
+
+func (t *tokenSet) hits(b, p []byte) prefixIndex {
 	if t.fold {
-		return indexFold(b, p)
+		return prefixIndex{fold: newFoldIndex(b, p), folded: true}
 	}
-	return httpwire.Index(b, p)
+	return prefixIndex{b: b, p: p}
 }
 
-func inTokenClass(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
-		c == '_' || c == '-' || c == '.'
+func (x *prefixIndex) next(i int) int {
+	if x.folded {
+		return x.fold.next(i)
+	}
+	if j := httpwire.Index(x.b[i:], x.p); j >= 0 {
+		return i + j
+	}
+	return -1
 }
 
-func classWithin(r *syntax.Regexp) bool {
-	for i := 0; i+1 < len(r.Rune); i += 2 {
-		lo, hi := r.Rune[i], r.Rune[i+1]
-		if lo < 0 || hi > 0x7f {
-			return false
-		}
-		for c := lo; c <= hi; c++ {
-			if !inTokenClass(byte(c)) {
-				return false
-			}
-		}
-	}
-	return true
-}
+// passWork is what one pass of the prefix search over b did. searched is
+// the number of bytes that the folded scans read. walked is the number of
+// bytes that span walked. The tests of the cost of a pass read them.
+type passWork struct{ searched, walked int }
 
-// bounds is the shortest string this node can match, and whether every
-// byte it can match is in tokenClass.
-func bounds(r *syntax.Regexp) (int, bool) {
-	// The lead is judged on the bytes before the prefix. span and the window
-	// supply those bytes. The lead adds nothing to the length of a match.
-	if isLead(r) {
-		return 0, true
-	}
-	switch r.Op {
-	case syntax.OpEmptyMatch, syntax.OpWordBoundary, syntax.OpNoWordBoundary,
-		syntax.OpBeginText, syntax.OpEndText, syntax.OpBeginLine, syntax.OpEndLine:
-		return 0, true
-	case syntax.OpLiteral:
-		for _, c := range r.Rune {
-			if c > 0x7f || !inTokenClass(byte(c)) {
-				return len(r.Rune), false
-			}
-		}
-		return len(r.Rune), true
-	case syntax.OpCharClass:
-		return 1, classWithin(r)
-	case syntax.OpCapture:
-		return bounds(r.Sub[0])
-	case syntax.OpConcat:
-		n, ok := 0, true
-		for _, sub := range r.Sub {
-			sn, sok := bounds(sub)
-			n, ok = n+sn, ok && sok
-		}
-		return n, ok
-	case syntax.OpAlternate:
-		n, ok := -1, true
-		for _, sub := range r.Sub {
-			sn, sok := bounds(sub)
-			if n < 0 || sn < n {
-				n = sn
-			}
-			ok = ok && sok
-		}
-		return max(n, 0), ok
-	case syntax.OpStar, syntax.OpQuest:
-		_, ok := bounds(r.Sub[0])
-		return 0, ok
-	case syntax.OpPlus:
-		return bounds(r.Sub[0])
-	case syntax.OpRepeat:
-		n, ok := bounds(r.Sub[0])
-		return n * r.Min, ok
-	}
-	return 0, false
-}
-
-func matchBounds(expr string) (int, bool) {
-	r, err := syntax.Parse(expr, syntax.Perl)
-	if err != nil {
-		return 0, false
-	}
-	n, ok := bounds(r.Simplify())
-	return n, ok && n > 0
-}
+// inTokenClass is tokenrules.InTokenClass: letters, digits, '_', '-' and
+// '.'.
+func inTokenClass(c byte) bool { return tokenrules.InTokenClass(c) }
 
 // window is the limit on how far past a literal prefix the regexp runs. No
 // credential is a kilobyte long. A hit inside the window is complete, and
 // the byte after it is present. Thus a trailing \b is judged on real text,
 // not on the end of the window. The window starts one byte before the
-// prefix, or leadMax bytes before it for a rule with a lead. Thus the lead
-// sees the escape before the prefix.
+// prefix, or tokenrules.LeadMax bytes before it for a rule with a lead.
+// Thus the lead sees the escape before the prefix. A window that starts
+// after the start of the text runs inner, so the start of the window is
+// never a lead.
 const window = 4096
 
 // candidates returns sorted, merged [start,end) regions around every
 // literal prefix hit, or nil,false when the prefilter is disabled.
 func (t *tokenSet) candidates(b []byte) ([][2]int, bool) {
+	wins, ok, _ := t.candidatesWalk(b)
+	return wins, ok
+}
+
+// candidatesWalk is candidates, and also the work of the pass. The hits of
+// one prefix come in order, and they share one prefixIndex and one
+// tokenRun. Thus the search reads each byte of b at most one time for each
+// case of the anchor byte, and span walks each byte of b at most one time,
+// for each prefix. This is also true when b has a hit every few bytes.
+func (t *tokenSet) candidatesWalk(b []byte) ([][2]int, bool, passWork) {
 	if !t.complete {
-		return nil, false
+		return nil, false, passWork{}
 	}
+	var r tokenRun
 	var wins [][2]int
+	searched := 0
 	for i, p := range t.prefixes {
 		back := 1
 		if t.lead[i] {
-			back = leadMax
+			back = tokenrules.LeadMax
 		}
+		x := t.hits(b, p)
 		for k := 0; k < len(b); {
-			j := t.index(b[k:], p)
-			if j < 0 {
+			s := x.next(k)
+			if s < 0 {
 				break
 			}
-			s := k + j
-			if hi, ok := t.span(b, s); ok {
+			if hi, ok := t.span(b, s, &r); ok {
 				wins = append(wins, [2]int{max(s-back, 0), hi})
 			}
 			k = s + 1
 		}
+		searched += x.fold.searched
 	}
+	work := passWork{searched: searched, walked: r.walked}
 	if len(wins) == 0 {
-		return nil, true
+		return nil, true, work
 	}
 	sort.Slice(wins, func(i, j int) bool { return wins[i][0] < wins[j][0] })
 	var out [][2]int
@@ -422,7 +384,19 @@ func (t *tokenSet) candidates(b []byte) ([][2]int, bool) {
 		}
 		out = append(out, w)
 	}
-	return out, true
+	return out, true, work
+}
+
+// tokenRun is the part of b that the last walk of span found: each byte
+// of b[lo:hi] is in tokenClass. end says that hi is the end of the run:
+// b[hi] is not in tokenClass, or hi is len(b). For a hit in [lo, hi], span
+// does not walk these bytes again. It continues the walk at hi, or, when
+// end is true, it does not walk. walked is the number of bytes that span
+// walked. A tokenRun is for one b only.
+type tokenRun struct {
+	lo, hi int
+	end    bool
+	walked int
 }
 
 // span is the slice that the NFA runs over for a prefix hit at s. Each rule
@@ -434,43 +408,114 @@ func (t *tokenSet) candidates(b []byte) ([][2]int, bool) {
 // "ghp_short", "AKIA!". There, a body full of near-misses stops costing
 // anything. A run that reaches the end of b stays, for any length: the
 // remainder can still be in transit.
-func (t *tokenSet) span(b []byte, s int) (int, bool) {
+//
+// r keeps what the earlier walks over b found. Thus the hits in one run
+// share one walk of the run. The walk for each hit still stops at its
+// window.
+func (t *tokenSet) span(b []byte, s int, r *tokenRun) (int, bool) {
 	lim := min(s+window, len(b))
 	if !t.bounded {
 		return lim, true
 	}
-	i := s
-	for i < lim && inTokenClass(b[i]) {
-		i++
+	if s < r.lo || s > r.hi {
+		r.lo, r.hi, r.end = s, s, false
 	}
+	if !r.end && r.hi < lim {
+		i := r.hi
+		for i < lim && inTokenClass(b[i]) {
+			i++
+		}
+		r.walked += i - r.hi
+		r.hi, r.end = i, i < lim || i == len(b)
+	}
+	i := min(r.hi, lim)
 	if i-s < t.minLen && i < len(b) {
 		return 0, false
 	}
 	return min(i+1, len(b)), true
 }
 
-// matches returns FindAllSubmatchIndex over b, computed only inside
-// candidate windows when the prefilter is complete.
+// hit is the ok of span. It does not need the end of the run, so it stops
+// after minLen bytes and does not walk a long run to the window edge.
+func (t *tokenSet) hit(b []byte, s int) bool {
+	if !t.bounded {
+		return true
+	}
+	lim := min(s+window, len(b), s+t.minLen)
+	i := s
+	for i < lim && inTokenClass(b[i]) {
+		i++
+	}
+	return i-s >= t.minLen || i == len(b)
+}
+
+// lasting says that the hit at s stays a hit when bytes come after b: its
+// run already has minLen bytes. A hit with a shorter run that reaches the
+// end of b can still end short.
+func (t *tokenSet) lasting(b []byte, s int) bool {
+	if !t.bounded {
+		return true
+	}
+	if t.minLen > window || len(b)-s < t.minLen {
+		return false
+	}
+	for _, c := range b[s : s+t.minLen] {
+		if !inTokenClass(c) {
+			return false
+		}
+	}
+	return true
+}
+
+// matches returns FindAllSubmatchIndex over b, the full text, computed
+// only inside candidate windows when the prefilter is complete.
 func (t *tokenSet) matches(b []byte) [][]int {
+	return t.matchesFrom(b, 0, true)
+}
+
+// matchesFrom is matches for b when b can be a part of a longer text. head
+// says that b[0] is the start of that text. Else \A is false at b[0], as
+// it is at each later byte. The search starts at from, where no match
+// continues. The bytes before from are in a match that the caller already
+// has. The buffered path continues its search after each match. Thus a
+// match that starts inside an earlier match is not a match of the text.
+func (t *tokenSet) matchesFrom(b []byte, from int, head bool) [][]int {
+	ms, _ := t.matchesWork(b, from, head)
+	return ms
+}
+
+// matchesWork is matchesFrom, and also the number of bytes that the
+// regexp searched. The token stream adds them up for its work budget.
+func (t *tokenSet) matchesWork(b []byte, from int, head bool) ([][]int, int) {
 	if t == nil {
-		return nil
+		return nil, 0
 	}
 	wins, ok := t.candidates(b)
 	if !ok {
-		return t.re.FindAllSubmatchIndex(b, -1)
+		wins = [][2]int{{0, len(b)}}
 	}
 	var out [][]int
+	work := 0
 	for _, w := range wins {
-		for _, m := range t.re.FindAllSubmatchIndex(b[w[0]:w[1]], -1) {
+		lo := max(w[0], from)
+		if lo >= w[1] {
+			continue
+		}
+		work += w[1] - lo
+		re := t.inner
+		if lo == 0 && head {
+			re = t.re
+		}
+		for _, m := range re.FindAllSubmatchIndex(b[lo:w[1]], -1) {
 			for i := range m {
 				if m[i] >= 0 {
-					m[i] += w[0]
+					m[i] += lo
 				}
 			}
 			out = append(out, m)
 		}
 	}
-	return out
+	return out, work
 }
 
 func (t *tokenSet) match(b []byte) bool {
@@ -482,7 +527,11 @@ func (t *tokenSet) match(b []byte) bool {
 		return t.re.Match(b)
 	}
 	for _, w := range wins {
-		if t.re.Match(b[w[0]:w[1]]) {
+		re := t.inner
+		if w[0] == 0 {
+			re = t.re
+		}
+		if re.Match(b[w[0]:w[1]]) {
 			return true
 		}
 	}
@@ -498,16 +547,46 @@ func (t *tokenSet) replace(b []byte, repl []byte) []byte {
 	pos := 0
 	for _, m := range ms {
 		lo, hi := t.token(m)
+		if lo < pos {
+			continue
+		}
 		out = append(out, b[pos:lo]...)
 		out = append(out, repl...)
-		pos = hi
+		pos = cover(b, lo, hi)
 	}
 	return append(out, b[pos:]...)
 }
 
+// cover is the end of the strip for the token [lo, hi) of a match in b. A
+// token longer than maxHold is not one key. Only a run of token bytes with
+// a prefix in each window makes it, because the windows then merge. The
+// stream holds at most maxHold of a token that is still in transit (see
+// tokenStream). Thus for such a token, the strip goes on to the end of its
+// run of token bytes, on the stream and on the buffered path. Each rule is
+// written from tokenClass: the broker does not start with a rule that can
+// match other bytes (tokenrules Streamable), and
+// TestShippedRulesArmTheFilter checks the shipped rules. Thus a match ends
+// at or before the end of the run, and a match that starts inside the run
+// is a part of the strip.
+func cover(b []byte, lo, hi int) int {
+	if hi-lo > maxHold {
+		return runEnd(b, hi)
+	}
+	return hi
+}
+
+// runEnd is the first byte at or after i that is not in tokenClass, or
+// len(b).
+func runEnd(b []byte, i int) int {
+	for i < len(b) && inTokenClass(b[i]) {
+		i++
+	}
+	return i
+}
+
 // token is the part of match m that is the key: the named group of the
-// rule. It does not include the lead (leadExpr) that a bounded rule matched
-// before its prefix. A regexp with no named group is all token.
+// rule. It does not include the lead (tokenrules.leadExpr) that a bounded
+// rule matched before its prefix. A regexp with no named group is all token.
 func (t *tokenSet) token(m []int) (int, int) {
 	names := t.re.SubexpNames()
 	for i := 1; 2*i+1 < len(m) && i < len(names); i++ {
@@ -529,14 +608,21 @@ func (t *tokenSet) ruleName(m []int) string {
 	return "token"
 }
 
-// rules names the rule each match in b belongs to, in order.
+// rules names the rule of each strip in b, in order. A match inside the
+// strip of a long token (cover) is not a strip of its own.
 func (t *tokenSet) rules(b []byte) []string {
 	ms := t.matches(b)
 	if len(ms) == 0 {
 		return nil
 	}
 	out := make([]string, 0, len(ms))
+	pos := 0
 	for _, m := range ms {
+		lo, hi := t.token(m)
+		if lo < pos {
+			continue
+		}
+		pos = cover(b, lo, hi)
 		out = append(out, t.ruleName(m))
 	}
 	return out
@@ -547,15 +633,23 @@ func (t *tokenSet) rules(b []byte) []string {
 // be in transit. A search of only the tail keeps the cost independent of
 // how much body is already buffered.
 func (t *tokenSet) firstPrefixFrom(b []byte, lo int) int {
-	best := -1
+	i, _ := t.firstPrefixWork(b, lo)
+	return i
+}
+
+// firstPrefixWork is firstPrefixFrom, and also the number of bytes that
+// the folded scans read. As in candidatesWalk, the hits of one prefix share
+// one prefixIndex.
+func (t *tokenSet) firstPrefixWork(b []byte, lo int) (int, int) {
+	best, searched := -1, 0
 	for _, p := range t.prefixes {
+		x := t.hits(b, p)
 		for k := lo; k < len(b); {
-			j := t.index(b[k:], p)
-			if j < 0 {
+			s := x.next(k)
+			if s < 0 {
 				break
 			}
-			s := k + j
-			if _, ok := t.span(b, s); ok {
+			if t.hit(b, s) {
 				if best < 0 || s < best {
 					best = s
 				}
@@ -563,6 +657,7 @@ func (t *tokenSet) firstPrefixFrom(b []byte, lo int) int {
 			}
 			k = s + 1
 		}
+		searched += x.fold.searched
 	}
-	return best
+	return best, searched
 }

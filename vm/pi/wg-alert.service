@@ -13,14 +13,31 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
 ProtectKernelModules=yes
+ProtectKernelLogs=yes
 ProtectControlGroups=yes
 ProtectClock=yes
 RestrictNamespaces=yes
 RestrictRealtime=yes
+RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=yes
+# AF_NETLINK: wg show reads the peers over generic netlink. AF_INET: pf
+# alert wg posts a change to the webhook itself. AF_UNIX: wg show also
+# looks for the socket of a userspace WireGuard.
 RestrictAddressFamilies=AF_INET AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# pf alert wg and wg show change no user, group or capability.
+SystemCallFilter=~@privileged
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
+# A call outside the set fails with EPERM, as in the other root units.
+# The lab does not run this check, so a kill would show only on a real
+# tunnel.
+SystemCallErrorNumber=EPERM
 # The state file of the check, nothing else. pf alert wg rewrites it in
 # place. apply.sh makes it before it enables the timer.
 ReadWritePaths=/var/lib/pi-fortress/wg.last

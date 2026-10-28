@@ -5,7 +5,7 @@ GitHub tells issuers the same thing (unique prefix, high entropy, optional
 32-bit checksum). A bare `sk-` causes false positives.
 
 This file gives the reasons for `vm/policy/key_prefixes.rules`. The fence
-loads the `.rules` file (`internal/fence/tokens.go`). The strip
+loads the `.rules` file (`internal/tokenrules/rules.go`). The strip
 shipped. If a value matches one of these on an origin server that is not permitted to
 carry that kind, the fence replaces the value with the strip marker and logs it. Edit the
 `.rules` file. This file records why each row has its shape.
@@ -98,7 +98,7 @@ count. For the reason, see "What we match" below.
    `\b` as "not after a letter, digit or `_`, unless that byte ends an
    escape": `\n \t \r \b \f`, `\xXX`, `\uXXXX` or `%XX`. The fence
    matches the escape but does not strip it. Thus, the JSON stays valid and the URL stays well
-   formed (`internal/fence` `leadExpr`).
+   formed (`internal/tokenrules` `leadExpr`).
 4. AWS issues key ids in upper case. Each AWS rule is two lines under
    one name:
    - Upper case (`(?-i:...)`), to the natural end, at all start positions.

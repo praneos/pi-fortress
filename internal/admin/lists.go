@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"pi-fortress/internal/base"
 	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/fetch"
 	"pi-fortress/internal/policycompile"
@@ -133,7 +134,7 @@ func (c *Config) ListRemove(name, value string) error {
 	if verr == nil {
 		return c.listEdit(name, value, removeToken)
 	}
-	tok := policycompile.StripLine(value)
+	tok := base.StripLine(value)
 	if tok == "" {
 		return verr
 	}
@@ -184,7 +185,7 @@ func removeToken(lines []string, tok string, key func(string) string) []string {
 // the check refuses stays as it is written.
 func lineKey(list string) func(string) string {
 	return func(l string) string {
-		tok := policycompile.StripLine(l)
+		tok := base.StripLine(l)
 		if tok == "" {
 			return ""
 		}

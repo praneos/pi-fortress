@@ -16,6 +16,7 @@ import (
 	"pi-fortress/internal/httpwire"
 	"pi-fortress/internal/secrets"
 	"pi-fortress/internal/testsupport"
+	"pi-fortress/internal/tokenrules"
 )
 
 func loadPol(t *testing.T) *corepolicy.Policy {
@@ -53,7 +54,7 @@ func parseReq(t *testing.T, raw string) *httpwire.Request {
 
 func decide(t *testing.T, sni, raw string) *httpwire.Request {
 	t.Helper()
-	re, err := LoadTokenRE(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
+	re, err := tokenrules.LoadTokenRE(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +130,7 @@ func TestExpiredSlotRefusedLikeDisabled(t *testing.T) {
 
 func mustRE(t *testing.T) *regexp.Regexp {
 	t.Helper()
-	re, err := LoadTokenRE(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
+	re, err := tokenrules.LoadTokenRE(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +159,7 @@ func TestOpenStripsLiveOAT(t *testing.T) {
 }
 
 func TestBodyStripGhp(t *testing.T) {
-	re, err := LoadTokenRE(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
+	re, err := tokenrules.LoadTokenRE(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +188,7 @@ func TestBodyStripGhp(t *testing.T) {
 }
 
 func TestStripEventsGithubClassic(t *testing.T) {
-	re, err := LoadTokenRE(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
+	re, err := tokenrules.LoadTokenRE(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +323,7 @@ func TestStreamsEchoFixtures(t *testing.T) {
 	if len(matches) == 0 {
 		t.Fatal("no echo_ fixtures")
 	}
-	re, err := LoadTokenRE(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
+	re, err := tokenrules.LoadTokenRE(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +352,7 @@ func TestStreamsEchoFixtures(t *testing.T) {
 }
 
 func TestStreamPrefixPreserved(t *testing.T) {
-	re, err := LoadTokenRE(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
+	re, err := tokenrules.LoadTokenRE(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -371,26 +372,13 @@ func TestStreamPrefixPreserved(t *testing.T) {
 	}
 }
 
-func TestLoadTokenREFailsClosed(t *testing.T) {
-	if _, err := LoadTokenRE(filepath.Join(t.TempDir(), "missing.rules")); err == nil {
-		t.Fatal("missing rules file must error")
-	}
-	empty := filepath.Join(t.TempDir(), "empty.rules")
-	if err := os.WriteFile(empty, []byte("# nothing here\n\n"), 0644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadTokenRE(empty); !errors.Is(err, ErrNoRules) {
-		t.Fatalf("empty rules: %v", err)
-	}
-}
-
 // StripCore decides what a core host does with a token of a kind that it
 // does not inject. With the switch off, an OpenAI key pasted into a Claude
 // prompt leaves the Pi live. With the switch on, the fence strips it. The
 // kind that the host does inject must survive in both cases. If not, the
 // fence would strip the credential that it just substituted.
 func TestStripCoreOffKinds(t *testing.T) {
-	rules, err := LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
+	rules, err := tokenrules.LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -458,23 +446,6 @@ func TestR02OAuthPathNoncanonicalForms(t *testing.T) {
 	}
 }
 
-// A. A rules file whose scan stops early loaded as the part that it read.
-// A line past the bufio token limit causes this. The broker then started
-// and treated that part as the full ruleset.
-func TestTruncatedRulesFileRefused(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "long.rules")
-	lines := "github_classic\t\\bghp_[A-Za-z0-9]{36}\\b\tGITHUB_TOKEN\n" +
-		"overlong\t\\b" + strings.Repeat("x", 128<<10) + "\\b\n" +
-		"npm\t\\bnpm_[A-Za-z0-9]{36}\\b\n"
-	if err := os.WriteFile(path, []byte(lines), 0644); err != nil {
-		t.Fatal(err)
-	}
-	tr, err := LoadTokenRules(path)
-	if err == nil {
-		t.Fatalf("a half-read rules file started the fence with %d of 3 rules", len(tr.Rules))
-	}
-}
-
 // D. On a host whose line is "*", all kinds except CANARY are allowed.
 // Thus no rule that detects one of them belongs in the strip set of that
 // host. Except matched the literal tag instead. The streamed path then
@@ -483,7 +454,7 @@ func TestTruncatedRulesFileRefused(t *testing.T) {
 // that a credential goes into is the body of the refresh token. The fence
 // buffers it for all framings. Both framings must still keep it.
 func TestWildcardKindSurvivesEitherFraming(t *testing.T) {
-	rules, err := LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
+	rules, err := tokenrules.LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}

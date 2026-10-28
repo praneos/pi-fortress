@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"pi-fortress/internal/blocklist"
@@ -28,6 +29,7 @@ import (
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/preamble"
 	"pi-fortress/internal/secrets"
+	"pi-fortress/internal/tokenrules"
 )
 
 var (
@@ -48,7 +50,7 @@ type Broker struct {
 	Policy  *corepolicy.Policy
 	Store   *secrets.Store
 	TokenRE *regexp.Regexp
-	Rules   *fence.TokenRules
+	Rules   *tokenrules.TokenRules
 	// StripCore strips tokens of kinds a core host does not inject.
 	StripCore  bool
 	Roots      *x509.CertPool
@@ -137,6 +139,27 @@ type Broker struct {
 	budget     budget
 	mem        memBudget
 	expiry     expiryState
+	// harvesting counts the token refreshes in flight: from the slot lock
+	// to the save of the new pair (WaitHarvests).
+	harvesting atomic.Int64
+}
+
+// WaitHarvests waits until no token refresh is in flight, for max at
+// most. It tells whether none was left. The caller stops the accept loop
+// first. A refresh that is in flight already gave the old refresh token
+// to the origin, which rotates the pair. If the process stops before it
+// saves the new pair, the slot keeps a spent token until the next
+// enrollment. A new refresh can still start on a connection that is open;
+// the wait covers it too.
+func (b *Broker) WaitHarvests(max time.Duration) bool {
+	end := time.Now().Add(max)
+	for b.harvesting.Load() > 0 {
+		if time.Now().After(end) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return true
 }
 
 func (b *Broker) now() time.Time {

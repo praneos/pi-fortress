@@ -2,20 +2,21 @@ package observe
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"pi-fortress/internal/base"
 	"pi-fortress/internal/jsonl"
-	"pi-fortress/internal/policycompile"
 )
 
 const testDomainMap = "evil.example\turlhaus-domains-online\n" +
 	"mine.example\tlocal\n" +
 	"both.example\tlocal\n" +
-	policycompile.MapHouseMark + "\n" +
+	base.MapHouseMark + "\n" +
 	"ads.example\thagezi-pro\n" +
 	"vpn.example\thagezi-doh-vpn-proxy-bypass\n" +
 	"bedtime.example\tlocal\n" +
@@ -43,7 +44,7 @@ func TestDomainMapHalvesGiveTheClass(t *testing.T) {
 		}
 	}
 	// ParseMap still reads the same map: the mark is not an item.
-	if m := policycompile.ParseMap(testDomainMap); len(m) != len(o.domainFeeds) || m[policycompile.MapHouseMark] != "" {
+	if m := base.ParseMap(testDomainMap); len(m) != len(o.domainFeeds) || m[base.MapHouseMark] != "" {
 		t.Fatalf("ParseMap: %v", m)
 	}
 	// A map from before the mark reads all names as shared.
@@ -162,5 +163,22 @@ func TestTallyIsBounded(t *testing.T) {
 	}
 	if rows := tl.rows(time.Now()); len(rows[0].Top) != maxRowHits {
 		t.Fatalf("top: %d", len(rows[0].Top))
+	}
+}
+
+// The bound is for each segment. A full agent segment does not stop the
+// names of the house segment.
+func TestTallyBoundIsPerSegment(t *testing.T) {
+	var tl blockTally
+	for i := range maxTallyHits + 10 {
+		tl.add("agent", jsonl.BlockOther, "", "10.77.0.10", fmt.Sprintf("n%d.example", i), 1)
+	}
+	tl.add("house", jsonl.BlockSecurity, "f", "10.88.0.20", "evil.example", 3)
+	if len(tl.hits) != maxTallyHits+1 {
+		t.Fatalf("keys %d, want %d", len(tl.hits), maxTallyHits+1)
+	}
+	rows := tl.rows(time.Now())
+	if len(rows) != 2 || rows[1].Where != "house" || len(rows[1].Top) != 1 || rows[1].Top[0].Dst != "evil.example" || rows[1].Top[0].N != 3 {
+		t.Fatalf("house row: %+v", rows[len(rows)-1])
 	}
 }

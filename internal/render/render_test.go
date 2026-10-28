@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -1493,6 +1494,67 @@ func TestHouseSNICheck(t *testing.T) {
 	off := load(t, Options{Net: lab, HouseEnv: write(t, dir, "off.env", "HOUSE_IF=eth1\nHOUSE_BLOCK_DIRECT_IP=off\n"), SegmentsDir: "/nonexistent"})
 	if r := off.Ruleset(labElements); strings.Contains(r, "0x00f00000") || strings.Contains(r, "house_sni") || !strings.Contains(off.EnvFile(), "HOUSE_SNI_QUEUE=''\n") {
 		t.Error("the SNI check outlived HOUSE_BLOCK_DIRECT_IP=off")
+	}
+}
+
+// A restart of pf dns (each apply does one) keeps the flows that the check
+// passed or refused. Their verdict is in the conntrack mark, and only a
+// pending flow goes to the queue (TestHouseSNICheck). This is true only
+// while pf dns is the only source of the verdict bits in a conntrack mark,
+// and a flow becomes pending only on its first packet. Thus, in each house
+// mode and with a segment, the gate writes pending only on ct state new.
+// The verdict copy writes ok or bad only from the packet mark. No rule
+// copies a full mark between the packet and the flow. A packet mark that a
+// rule sets has no SNI bits (the WireGuard bypass, CheckWGBypassMark).
+func TestHouseSNIVerdictComesOnlyFromPFDNS(t *testing.T) {
+	dir := t.TempDir()
+	house := func(name, env string) *Config {
+		return load(t, Options{Net: lab, HouseEnv: write(t, dir, name, env), SegmentsDir: "/nonexistent"})
+	}
+	const keep = " ct mark set ct mark and 0xff0fffff or "
+	copyRule := map[string]bool{}
+	for _, v := range []string{"0x00200000", "0x00300000"} {
+		copyRule[`iifname "eth1" meta mark and 0x00f00000 == `+v+keep+v+" meta mark set meta mark and 0xff0fffff"] = true
+	}
+	for _, tc := range []struct {
+		name  string
+		c     *Config
+		house bool
+	}{
+		{"strict with WireGuard", house("wg.env", "HOUSE_IF=eth1\nWG_IF=wg0\n"), true},
+		{"strict with private DNS", house("priv.env", "HOUSE_IF=eth1\nHOUSE_PRIVATE_DNS=on\n"), true},
+		{"open", house("open.env", "HOUSE_IF=eth1\nHOUSE_EGRESS=open\n"), true},
+		{"inspected desk", inspectedDesk(t), false},
+	} {
+		pending, copies := 0, 0
+		for _, ln := range strings.Split(tc.c.Ruleset(labElements), "\n") {
+			ln = strings.TrimSpace(ln)
+			if strings.Contains(ln, "meta mark set ct mark") || strings.Contains(ln, "ct mark set meta mark") {
+				t.Errorf("%s: a rule copies a mark between the packet and the flow: %s", tc.name, ln)
+			}
+			switch {
+			case copyRule[ln]:
+				copies++
+				continue
+			case strings.Contains(ln, "ct mark set"):
+				if !strings.Contains(ln, " ct state new ") || !strings.HasSuffix(ln, keep+"0x00100000") {
+					t.Errorf("%s: a rule writes the conntrack mark outside the gate and the verdict copy: %s", tc.name, ln)
+				}
+				pending++
+			}
+			if _, v, ok := strings.Cut(ln, "meta mark set "); ok {
+				m, err := strconv.ParseUint(strings.Fields(v)[0], 0, 32)
+				if err != nil || m&0x00f00000 != 0 {
+					t.Errorf("%s: a packet mark that can carry a verdict: %s", tc.name, ln)
+				}
+			}
+		}
+		if tc.house && (pending == 0 || copies != 2) {
+			t.Errorf("%s: %d gate rules and %d verdict copies, want some and 2", tc.name, pending, copies)
+		}
+		if !tc.house && pending+copies != 0 {
+			t.Errorf("%s: SNI marks with no house", tc.name)
+		}
 	}
 }
 

@@ -1,0 +1,45 @@
+[Unit]
+Description=pi-fortress check for updates that wait for the operator
+After=network-online.target
+
+[Service]
+Type=oneshot
+# pf alert updates posts a reboot that waits, a bootloader image, an
+# automatic update that did not go in, and a new major release. It reads
+# world-readable files and runs apt-get -s, which changes nothing. It runs
+# as the alert sidecar, the one user other than root that can read
+# alert.url.
+ExecStart=/usr/local/sbin/pf alert updates
+User=pf-sidecar
+Group=pf-fortress
+SupplementaryGroups=pf-sidecar
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+# Not ProtectKernelModules=yes: it hides /lib/modules, and the check
+# compares the running kernel with the installed ones there. With no
+# capability, the unit cannot load a module.
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
+SystemCallErrorNumber=EPERM
+# The state file of the check, nothing else. apply.sh makes it before it
+# enables the timer.
+ReadWritePaths=/var/lib/pi-fortress/updates.last
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www

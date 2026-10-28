@@ -155,8 +155,10 @@ table inet fortress {
     iifname "eth0" udp dport 53 meter agent_dnsflood_udp { ip saddr limit rate over 200/second burst 400 packets } counter drop
     iifname "eth0.79" tcp dport 53 meter desk_dnsflood_tcp { ip saddr limit rate over 200/second burst 400 packets } counter drop
     iifname "eth0.79" udp dport 53 meter desk_dnsflood_udp { ip saddr limit rate over 200/second burst 400 packets } counter drop
+    iifname "eth0.79" udp dport 123 meter desk_ntpflood { ip saddr limit rate over 20/second burst 40 packets } counter drop
     iifname "eth2" tcp dport 53 meter guest_dnsflood_tcp { ip saddr limit rate over 200/second burst 400 packets } counter drop
     iifname "eth2" udp dport 53 meter guest_dnsflood_udp { ip saddr limit rate over 200/second burst 400 packets } counter drop
+    iifname "eth2" udp dport 123 meter guest_ntpflood { ip saddr limit rate over 20/second burst 40 packets } counter drop
     ct state established,related accept
     ct state invalid drop
     iifname "lo" accept

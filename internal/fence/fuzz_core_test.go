@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"pi-fortress/internal/httpwire"
+	"pi-fortress/internal/placeholder"
 )
 
 // FuzzCoreInjects: on a core host, the allowed placeholder comes out as its
@@ -53,8 +54,13 @@ func FuzzCoreInjects(f *testing.F) {
 		if err != nil {
 			return
 		}
+		// The fence buffers the body of a refresh request and each body of a
+		// known size up to maxBodyBuf (plan). It refuses a placeholder in a
+		// buffered body at the start. In a streamed body, the copy ends at
+		// the placeholder.
+		buffered := IsOAuthPath(req.Target) || (!req.Chunked && req.ContentLength >= 0 && req.ContentLength <= maxBodyBuf)
 		_, _, err = DecideStream(Ctx{SNI: "api.anthropic.com", TokenRE: re}, req, pol, canarySlots())
-		if mode == 0 || (mode == 1 && !chunkedBody) {
+		if mode == 0 || (mode == 1 && buffered) {
 			var ref *RefusedError
 			if !errors.As(err, &ref) {
 				t.Fatalf("a placeholder outside the header was not refused: %v\nraw=%q", err, raw)
@@ -66,7 +72,7 @@ func FuzzCoreInjects(f *testing.F) {
 		}
 		if mode == 1 {
 			out, err := io.ReadAll(req.Body)
-			if !errors.Is(err, ErrPlaceholderInStream) || bytes.Contains(out, []byte(liveOAT())) || bytes.Contains(out, []byte("pf_")) {
+			if !errors.Is(err, ErrPlaceholderInStream) || bytes.Contains(out, []byte(liveOAT())) || forwardsPlaceholder(out) {
 				t.Fatalf("a chunked body placeholder: %v\nraw=%q\nout=%q", err, raw, out)
 			}
 			return
@@ -167,12 +173,30 @@ func decodedWire(t *testing.T, req *httpwire.Request, raw string) []byte {
 	return append(head.Bytes(), body...)
 }
 
+// placeholderPart says that out holds the start of a placeholder: "pf_"
+// and then a hex digit, or "pf_" at the end of out. The strip marker
+// (StripRepl, "pf_stripped") is not one.
+func placeholderPart(out []byte) bool {
+	for i := 0; ; i++ {
+		j := bytes.Index(out[i:], []byte("pf_"))
+		if j < 0 {
+			return false
+		}
+		i += j
+		if k := i + 3; k == len(out) || strings.IndexByte("0123456789abcdefABCDEF", out[k]) >= 0 {
+			return true
+		}
+	}
+}
+
 // FuzzStreamNeverForwardsPlaceholder: a placeholder that the stream cannot
 // substitute never gets to the wire, for any location and any body framing.
-// The read that would emit it fails instead.
+// The read that would emit it fails instead. A live value in the body goes
+// out as the strip marker.
 func FuzzStreamNeverForwardsPlaceholder(f *testing.F) {
 	f.Add(`{"model":"x"}`, uint16(2), true, uint8(0))
 	f.Add(strings.Repeat("z", 1<<20+16), uint16(9), false, uint8(1))
+	f.Add("lab_fence_github", uint16(16), true, uint8(0))
 	re, pol := testPolicy(f)
 	bad := []string{"pf_a1b2c3d4e5f67890_GITHUB_TOKEN", "pf_ffffffffffffffff_CLAUDE_OAT", "pf_ffffffffffffffff_CLAUDE_ORT"}
 	f.Fuzz(func(t *testing.T, body string, where uint16, chunkedBody bool, which uint8) {
@@ -198,8 +222,16 @@ func FuzzStreamNeverForwardsPlaceholder(f *testing.F) {
 		if !errors.Is(err, ErrPlaceholderInStream) {
 			t.Fatalf("err %v\nout=%q", err, out)
 		}
-		if bytes.Contains(out, []byte("pf_")) {
+		if forwardsPlaceholder(out) || placeholderPart(out) {
 			t.Fatalf("placeholder forwarded\nout=%q", out)
 		}
 	})
+}
+
+// forwardsPlaceholder reports a placeholder in out, with the scanner that
+// the stream guard uses. A test for the bytes "pf_" also finds StripRepl
+// ("pf_stripped"), which the fence writes in place of each live value
+// that it strips. That marker is not a placeholder.
+func forwardsPlaceholder(out []byte) bool {
+	return len(placeholder.FindPlaceholderSpans(out)) > 0
 }

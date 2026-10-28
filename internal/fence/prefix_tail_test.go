@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"pi-fortress/internal/testsupport"
+	"pi-fortress/internal/tokenrules"
 )
 
 // keyShape makes a token for one key_prefixes.rules row, at its minimum
@@ -75,7 +76,7 @@ func keyShapes() []keyShape {
 // Each rule in the shipped file has a shape here. Thus a rule added later
 // without a shape fails this test, and does not go untested.
 func TestKeyShapesCoverEveryRule(t *testing.T) {
-	rules, err := LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
+	rules, err := tokenrules.LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +99,7 @@ func TestKeyShapesCoverEveryRule(t *testing.T) {
 // minimum length, one longer, many longer, and before punctuation, in a
 // JSON body, a query and a header value.
 func TestPrefixRuleStripsTheWholeToken(t *testing.T) {
-	rules, err := LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
+	rules, err := tokenrules.LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +146,7 @@ func TestPrefixRuleStripsTheWholeToken(t *testing.T) {
 // One byte short of the minimum is not a key. The fence does not change an
 // ordinary word that shares a prefix, at any length that the rule cannot reach.
 func TestPrefixRuleLeavesShortRunsAlone(t *testing.T) {
-	rules, err := LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
+	rules, err := tokenrules.LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}

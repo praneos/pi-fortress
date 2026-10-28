@@ -147,6 +147,7 @@ The TUI refuses a value that the gateway cannot use.
 | `HOUSE_NEW_TOTAL` | Number of new connections in one second that the full home network can open, for all of its devices or addresses. The format is `RATE/BURST`. Each closed connection keeps its slot in the table for 30 seconds. Thus this limit stops many devices together from filling the table. A household with several phones, laptops, and a TV that load pages at the same time stays below it. `0` disables it. The gateway refuses a value below 100 a second. | `1000/5000` |
 | `SEG_CONN_PER_IP`, `SEG_NEW_PER_IP`, `SEG_CONN_TOTAL` | The same three limits for each plain network that you add in step 8. The total is per network. They are the same as the limits of the agent network, because the agents run on the desktop on the desk network. A desktop browser with hundreds of open tabs can go above 128 connections. If pages start to fail, increase the per-device number for that network. | `128`, `50/200`, `4096` |
 | `HW_WATCHDOG` | The hardware watchdog of the Pi. `auto` enables it when the kernel has a watchdog device. `1` enables it always. `0` disables it. A full `pf apply` applies a change. Refer to [Pressure alerts and the hardware watchdog](#pressure-alerts-and-the-hardware-watchdog). | `auto` |
+| `JOURNAL_PERSIST` | Where the system journal stays. `0` keeps the default of the OS: Raspberry Pi OS keeps it in RAM, so a reboot, a crash or a power cut removes the log of what came before it. `1` keeps it on the disk (`Storage=persistent`, 200 MiB at most), and writes more to the SD card. A full `pf apply` applies a change. | `0` |
 | `SEG_NEW_TOTAL` | Number of new connections in one second that each plain network from step 8 can open as a whole, for all of its addresses. The format is `RATE/BURST`. Like `HOUSE_NEW_TOTAL`, it stops one network from filling the table with closed connections. It is the same as the new-connection total of the agent network. That total is fixed at `300/600`. A desk with one or two computers stays below it. The file of a network can set `NEW_TOTAL` to override it. `0` disables it. The gateway refuses a value below 100 a second. | `300/600` |
 
 ### Connection limits
@@ -288,9 +289,11 @@ Each block on the agent segment causes a digest. When a digest goes out, it give
 - The five most frequent destinations, with the feed and the number of blocks. A house list block is only a number.
 - On the agent segment, the address of the agent device for each destination. The digest does not name the devices of other segments.
 
+Between two counts, `pf observe` keeps a maximum of 512 destinations for each segment. A block to a different destination after that limit is only a number in its class. The limit is for each segment, thus the destinations of one segment do not push out the destinations of a different segment.
+
 A digest shows the zone of a name that has the shape of a key or a placeholder, for example `(redacted).example.com`. It never shows the full name. `pf observe` sends its counts to `pf alert` each time that it writes its ledger. This occurs each 15 minutes by default. Thus a block can be in the digest of the next window.
 
-The alert service keeps the open window in `/var/lib/pi-fortress/alert/digest.json`. After a restart, the service continues the same window. It does not send a digest two times. If the service stops while a digest is not yet sent, you lose that digest only.
+The alert service keeps the open window in `/var/lib/pi-fortress/alert/digest.json`. After a restart, the service continues the same window. It does not send a digest two times. If the service stops while a digest is not yet sent, you lose that digest only. The file has the full names of the window, before the redaction of the post. Thus its mode is `0600`, and only the alert service (`pf-sidecar`) can read it.
 
 | Flag | Meaning | Default |
 |---|---|---|
@@ -437,7 +440,7 @@ Then build and sign as above, and copy the new bundle to the Pi. On the Pi, `sud
 
 Check the box. Then run `sudo pf upgrade -confirm` on the Pi within ten minutes. If an upgrade fails its own health check, it rolls back immediately. If an upgrade passes, it reverts automatically after ten minutes, unless you confirm it. Thus an upgrade that disconnects you undoes itself.
 
-`pf upgrade` does not update the OS packages. Run `sudo apt update && sudo apt full-upgrade`, or let the daily `unattended-upgrades` run install the security updates. Reboot when `pf doctor` tells you to (rung `reboot`).
+`pf upgrade` does not update the OS packages. Run `sudo apt update && sudo apt full-upgrade`, or let the daily `unattended-upgrades` run install the security updates. Reboot when `pf doctor` tells you to (rung `reboot`). With a webhook in `alert.url`, a daily check (`pi-fortress-update-check.timer`) also posts when a reboot, a bootloader update or a stuck automatic update waits for you, or when a new major Debian release is out.
 
 `sudo pf rollback` goes back one version manually, to the version before this one. You cannot go back further. If rollback cannot run because a different apply is running, it tells you. It then exits non-zero and keeps the pending upgrade armed. Run it again.
 

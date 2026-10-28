@@ -139,8 +139,8 @@ func TestWebhookCapNeverHoldsACanary(t *testing.T) {
 		t.Fatal(err)
 	}
 	posts := r.got()
-	if len(posts) != 4 || !strings.HasPrefix(posts[3], "CANARY ") {
-		t.Fatalf("posts %q; want three and the canary", posts)
+	if len(posts) != 4 || !strings.HasPrefix(posts[0], "CANARY ") {
+		t.Fatalf("posts %q; want the canary first, and three", posts)
 	}
 }
 

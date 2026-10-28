@@ -18,6 +18,8 @@ From v1, the releases are at <https://github.com/praneos/pi-fortress/releases>. 
 
 `install.sh` refuses all other targets. `pf install` refuses them again (`internal/install/target.go`). Each prints the detected arch/OS. It does not guess.
 
+The DHCP dnsmasq units (`pi-fortress-dns-house`, `pi-fortress-dhcp@`) have no `CAP_NET_ADMIN`. On dnsmasq older than 2.91, for example Debian 12 and Pi OS bookworm, dnsmasq keeps `CAP_NET_ADMIN`: before 2.91, dnsmasq does not start its DHCP server without it. On such a box, apply adds the drop-in `net-admin.conf` to each of the two units (`privilege_split.md`).
+
 ## Install
 
 ```
@@ -76,6 +78,7 @@ All arguments go directly to `pf install`. `install.sh` does these steps:
    - With `-yes`, it prints the proposal and accepts it.
    - In all other cases, it asks on `/dev/tty`, never on stdin. Under `curl | sudo bash`, stdin is the script. An optional third prompt asks for the house NIC.
    - With no terminal, or at end of input at a prompt, it refuses and names `-wan`, `-agent` and `-yes`. It never gives a silent yes.
+   - After the interfaces, it asks one more question: keep the system journal on the disk across reboots (`y`), or in RAM (`N`, the default). Raspberry Pi OS keeps the journal in RAM to write less to the SD card. Then a crash or a power cut removes the log of what came before it. The answer goes to `net.env.local` as `JOURNAL_PERSIST=1` or `0`. A bare Enter, or end of input, gives RAM. `-journal disk` or `-journal ram` answers it. With `-yes`, or with both `-wan` and `-agent`, it asks nothing and writes no key: the default of `net.env` (0) applies.
    - It refuses an uplink that is also the agent (or house) interface. This refusal comes before it writes the signer file, `net.env.local`, `gateway.role` or the floor.
 
    Then it keeps two files for `pf upgrade`:
@@ -102,6 +105,8 @@ You can run `pf install` again with the version that is already installed. Then 
 If the floor names a version that is not the version of the tree at `/opt/pi-fortress`, `pf install` refuses. The refusal tells you what to do instead: `pf upgrade -version`, or `pf rollback` when the floor version is the release before the version of the live tree. `pf install` refuses a bundle below the floor as a downgrade.
 
 ## Where the lists live
+
+A plain `pf apply` uses the last good copy of a feed when that copy is less than 30 minutes old, and does not download the feed again. Thus a ship, its rollback and a dead-man revert in a few minutes do not ask the feed servers again (a server that limits the request rate refuses the repeated request). A copy that is older, that does not parse, or whose feed changed in `sources.json` gets a download. `pf apply --refresh` (the nightly timer) downloads all feeds. Use it to get a feed now.
 
 A `pf install` box has no `/vagrant`. `apply.sh` compiles from the tree that it runs in: `/opt/pi-fortress/vm/policy`. The TUI, `pf fetch`, `pf backup`/`pf restore` and `pf status` resolve the same directory. Thus, a block or a revocation from the operator goes where apply reads it. `base.PolicyDir` selects the directory in this sequence:
 
@@ -185,6 +190,17 @@ To install the OS updates at once, run `sudo apt update && sudo apt full-upgrade
 - `FAIL`: the flag is older than 7 days.
 
 Plan the reboot: `sudo reboot`. The agents have no gateway while it starts.
+
+`pi-fortress-update-check.timer` runs `pf alert updates` each day at about 12:00 and 15 minutes after a boot. It posts to the webhook of `alert.url` when one of these things waits for you:
+
+- A reboot: the flag, or a newer kernel than the one that runs (as the `reboot` rung).
+- A bootloader image (Raspberry Pi with an EEPROM bootloader): one that `rpi-eeprom-update -a` staged and that flashes at the next reboot, or a newer one in the `rpi-eeprom` package for the release in `/etc/default/rpi-eeprom-update`. The package does not flash the EEPROM itself.
+- An update from an origin that `unattended-upgrades` installs (the security archive, the Raspberry Pi archive) that is still not installed 36 hours after the apt lists first showed it. Then `unattended-upgrades` fails or holds it: see `/var/log/unattended-upgrades`.
+- A new major release: the apt lists say that the Debian release of the box is now `oldstable`.
+
+It posts when this list changes, also when it becomes empty (for example after the reboot), and again each 7 days while the list stays. The state is in `/var/lib/pi-fortress/updates.last`. The unit runs as `pf-sidecar` with no capability, and runs `apt-get -s`, which changes nothing.
+
+The kernel has MPTCP and io_uring off (`net.mptcp.enabled=0`, `kernel.io_uring_disabled=2` in `/etc/sysctl.d/99-pi-fortress.conf`). No pf daemon and no service of the box uses them. The pf binary also listens and dials with plain TCP (`godebug multipathtcp=0` in `go.mod`). User namespaces are also off (`user.max_user_namespaces=0`): a new network namespace starts with the kernel defaults (for example MPTCP on), and no pf unit needs user namespaces (each has `RestrictNamespaces=yes`).
 
 A Go daemon reads the system CA roots one time, when it starts. Thus `apply.sh` installs the apt hook `/etc/apt/apt.conf.d/60pi-fortress-ca`. After each dpkg run, it runs `/usr/local/lib/pi-fortress/ca-restart.sh`. When `/etc/ssl/certs/ca-certificates.crt` is different from the last run, the script restarts the running units of pf-broker, pf dns (`pi-fortress-dns-agent-go`, `pi-fortress-dns-stub@*`) and pf alert. The last hash is in `/var/lib/pi-fortress/ca-bundle.sha256` (mode 0600). The hook writes nothing to the terminal and never fails the apt run. The journal tag of a restart is `pi-fortress-ca`.
 

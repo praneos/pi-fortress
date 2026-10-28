@@ -58,6 +58,11 @@ func TestInstallArmsPendingOnSuccessAndConfirmDisarmsIt(t *testing.T) {
 	if err != nil || !ok || row.Result != "confirm" || row.Version != 100 {
 		t.Fatalf("confirm: row=%+v ok=%v err=%v", row, ok, err)
 	}
+	// The pending file has no sha. The confirm row takes it from the ok
+	// row of the install (seen empty on the Pi, 2026-10-29).
+	if row.SHA != "deadbee" {
+		t.Fatalf("confirm row sha = %q, want the sha of the install, deadbee", row.SHA)
+	}
 	if _, ok, _ := ReadPending(r.in.PendingPath); ok {
 		t.Fatal("still armed after confirm")
 	}

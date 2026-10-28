@@ -846,6 +846,54 @@ func TestSNIRefusesDataWithNoSYN(t *testing.T) {
 	}
 }
 
+// A restart of pf dns (each apply does one) starts a new check with no
+// flows. A flow that the old check passed keeps its verdict in the
+// conntrack mark and does not come to the queue again (render,
+// TestHouseSNIVerdictComesOnlyFromPFDNS). A flow in the middle of its check
+// does. When the old queue closes, the kernel drops the packets that it
+// held, and the client sends its ClientHello again. The new check did not
+// see the SYN. Thus it refuses the data at once, with no lookup, and the
+// log says why. An empty ACK still passes, because the check examines only
+// data.
+func TestSNIRestartRefusesAFlowInProgress(t *testing.T) {
+	dst := "209.216.230.207"
+	r := &fakeResolve{ans: map[string][]netip.Addr{"news.ycombinator.com": hn}}
+	hello := clientHello(t, "news.ycombinator.com")
+	ctx := context.Background()
+	old, oldQ := newTestCheck(t, r)
+	old.logf = func(string, ...any) {} // its timer can fire after the test
+	old.packet(ctx, nfq.Packet{ID: 1, Payload: tcp4f(dst, 999, tcpSYN, nil)})
+	oldQ.wait(t, 1)
+	old.packet(ctx, nfq.Packet{ID: 2, Payload: tcp4(dst, 1000, hello[:len(hello)/2])})
+	oldQ.none(t, 2)
+
+	c, q := newTestCheck(t, r)
+	var mu sync.Mutex
+	var lines []string
+	c.logf = func(format string, args ...any) {
+		mu.Lock()
+		defer mu.Unlock()
+		lines = append(lines, fmt.Sprintf(format, args...))
+	}
+	c.packet(ctx, nfq.Packet{ID: 3, Payload: tcp4(dst, 1000, nil)})
+	if v := q.wait(t, 3); v.v != nfq.Accept || v.set {
+		t.Fatalf("empty ACK after the restart: %+v, want a plain accept", v)
+	}
+	c.packet(ctx, nfq.Packet{ID: 4, Mark: 0x1, Payload: tcp4(dst, 1000, hello)})
+	if v := q.wait(t, 4); v.v != nfq.Repeat || v.mark != sniBad|0x1 {
+		t.Fatalf("ClientHello again after the restart: %+v, want repeat with mark %#x", v, sniBad|0x1)
+	}
+	r.mu.Lock()
+	asked := len(r.asked)
+	r.mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
+	want := "pf dns: sni: 10.78.0.160:50806 -> 209.216.230.207:443 refused: data with no SYN before it"
+	if asked != 0 || len(lines) != 1 || lines[0] != want {
+		t.Fatalf("%d lookups, log %q; want none and %q", asked, lines, want)
+	}
+}
+
 // Two sequence numbers 2^31 apart compare as before each other both ways.
 // A segment far from the start of the stream is refused before the check
 // compares it with the held data.

@@ -3,6 +3,7 @@
 package itest
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -10,6 +11,8 @@ import (
 )
 
 func policyTests(t *testing.T) {
+	// The seccomp check at the end covers all the traffic of this group.
+	since := piClock(t)
 	t.Run("parallel", func(t *testing.T) {
 		runGroup(t, "blacklist", blacklistTests)
 		runGroup(t, "dns", dnsTests)
@@ -29,6 +32,51 @@ func policyTests(t *testing.T) {
 		if n, err := strconv.Atoi(strings.TrimSpace(out)); err != nil || n == 0 {
 			t.Fatal(out)
 		}
+	})
+	// The fence daemons and the sidecars, as the kernel sees them: each one
+	// runs under its seccomp filter, with no_new_privs, and with only its
+	// own capabilities. The policy traffic above went through the engine,
+	// the broker, pf dns and observe. A filtered call kills a daemon (the
+	// default action), and the kernel logs it.
+	t.Run("the daemons run boxed in", func(t *testing.T) {
+		for _, u := range []struct {
+			unit string
+			caps uint64
+		}{
+			{"pi-fortress-broker", 0},
+			{"pi-fortress-engine", 0},
+			{"pi-fortress-www", capNetBindService},
+			{"pi-fortress-observe", capNetAdmin},
+			{"pi-fortress-alert", 0},
+			{"pi-fortress-monitor", 0},
+		} {
+			procBoxed(t, u.unit, u.caps)
+		}
+		// The engine and www read no log, no observe state, no webhook URL
+		// and no house reservation. systemd hides each of them.
+		hidden := []string{"/var/log/pi-fortress", "/var/lib/pi-fortress/observe", "/etc/pi-fortress/alert.url", "/etc/pi-fortress/house.hosts"}
+		for _, unit := range []string{"pi-fortress-engine", "pi-fortress-www"} {
+			paths := unitPaths(t, unit, "InaccessiblePaths")
+			for _, p := range hidden {
+				if !slices.Contains(paths, p) {
+					t.Errorf("%s does not hide %s: InaccessiblePaths=%v", unit, p, paths)
+				}
+			}
+			// The two directories always exist. Thus in the mount
+			// namespace of the daemon, each one is the empty node of
+			// systemd, mode 0.
+			pid := mainPID(t, unit)
+			if pid == "" || pid == "0" {
+				continue
+			}
+			for _, d := range hidden[:2] {
+				out, _ := ssh(t, 20*time.Second, "pi", "sudo stat -c %a /proc/"+pid+"/root"+d)
+				if m := strings.TrimSpace(out); m != "0" {
+					t.Errorf("%s sees %s as %q, want the empty node of systemd (mode 0)", unit, d, m)
+				}
+			}
+		}
+		noSeccompKill(t, since, "pf", "nft", "journalctl", "conntrack", "ip")
 	})
 }
 

@@ -680,6 +680,17 @@ func ntpRedirect(in func(string) string, ip string, pass bool) string {
 	return in("udp dport 123 ip daddr != " + ip + ntpPassExcept(pass) + " counter dnat ip to " + ip)
 }
 
+// ntpMeter is the rate meter for each source of NTP that reaches the
+// gateway, as the DNS meters are for DNS. The redirect (ntpRedirect) sends
+// NTP to input, not to forward, so the forward budget of the network never
+// sees it. The caller puts the meter before the conntrack accept of input,
+// as it does for the DNS meters. A real NTP client sends far less than 20
+// packets/second, and its first burst is within 40 packets. name is the
+// start of the meter name, as for the DNS meters.
+func ntpMeter(name string) string {
+	return "udp dport 123 meter " + name + "_ntpflood { ip saddr limit rate over 20/second burst 40 packets } counter drop"
+}
+
 // ntpPassExcept is the match that keeps the NTP=pass servers out of the
 // redirect and of the forward drop. It is empty for each other network.
 func ntpPassExcept(pass bool) string {
@@ -782,7 +793,8 @@ func (f *fragments) house() {
 	// flow, and after the first reply each query on it would be established
 	// and skip the meter.
 	f.HouseDNSFlood = in("tcp dport 53 meter house_dnsflood_tcp { ip saddr limit rate over 200/second burst 400 packets } counter drop") +
-		in("udp dport 53 meter house_dnsflood_udp { ip saddr limit rate over 200/second burst 400 packets } counter drop")
+		in("udp dport 53 meter house_dnsflood_udp { ip saddr limit rate over 200/second burst 400 packets } counter drop") +
+		in(ntpMeter("house"))
 	f.NTPRedirect += ntpRedirect(in, f.HouseIP, false)
 	f.HouseInput = in("tcp dport 53 accept") +
 		in("udp dport 53 accept") + in("udp sport 68 udp dport 67 accept") + in("ip daddr "+f.HouseIP+" udp dport 123 accept") +
@@ -955,7 +967,8 @@ func (f *fragments) segments() {
 		set := "resolved_" + nftName(s.Name) + "_v4"
 		f.SegSet += "\n\n" + resolvedSet(set)
 		f.SegDNSFlood += in("tcp dport 53 meter "+nftName(s.Name)+"_dnsflood_tcp { ip saddr limit rate over 200/second burst 400 packets } counter drop") +
-			in("udp dport 53 meter "+nftName(s.Name)+"_dnsflood_udp { ip saddr limit rate over 200/second burst 400 packets } counter drop")
+			in("udp dport 53 meter "+nftName(s.Name)+"_dnsflood_udp { ip saddr limit rate over 200/second burst 400 packets } counter drop") +
+			in(ntpMeter(nftName(s.Name)))
 		// The gate covers each new TCP and UDP flow and ping, not only
 		// 80/443. The ruleset treats a desk as possibly compromised (an agent
 		// that escaped its VM). Thus any port to an address that this box did

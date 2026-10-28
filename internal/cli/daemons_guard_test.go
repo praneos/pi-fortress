@@ -145,6 +145,61 @@ func TestAcceptCappedBacksOff(t *testing.T) {
 	}
 }
 
+// A panic in one connection of the broker loop does not stop the daemon.
+// The loop closes that connection, gives its slot back, and serves the
+// next caller. The listener is TCP on loopback, so the test also runs
+// where unix sockets are not allowed.
+func TestAcceptCappedSurvivesAPanic(t *testing.T) {
+	log.SetOutput(io.Discard)
+	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	var calls, served atomic.Int32
+	go func() {
+		defer close(done)
+		acceptCapped(ctx, ln, 1, "test", func(c net.Conn) error {
+			if calls.Add(1) == 1 {
+				var m map[string]int
+				m["x"] = 1 // a nil map write: a runtime panic, as from a bug in a handler
+			}
+			served.Add(1)
+			return c.Close()
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		ln.Close()
+		<-done
+	})
+	first, err := net.Dial("tcp", ln.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer first.Close()
+	_ = first.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := first.Read(make([]byte, 1)); err != io.EOF {
+		t.Fatalf("the connection that panicked was not closed: %v", err)
+	}
+	// max is 1. Thus a slot that the panic did not give back drops each
+	// later caller, and served stays 0.
+	deadline := time.Now().Add(3 * time.Second)
+	for served.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the loop did not serve after a panic")
+		}
+		c, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Close()
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // pf engine has no wildcard default and refuses a given wildcard. www
 // already had this rule. It refuses before it reads the CA.
 func TestEngineRefusesWildcardListen(t *testing.T) {

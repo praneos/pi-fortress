@@ -3,6 +3,8 @@ package secrets
 import (
 	"strings"
 	"testing"
+
+	"pi-fortress/internal/placeholder"
 )
 
 // refPlaceholder (fuzz_test.go) is the reference: the hand scanner must
@@ -37,7 +39,7 @@ func TestPlaceholderScanMatchesRegexp(t *testing.T) {
 				t.Fatalf("%q: got %v want %v", c, got, want)
 			}
 		}
-		spans := FindPlaceholderSpans([]byte(c))
+		spans := placeholder.FindPlaceholderSpans([]byte(c))
 		idx := refPlaceholder.FindAllStringIndex(c, -1)
 		if len(spans) != len(idx) {
 			t.Fatalf("%q spans %v want %v", c, spans, idx)

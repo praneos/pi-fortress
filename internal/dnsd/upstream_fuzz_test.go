@@ -18,6 +18,7 @@ import (
 //     has room for;
 //   - negTTL gives a TTL over maxNegTTL, or accepts a reply with an
 //     address;
+//   - aRecords accepts an A record whose RDLENGTH is not 4;
 //   - aRecords gives an address whose owner name chainNames does not give.
 //     The forwarder judges the names of chainNames and admits the
 //     addresses of aRecords, so an owner outside that list is an address
@@ -28,6 +29,7 @@ import (
 //     or a byte other than by ASCII letter case;
 //   - stripOPT accepts a message that dnsmessage parses, and dnsmessage
 //     cannot parse the result, or the result still has an OPT;
+//   - stripOPT accepts a message with bytes after its last record;
 //   - withCallerOPT changes a message for a caller without EDNS, or makes
 //     a whole message that dnsmessage cannot parse.
 func FuzzUpstreamReply(f *testing.F) {
@@ -60,6 +62,13 @@ func FuzzUpstreamReply(f *testing.F) {
 			for _, o := range aOwners(reply) {
 				if o != "" && !judged[o] {
 					t.Fatalf("address of %q is not in the chain %q", o, names)
+				}
+			}
+		}
+		if addrsOK {
+			for _, n := range aLengths(reply) {
+				if n != 4 {
+					t.Fatalf("aRecords accepted an A record with RDLENGTH %d", n)
 				}
 			}
 		}
@@ -131,6 +140,11 @@ func FuzzUpstreamReply(f *testing.F) {
 				t.Fatal("stripOPT: ARCOUNT is not one less")
 			}
 		}
+		if bareOK {
+			if end, ok := walkEnd(bare); !ok || end != len(bare) {
+				t.Fatalf("stripOPT accepted bytes after the last record: %x", bare)
+			}
+		}
 		if bareOK && readable(reply) {
 			if !readable(bare) {
 				t.Fatalf("stripOPT made a message that does not parse:\n in %x\nout %x", reply, bare)
@@ -152,7 +166,10 @@ func FuzzUpstreamReply(f *testing.F) {
 		if len(bare) <= maxMsg && len(withOPT) > maxMsg {
 			t.Fatalf("withCallerOPT: %d bytes, more than a TCP frame holds", len(withOPT))
 		}
-		if end, ok := walkEnd(bare); ok && end == len(bare) && readable(bare) && !hasOPT(bare) && len(withOPT) > len(bare) {
+		// The forwarder adds an OPT only to a message that stripOPT accepted
+		// (the reply and the cache entry). Bytes after the last record are in
+		// the scope of the check: the OPT goes after them.
+		if bareOK && readable(bare) && !hasOPT(bare) && len(withOPT) > len(bare) {
 			if !readable(withOPT) || !hasOPT(withOPT) {
 				t.Fatalf("withCallerOPT made a message that does not parse: %x", withOPT)
 			}
@@ -175,6 +192,28 @@ func aOwners(msg []byte) []string {
 		}
 		if h.Type == dnsmessage.TypeA {
 			out = append(out, strings.TrimSuffix(h.Name.String(), "."))
+		}
+		if p.SkipAnswer() != nil {
+			return out
+		}
+	}
+}
+
+// aLengths is the RDLENGTH of each A record in the answer section. It
+// stops where the section stops parsing.
+func aLengths(msg []byte) []uint16 {
+	var p dnsmessage.Parser
+	if _, err := p.Start(msg); err != nil || p.SkipAllQuestions() != nil {
+		return nil
+	}
+	var out []uint16
+	for {
+		h, err := p.AnswerHeader()
+		if err != nil {
+			return out
+		}
+		if h.Type == dnsmessage.TypeA {
+			out = append(out, h.Length)
 		}
 		if p.SkipAnswer() != nil {
 			return out

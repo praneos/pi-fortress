@@ -9,15 +9,15 @@ import (
 	"testing"
 	"time"
 
-	"pi-fortress/internal/fence"
 	"pi-fortress/internal/keyshape"
 	"pi-fortress/internal/testsupport"
+	"pi-fortress/internal/tokenrules"
 )
 
 // The engine mints no leaf for an SNI that holds a key or a placeholder,
 // and its log does not hold the key. A clean name still gets its leaf.
 func TestKeyShapedSNIGetsNoLeaf(t *testing.T) {
-	tr, err := fence.LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
+	tr, err := tokenrules.LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}

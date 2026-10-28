@@ -46,9 +46,12 @@ the Pi:
 - It listens on UDP 67, only on the interface of that segment.
 - A DHCP-only dnsmasq that is bound to that interface answers (`port=0`, no
   DNS).
-- It runs in the sandbox of the house unit, with three capabilities. Each
-  DHCP instance has its own account (`pf-dhcp-<name>`, `pf-dhcp-house` for
-  the house). An instance can write only its own lease file and log.
+- It runs in the sandbox of the house unit, with one capability,
+  `CAP_NET_BIND_SERVICE`. On dnsmasq older than 2.91, for example Debian
+  12, dnsmasq keeps `CAP_NET_ADMIN` too, because it does not start its
+  DHCP server without it. Each DHCP instance has its own account
+  (`pf-dhcp-<name>`, `pf-dhcp-house` for the house). An instance can
+  write only its own lease file and log.
 
 The Pi lets in the `0.0.0.0` source of a client with no lease on that port,
 and nowhere else. Forwarded traffic is still pinned to the `NET` of the
@@ -67,7 +70,9 @@ listens on UDP 123 when the Pi has a house or a plain segment:
   Under strict, NTS key exchange (TCP 4460) does not leave either.
 - The one exception is a plain segment with `NTP=pass`, for a device that
   needs NTS end to end. Its NTP and NTS go out, but only to the addresses
-  in `ntp_pass.ips` (well-known public time servers). Thus the hidden-data
+  in `ntp_pass.ips` (well-known public time servers, only in address space
+  that their operator holds; not a cloud provider's shared pool, so
+  `time.windows.com` is not listed). Thus the hidden-data
   path of that segment is open to those servers only. NTP to each other
   address still goes to the Pi. The default is `NTP=redirect`.
 - chrony has a rate limit for each client address, no command port on the

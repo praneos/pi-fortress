@@ -28,7 +28,6 @@ import (
 	"pi-fortress/internal/dnslog"
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/leases"
-	"pi-fortress/internal/policycompile"
 )
 
 const (
@@ -36,8 +35,13 @@ const (
 	maxFlows     = 4000
 	maxClients   = 256 // per segment
 	maxPerClient = 200 // names and dests, each
-	clientIdle   = 30 * 24 * time.Hour
-	maxEvents    = 1000
+	// maxNameSrcs limits the queriers that one DNS row counts (Srcs). A
+	// client on a segment can put any address of that segment in the source
+	// of a query. Thus without a limit, the clients decide the size of each
+	// of the maxDNS rows, and a wide segment fills the memory of the daemon.
+	maxNameSrcs = 32
+	clientIdle  = 30 * 24 * time.Hour
+	maxEvents   = 1000
 	// alertReserve is the number of ring rows that reservedThreat keeps
 	// through a flood of other rows.
 	alertReserve = maxEvents / 5
@@ -76,7 +80,8 @@ type DNSRec struct {
 	Count     int      `json:"count"`
 	Qtypes    []string `json:"qtypes"`
 	Sinkholed bool     `json:"sinkholed"`
-	// Src is the last querier; Srcs counts every one.
+	// Src is the last querier; Srcs counts the queriers, maxNameSrcs at
+	// most (bump).
 	Src     string            `json:"src"`
 	Srcs    map[string]uint32 `json:"srcs,omitempty"`
 	Segment string            `json:"segment,omitempty"`
@@ -626,8 +631,13 @@ func prune[V any](table map[string]V, limit int, lastSeen func(V) string) []stri
 // bump counts k in a table with a limit. When the table is full, the
 // lowest count goes, ties by key: the map[string]uint32 of the plan keeps
 // no time per entry, so "then oldest" has nothing to read.
-func bump(m map[string]uint32, k string) {
-	if _, ok := m[k]; !ok && len(m) >= maxPerClient {
+func bump(m map[string]uint32, k string) { bumpN(m, k, maxPerClient) }
+
+// bumpN is bump with a limit of limit keys. A table that is already over
+// the limit (a state file from before the limit) gets back to it.
+func bumpN(m map[string]uint32, k string, limit int) {
+	_, ok := m[k]
+	for !ok && len(m) >= limit {
 		victim := ""
 		for kk, n := range m {
 			if victim == "" || n < m[victim] || (n == m[victim] && kk < victim) {
@@ -1092,7 +1102,7 @@ func (o *Observer) loadMaps() {
 		if i == 0 {
 			o.domainFeeds, o.domainLists = parseDomainMap(string(raw))
 		} else {
-			o.ipFeeds = prefixFeeds(policycompile.ParseMap(string(raw)))
+			o.ipFeeds = prefixFeeds(base.ParseMap(string(raw)))
 		}
 	}
 }
@@ -1174,7 +1184,7 @@ func (o *Observer) touchDNSSeg(st *State, segment, name, src, qtype string, sink
 	if rec.Srcs == nil {
 		rec.Srcs = map[string]uint32{}
 	}
-	rec.Srcs[src]++
+	bumpN(rec.Srcs, src, maxNameSrcs)
 	c := o.client(st, clientSegment(segment), src, ts)
 	c.Queries++
 	bucket(st, c.Segment, o.now()).Queries++

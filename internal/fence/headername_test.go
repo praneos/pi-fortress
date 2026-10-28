@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"pi-fortress/internal/httpwire"
-	"pi-fortress/internal/secrets"
+	"pi-fortress/internal/placeholder"
 )
 
 // A field name is a token, and most key formats are tokens too. The fence
@@ -110,7 +110,7 @@ func FuzzKeyNeverInHeaderName(f *testing.F) {
 		}
 		for _, fl := range again.Fields {
 			n := []byte(fl.Name)
-			if re.Match(n) || len(secrets.FindPlaceholderSpans(n)) > 0 {
+			if re.Match(n) || len(placeholder.FindPlaceholderSpans(n)) > 0 {
 				t.Fatalf("key-shaped name on the wire: %q", fl.Name)
 			}
 			for _, sl := range slots {

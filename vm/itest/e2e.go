@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -227,6 +228,23 @@ func mustFailAllOn(t *testing.T, host string, cmds ...string) {
 	}
 }
 
+// mustFailOnEach is mustFailAllOn for one command on more than one host.
+// The hosts run it at the same time.
+func mustFailOnEach(t *testing.T, cmd string, hosts ...string) {
+	t.Helper()
+	outs := make([]string, len(hosts))
+	errs := make([]error, len(hosts))
+	var wg sync.WaitGroup
+	for i, host := range hosts {
+		wg.Go(func() { outs[i], errs[i] = sshNoSkip(t, 25*time.Second, host, cmd) })
+	}
+	wg.Wait()
+	for i, host := range hosts {
+		sudoSkip(t, host, cmd, errs[i])
+		failedAsExpected(t, host, cmd, outs[i], errs[i])
+	}
+}
+
 // failedAsExpected fails the test unless cmd itself failed on host.
 func failedAsExpected(t *testing.T, host, cmd, out string, err error) {
 	t.Helper()
@@ -317,13 +335,42 @@ func reboot(t *testing.T, host string) {
 }
 
 // Capability bits, for the bounding sets the sandboxed daemons keep.
-// CapBnd in /proc/<pid>/status is that mask in hex, so the three net
-// capabilities a resolver or a DHCP server needs read 0x3400.
+// CapBnd in /proc/<pid>/status is that mask in hex, so the two net
+// capabilities of pf dns read 0x1400.
 const (
 	capNetBindService = 1 << 10
 	capNetAdmin       = 1 << 12
-	capNetRaw         = 1 << 13
 )
+
+var reDnsmasqVersion = regexp.MustCompile(`^Dnsmasq version ([0-9]{1,4})\.([0-9]{1,4})`)
+
+// dnsmasqKeepsNetAdmin is the rule of dhcp_dnsmasq_old (vm/pi/lib/dhcp.sh)
+// for the output of dnsmasq --version. It is true when the first line
+// gives a version older than 2.91, or no version. dnsmasq before 2.91 does
+// not start its DHCP server without CAP_NET_ADMIN, so apply gives it back
+// with a drop-in.
+func dnsmasqKeepsNetAdmin(version string) bool {
+	line, _, _ := strings.Cut(version, "\n")
+	m := reDnsmasqVersion.FindStringSubmatch(line)
+	if m == nil {
+		return true
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor, _ := strconv.Atoi(m[2])
+	return major < 2 || major == 2 && minor < 91
+}
+
+// dhcpCaps is the capability mask of a DHCP dnsmasq on the Pi:
+// CAP_NET_BIND_SERVICE (0x400), and CAP_NET_ADMIN too (0x1400) when the
+// dnsmasq of the Pi is older than 2.91.
+func dhcpCaps(t *testing.T) uint64 {
+	t.Helper()
+	out, _ := ssh(t, 15*time.Second, "pi", "/usr/sbin/dnsmasq --version")
+	if dnsmasqKeepsNetAdmin(out) {
+		return capNetBindService | capNetAdmin
+	}
+	return capNetBindService
+}
 
 // mainPID is the MainPID of the unit on the Pi, "0" when it is not running.
 func mainPID(t *testing.T, unit string) string {
@@ -374,9 +421,7 @@ func unitSandbox(t *testing.T, unit, user string, caps uint64) (string, []string
 	// these units while SystemCallFilter was missing. Thus the list that
 	// systemd merged decides. Seccomp only says that the list reached
 	// the process.
-	if got := procStatus(status, "Seccomp"); got != "2" {
-		t.Errorf("%s has Seccomp %q, want 2 (a seccomp filter is loaded)", unit, got)
-	}
+	boxedStatus(t, unit, status, caps)
 	filter := strings.Fields(pi(t, "systemctl show -p SystemCallFilter --value "+unit+".service"))
 	for _, want := range []string{"recvmsg", "openat"} {
 		if !slices.Contains(filter, want) {
@@ -398,6 +443,53 @@ func unitSandbox(t *testing.T, unit, user string, caps uint64) (string, []string
 		t.Errorf("%s bounding set is %#x, want %#x", unit, got, caps)
 	}
 	return pid, filter
+}
+
+// procBoxed asserts the sandbox of the main process of unit, as the
+// kernel sees it: a seccomp filter, no_new_privs, and exactly caps as its
+// effective set. It returns the PID, or "" when the unit has no main
+// process. It does not check the user, because www has a dynamic user.
+func procBoxed(t *testing.T, unit string, caps uint64) string {
+	t.Helper()
+	pid := mainPID(t, unit)
+	if pid == "" || pid == "0" {
+		t.Errorf("%s has no main process (%s)", unit, strings.TrimSpace(pi(t, "systemctl is-active "+unit+".service || true")))
+		return ""
+	}
+	boxedStatus(t, unit, pi(t, "sudo cat /proc/"+pid+"/status"), caps)
+	return pid
+}
+
+// boxedStatus checks one /proc/<pid>/status: Seccomp 2 (a filter is
+// loaded), NoNewPrivs 1, and CapEff equal to caps. A daemon with ambient
+// capabilities has them in CapEff. A daemon with none has 0.
+func boxedStatus(t *testing.T, unit, status string, caps uint64) {
+	t.Helper()
+	if got := procStatus(status, "Seccomp"); got != "2" {
+		t.Errorf("%s has Seccomp %q, want 2 (a seccomp filter is loaded)", unit, got)
+	}
+	if got := procStatus(status, "NoNewPrivs"); got != "1" {
+		t.Errorf("%s has NoNewPrivs %q, want 1", unit, got)
+	}
+	eff, err := strconv.ParseUint(procStatus(status, "CapEff"), 16, 64)
+	if err != nil {
+		t.Errorf("%s CapEff unreadable: %v", unit, err)
+		return
+	}
+	if eff != caps {
+		t.Errorf("%s effective capabilities are %#x, want %#x", unit, eff, caps)
+	}
+}
+
+// unitPaths is a path list property of unit (InaccessiblePaths,
+// ReadWritePaths) as systemd merged it, without the "-" and "+" prefixes.
+func unitPaths(t *testing.T, unit, prop string) []string {
+	t.Helper()
+	var out []string
+	for _, f := range strings.Fields(pi(t, "systemctl show -p "+prop+" --value "+unit+".service")) {
+		out = append(out, strings.TrimLeft(f, "-+"))
+	}
+	return out
 }
 
 // noSeccompKill fails if the kernel reported a seccomp kill for any of

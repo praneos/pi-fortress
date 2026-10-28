@@ -53,6 +53,24 @@ func chunkedTE(v string) error {
 	return nil
 }
 
+// trailerField refuses a Trailer field that names Content-Length,
+// Transfer-Encoding or Trailer. A trailer must not change the framing of
+// the message that it ends. net/http refuses such a field in a chunked
+// message (fixTrailer in transfer.go). This code refuses it in each
+// message, because the fence and the broker can change the framing of a
+// message (SetBody, WriteHead). The broker drops the Trailer field and
+// the trailers. Thus this is a refusal of a message that a Go peer
+// refuses, not a change to what goes out.
+func trailerField(v string) error {
+	for _, name := range strings.Split(v, ",") {
+		name = strings.Trim(name, " \t")
+		if asciiEqualFold(name, "Content-Length") || asciiEqualFold(name, "Transfer-Encoding") || asciiEqualFold(name, "Trailer") {
+			return ErrBadRequest
+		}
+	}
+	return nil
+}
+
 // contentLength reads the value as the 1*DIGIT that the grammar
 // specifies. It returns the digits that it read and also their value.
 // ParseInt takes a sign, and TrimSpace takes any Unicode space. Thus,
@@ -279,6 +297,10 @@ func ReadRequest(br *bufio.Reader) (*Request, error) {
 				return nil, err
 			}
 			te = true
+		case "trailer":
+			if err := trailerField(f.Value); err != nil {
+				return nil, err
+			}
 		}
 	}
 	// RFC 9112 has no chunked coding below HTTP/1.1. net/http drops the field
@@ -506,6 +528,10 @@ func readResponseHead(br *bufio.Reader, noBody bool) (*Response, error) {
 				return nil, err
 			}
 			chunked = true
+		case "trailer":
+			if err := trailerField(val); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if cl >= 0 && chunked {

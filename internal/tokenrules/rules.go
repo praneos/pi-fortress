@@ -1,4 +1,9 @@
-package fence
+// Package tokenrules loads key_prefixes.rules, the list of key shapes that
+// the fence strips and that pf dns and pf observe look for in a name. It
+// imports only corepolicy, so a daemon that needs the rules does not link
+// the fence. The error text keeps its "fence:" prefix: the operator reads
+// these errors as errors of the fence.
+package tokenrules
 
 import (
 	"bufio"
@@ -85,16 +90,26 @@ func (t *TokenRules) All() *regexp.Regexp { return t.all }
 // Streamable refuses a rule with no literal prefix. Without a prefix, the
 // stream scan cannot tell where a match can start. Then a body longer than
 // maxHold goes out with only one window of hold behind it. The broker calls
-// this at start. pf dns does not, because there a rule with no prefix
-// costs speed, not a check.
+// this at start, and pf compile calls it on key_prefixes.rules.local. pf
+// dns does not, because there a rule with no prefix costs speed, not a
+// check.
+//
+// It also refuses a rule that can match a byte that is not a token byte
+// (InTokenClass), for example "/", "+", "=" or any byte ("."). For a token
+// longer than the hold, the stream and the buffered path strip to the end
+// of the run of token bytes. A match that goes past that end gets a
+// different strip on the two paths.
 func (t *TokenRules) Streamable() error {
 	for _, r := range t.Rules {
 		re, err := compile([]Rule{r}, nil)
 		if err != nil {
 			return err
 		}
-		if _, _, _, ok := prefixInfo(re.String()); !ok {
+		if _, _, _, ok := PrefixInfo(re.String()); !ok {
 			return fmt.Errorf("fence: rule %s has no literal prefix; the stream scan needs one (example: ghp_[A-Za-z0-9]{36})", r.Name)
+		}
+		if _, ok := MatchBounds(re.String()); !ok {
+			return fmt.Errorf("fence: rule %s can match a character that is not a letter, a digit, _, - or .; the stream scan needs rules of only these characters (example: ghp_[A-Za-z0-9]{36})", r.Name)
 		}
 	}
 	return nil
@@ -157,11 +172,11 @@ func compile(rules []Rule, skip map[string]bool) (*regexp.Regexp, error) {
 // a query, went out whole. leadExpr is outside the named group of the
 // rule: the match includes it so the regexp can judge it, but the strip
 // (tokenSet.span of the group) does not, and the escape stays unchanged.
-// leadMax is its longest match: how far before a prefix the prefilter
+// LeadMax is its longest match: how far before a prefix the prefilter
 // window must reach.
 const (
 	leadExpr = `\A|[^0-9A-Za-z_]|\\[bfnrt]|\\x[0-9A-Fa-f]{2}|\\u[0-9A-Fa-f]{4}|%[0-9A-Fa-f]{2}`
-	leadMax  = 6
+	LeadMax  = 6
 )
 
 // leadCanon is leadExpr as it prints after parse and simplification. The
@@ -174,7 +189,9 @@ var leadCanon = func() string {
 	return re.Simplify().String()
 }()
 
-func isLead(re *syntax.Regexp) bool {
+// IsLead reports whether re is the lead of a rule (leadExpr) as it prints
+// after parse and simplification.
+func IsLead(re *syntax.Regexp) bool {
 	return re.Op == syntax.OpAlternate && re.String() == leadCanon
 }
 

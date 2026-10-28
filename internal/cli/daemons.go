@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -27,10 +28,10 @@ import (
 	"pi-fortress/internal/engine"
 	"pi-fortress/internal/eyeball"
 	"pi-fortress/internal/fakeip"
-	"pi-fortress/internal/fence"
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/keyshape"
 	"pi-fortress/internal/secrets"
+	"pi-fortress/internal/tokenrules"
 	"pi-fortress/internal/www"
 )
 
@@ -130,7 +131,7 @@ func runEngine(args []string, stdout, stderr io.Writer) int {
 	// The broker refuses to start without the rules, and so does the engine.
 	// The engine keeps only the compiled shapes in a closure. The kind
 	// column of the file does not get to the engine (docs/privilege_split.md).
-	tr, err := fence.LoadTokenRules(*rules)
+	tr, err := tokenrules.LoadTokenRules(*rules)
 	if err != nil {
 		return fail(stderr, fmt.Errorf("engine: -rules: %w", err))
 	}
@@ -285,7 +286,7 @@ func runBroker(args []string, _, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	tr, err := fence.LoadTokenRules(*rules)
+	tr, err := tokenrules.LoadTokenRules(*rules)
 	if err != nil {
 		return fail(stderr, err)
 	}
@@ -414,6 +415,12 @@ func runBroker(args []string, _, stderr io.Writer) int {
 	acceptCapped(ctx, ln, *maxConns, "broker", func(c net.Conn) error {
 		return b.Handle(ctx, c)
 	})
+	// A stop must not cut a token refresh between the reply of the origin
+	// and the save of the new pair (Broker.WaitHarvests). The unit gives the
+	// stop 90 s.
+	if !b.WaitHarvests(20 * time.Second) {
+		log.Print("broker: a token refresh was still in flight at the stop; check the slot with pf enroll state")
+	}
 	return 0
 }
 
@@ -525,6 +532,16 @@ func acceptCapped(ctx context.Context, ln net.Listener, max int, what string, se
 		}
 		go func() {
 			defer func() { <-sem }()
+			// A panic in one connection must not stop the daemon. The broker
+			// keeps the key of a sealed store in memory only. Thus a restart
+			// stops each substitution until an operator runs pf unlock again.
+			// The engine recovers each connection in the same way.
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("%s: panic src=%s: %v\n%s", what, c.RemoteAddr(), r, debug.Stack())
+					c.Close()
+				}
+			}()
 			if err := serve(c); err != nil {
 				log.Print(err)
 			}

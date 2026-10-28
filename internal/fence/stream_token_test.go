@@ -9,11 +9,12 @@ import (
 	"testing"
 
 	"pi-fortress/internal/corepolicy"
+	"pi-fortress/internal/tokenrules"
 )
 
 func streamRules(t testing.TB) (*Ctx, *corepolicy.Policy) {
 	t.Helper()
-	re, err := LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
+	re, err := tokenrules.LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +223,7 @@ func TestStreamKeepsTheHostsOwnKind(t *testing.T) {
 	ctx, pol := streamRules(t)
 	ctx.SNI = "api.anthropic.com"
 	ctx.StripCore = true
-	re, err := LoadTokenRules(benchRoot() + "/vm/policy/key_prefixes.rules")
+	re, err := tokenrules.LoadTokenRules(benchRoot() + "/vm/policy/key_prefixes.rules")
 	if err != nil {
 		t.Fatal(err)
 	}

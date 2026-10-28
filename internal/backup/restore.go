@@ -425,7 +425,8 @@ func writeUnder(r *os.Root, rel string, body []byte, mode fs.FileMode) error {
 // other than root. The env files, alert.url (a webhook whose path is its
 // bearer token) and all files named secret are for root alone. Root keeps
 // read and write whatever the archive says, so apply can always read a
-// restored file.
+// restored file. The next apply gives alert.url to its one other reader,
+// the alert sidecar (0640 root:pf-sidecar, vm/pi/apply.sh).
 func restoreMode(name string, archived fs.FileMode) fs.FileMode {
 	ceiling := fs.FileMode(0644)
 	base := path.Base(name)

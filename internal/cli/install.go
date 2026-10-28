@@ -28,6 +28,7 @@ func runInstall(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&in.Agent, "agent", "", "agent-segment interface (default: proposed)")
 	fs.StringVar(&in.House, "house", "", "optional house-segment interface")
 	fs.BoolVar(&in.Yes, "yes", false, "non-interactive: fail rather than prompt if -wan/-agent were not both resolved")
+	fs.StringVar(&in.Journal, "journal", "", "disk: keep the system journal on the disk across reboots; ram: in RAM only (default: ask, or ram without the wizard)")
 	fs.StringVar(&in.Dir, "dir", in.Dir, "live tree")
 	if code, ok := parse(fs, args); !ok {
 		return code

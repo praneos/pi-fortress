@@ -136,7 +136,30 @@ confirmed, deadman rolls back to `prev_version` in the same way as
   changes. To stop the retries, repair `.prev` or run `pf ship confirm`.
 
 In other cases, `pf ship confirm` only removes the pending file and logs
-`confirm`. At its end, `make pi-ship` tells you to run it.
+`confirm`. The row and the output carry the sha of the confirmed
+version. The pending file does not have it, so it comes from the `ok`
+row of the install. At its end, `make pi-ship` tells you to run it.
+
+`make pi-ship` returns after the upload. Then the install runs for some
+minutes and holds `ship.lock`. A `pf ship confirm` that finds the lock
+held prints one line and waits (`-wait`, 45 min by default). An install
+can wait up to 10 min for the apply lock. Then it does a full apply and
+the post-upgrade doctor. `pi-fortress-ship.service` stops it after
+45 min (`TimeoutStartSec`). The install arms the dead-man window only at
+its end. Thus the wait does not use up the window. After the wait, the
+confirm reads the rows that the holder logged:
+
+- `ok`: it confirms only if `ship.pending` names that version and the
+  deadline has not passed.
+- No row (for example, a dead-man run with nothing due): it confirms as
+  usual.
+- `confirm`: another confirm did the work. It exits 0.
+- Any other row (a failed install, `rollback`, `rollback_failed`,
+  `deadman`, `deadman_failed`): it confirms nothing. It prints that row
+  and what `ship.pending` holds now, and exits 1.
+
+If the lock is still held at the end of the wait, the confirm does
+nothing and exits 1. `-wait 0` fails at once.
 
 A successful swap clears any pending file from an earlier upgrade,
 because the swap overwrote its `.prev`. A swap that failed does not

@@ -40,12 +40,16 @@ MemoryDenyWriteExecute=yes
 RestrictAddressFamilies=AF_UNIX AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
 SystemCallErrorNumber=EPERM
-# The kernel asks for no capability for the usbfs calls or for the
-# authorized file: the owner of those files is root. CAP_SYS_ADMIN stays
-# as a margin, because a failure here is silent: the adapter stays in
-# driver-CD mode, and the script still exits 0.
-CapabilityBoundingSet=CAP_SYS_ADMIN
+# No capability. The kernel asks for none for the usbfs calls (the
+# usb_modeswitch eject and driver detach, the usbreset port reset) or for
+# the authorized file. Only the file mode controls them, and root owns
+# those files. Root also owns each file that the script reads. A failure
+# here is silent: the adapter stays in driver-CD mode, and the script
+# still exits 0. Thus each step logs, and pf doctor names a stuck adapter.
+CapabilityBoundingSet=
 AmbientCapabilities=
 
 [Install]

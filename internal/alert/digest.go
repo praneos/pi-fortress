@@ -37,6 +37,11 @@ const (
 	digestSeen = 16
 	// digestMaxState bounds the read of the state file.
 	digestMaxState = 1 << 20
+	// digestNameMax is the longest name that a post shows (postName).
+	digestNameMax = 64
+	// digestHidden is what a post shows for a name that does not have the
+	// shape of a host name.
+	digestHidden = "(not shown)"
 )
 
 // Digest collects the Blocks rows of pf observe (jsonl.BlocksThreat) from
@@ -111,7 +116,10 @@ func (d *Digest) load(now time.Time) {
 	}
 }
 
-// save replaces the state file in one rename.
+// save replaces the state file in one rename. The file has the names of
+// the open window before the redaction of the post. Only the alert service
+// reads it, so it is 0600. A temp file that a stop left is removed first:
+// a new file gets the mode, an old file keeps its own mode.
 func (d *Digest) save() {
 	if d.StatePath == "" {
 		return
@@ -120,8 +128,16 @@ func (d *Digest) save() {
 	if err == nil {
 		tmp := d.StatePath + ".tmp"
 		if err = os.MkdirAll(filepath.Dir(d.StatePath), 0o755); err == nil {
-			if err = os.WriteFile(tmp, append(raw, '\n'), 0o644); err == nil {
-				err = os.Rename(tmp, d.StatePath)
+			_ = os.Remove(tmp)
+			var f *os.File
+			if f, err = os.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600); err == nil {
+				_, err = f.Write(append(raw, '\n'))
+				if cerr := f.Close(); err == nil {
+					err = cerr
+				}
+				if err == nil {
+					err = os.Rename(tmp, d.StatePath)
+				}
 			}
 		}
 	}
@@ -274,17 +290,56 @@ func (d *Digest) render(now time.Time) string {
 				b.WriteString(", ")
 			}
 			if seg == "agent" {
-				b.WriteString(tailer.Printable(redactName(h.Src)) + " -> ")
+				b.WriteString(postName(h.Src) + " -> ")
 			}
-			b.WriteString(tailer.Printable(redactName(h.Dst)))
+			b.WriteString(postName(h.Dst))
 			src := h.Feed
 			if src == "" || src == "local" {
 				src = h.Class
 			}
-			b.WriteString(" (" + tailer.Printable(redactName(src)) + ") x" + strconv.Itoa(h.N))
+			b.WriteString(" (" + postName(src) + ") x" + strconv.Itoa(h.N))
 		}
 	}
 	return b.String()
+}
+
+// postName is a name as a post shows it. Only a name with the shape of a
+// host name (hostShaped) is shown, after redactName. Any other name is
+// digestHidden. Thus a name cannot put a scheme, a port, a path or markup
+// in a post, and no sink can make a link from it. A name longer than
+// digestNameMax keeps its right end, which has the zone, after "...". The
+// fixed words of pf observe for blocks that the resolver did not log stay.
+func postName(s string) string {
+	switch s {
+	case "(not logged)", "(untracked)":
+		return s
+	}
+	if !hostShaped(s) {
+		return digestHidden
+	}
+	if r := redactName(s); r != s {
+		return r
+	}
+	if len(s) > digestNameMax {
+		return "..." + s[len(s)-(digestNameMax-3):]
+	}
+	return s
+}
+
+// hostShaped tells whether s has only ASCII letters, digits, "-", "_" and
+// ".". An IPv4 address has this shape too.
+func hostShaped(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range []byte(s) {
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '-', c == '_', c == '.':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // redactName gives a name that can go in a post. An agent selects the

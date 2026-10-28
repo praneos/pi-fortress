@@ -271,3 +271,84 @@ func TestNeverBlockIPsDropsFeedAddresses(t *testing.T) {
 		t.Fatalf("report = %q, want %q", report, want)
 	}
 }
+
+// FreshFor serves a feed from a copy that is younger than FreshFor, with
+// no download. All other copies get the usual download: an old copy, a
+// copy with a time in the future, a copy that does not parse, a copy of a
+// feed with a different URL, and each copy when FreshFor is zero.
+func TestFreshCopySkipsTheDownload(t *testing.T) {
+	base := time.Date(2026, 10, 28, 4, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name     string
+		fresh    time.Duration
+		at       time.Duration // clock of the second run, after the copy
+		damage   bool          // the copy loses its stamp
+		otherURL bool          // the feed points at a new URL
+		reuse    bool
+	}{
+		{name: "young copy", fresh: 30 * time.Minute, at: 10 * time.Minute, reuse: true},
+		{name: "old copy", fresh: 30 * time.Minute, at: 30 * time.Minute},
+		{name: "copy from the future", fresh: 30 * time.Minute, at: -time.Minute},
+		{name: "damaged copy", fresh: 30 * time.Minute, at: time.Minute, damage: true},
+		{name: "new URL", fresh: 30 * time.Minute, at: time.Minute, otherURL: true},
+		{name: "zero", at: time.Minute},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			body := "a.example\nb.example\n"
+			var boom error
+			clock := base
+			f, out := staleDir(t, &body, &boom, func() time.Time { return clock })
+			if _, _, n, err := f.Run(); err != nil || n != 2 {
+				t.Fatalf("first run: %d domains, %v", n, err)
+			}
+			copyPath := filepath.Join(out, "feeds", "d.list")
+			if c.damage {
+				if err := os.WriteFile(copyPath, []byte("a.example\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if c.otherURL {
+				spec := `{"user_agent":"pf-test","timeout_sec":2,"feeds":[{"id":"d","kind":"domains","format":"plain","url":"https://feed.test/new"}]}`
+				if err := os.WriteFile(filepath.Join(f.PolicyDir, "sources.json"), []byte(spec), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Chtimes(copyPath, base, base); err != nil {
+				t.Fatal(err)
+			}
+			gets := 0
+			get := f.Get
+			f.Get = func(u, ua string, d time.Duration) (string, error) {
+				gets++
+				return get(u, ua, d)
+			}
+			f.FreshFor = c.fresh
+			clock = base.Add(c.at)
+			body = "c.example\n"
+			report, _, n, err := f.Run()
+			if err != nil {
+				t.Fatal(err, report)
+			}
+			line := strings.Join(report, "\n")
+			list := testsupport.ReadFile(t, filepath.Join(out, "blacklist.domains"))
+			if c.reuse {
+				if gets != 0 || n != 2 || list != "a.example\nb.example\n" {
+					t.Fatalf("%d downloads, %d domains %q, want the copy and no download; report %q", gets, n, list, line)
+				}
+				if !strings.Contains(line, "OK d: 2 domains (last good 10m ago: younger than 30m0s, not downloaded again)") {
+					t.Fatalf("report %q", line)
+				}
+				if st, err := os.Stat(copyPath); err != nil || !st.ModTime().Equal(base) {
+					t.Fatalf("the reuse wrote the copy again: %v %v", st.ModTime(), err)
+				}
+				return
+			}
+			if gets != 1 || n != 1 || list != "c.example\n" {
+				t.Fatalf("%d downloads, %d domains %q, want one download of the new list; report %q", gets, n, list, line)
+			}
+			if strings.Contains(line, "not downloaded again") {
+				t.Fatalf("report %q", line)
+			}
+		})
+	}
+}

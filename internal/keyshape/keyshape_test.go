@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"pi-fortress/internal/fence"
+	"pi-fortress/internal/tokenrules"
 )
 
 func TestRule(t *testing.T) {
@@ -48,12 +48,12 @@ func TestTail(t *testing.T) {
 }
 
 func TestHeads(t *testing.T) {
-	rules := []fence.Rule{{Name: "a", Expr: `\bAKIA[A-Z0-9]{16}\b`}, {Name: "g", Expr: `ghp_[A-Za-z0-9]{36,}`}}
+	rules := []tokenrules.Rule{{Name: "a", Expr: `\bAKIA[A-Z0-9]{16}\b`}, {Name: "g", Expr: `ghp_[A-Za-z0-9]{36,}`}}
 	heads, headless := Heads(rules)
 	if headless != "" || !slices.Equal(heads, []string{"pf_", "akia", "ghp_"}) {
 		t.Fatalf("heads %q, headless %q", heads, headless)
 	}
-	heads, headless = Heads(append(rules, fence.Rule{Name: "h", Expr: `[A-Z]{4}x`}, fence.Rule{Name: "i", Expr: `[0-9]x`}))
+	heads, headless = Heads(append(rules, tokenrules.Rule{Name: "h", Expr: `[A-Z]{4}x`}, tokenrules.Rule{Name: "i", Expr: `[0-9]x`}))
 	if heads != nil || headless != "h" {
 		t.Fatalf("heads %q, headless %q", heads, headless)
 	}
@@ -100,7 +100,7 @@ func eachRun(all *regexp.Regexp, name string) bool {
 
 func shippedRules(t testing.TB) (*regexp.Regexp, []string) {
 	t.Helper()
-	tr, err := fence.LoadTokenRules("../../vm/policy/key_prefixes.rules")
+	tr, err := tokenrules.LoadTokenRules("../../vm/policy/key_prefixes.rules")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestMatchSameAsEachRunOtherRules(t *testing.T) {
 		if err := os.WriteFile(path, []byte(rules), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		tr, err := fence.LoadTokenRules(path)
+		tr, err := tokenrules.LoadTokenRules(path)
 		if err != nil {
 			t.Fatal(err)
 		}

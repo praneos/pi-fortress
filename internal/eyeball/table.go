@@ -33,6 +33,14 @@ const builtPrefix = "# built "
 // damaged or hostile file before it uses the memory of the broker.
 const MaxRanges = 2_000_000
 
+// MaxRangeAddrs is the largest number of addresses in one range of the
+// table: one /8. In the ip2asn feed (October 2026), the widest range of an
+// eyeball network is one /8, also after the join of adjacent ranges of the
+// same ASN. Only some networks that are not eyeball networks announce more
+// in one run. A wider range would make a large part of the address space
+// an eyeball network. pf fetch drops it, and Parse refuses a table with it.
+const MaxRangeAddrs = 1 << 24
+
 // Range is one IPv4 range, first and last address included, and the ASN
 // that announces it. The table keeps the addresses as uint32: 12 bytes for
 // each range, not the 48 bytes of two netip.Addr values and an ASN.
@@ -120,6 +128,11 @@ func ParseRange(first, last, asn string) (Range, bool) {
 	return r, true
 }
 
+// Wide reports whether r has more than MaxRangeAddrs addresses.
+func (r Range) Wide() bool {
+	return uint64(r.Last)-uint64(r.First)+1 > MaxRangeAddrs
+}
+
 // String is the line of the range in a table: "first last asn".
 func (r Range) String() string {
 	return u32Addr(r.First).String() + " " + u32Addr(r.Last).String() + " " + strconv.FormatUint(uint64(r.ASN), 10)
@@ -148,7 +161,8 @@ func Normalize(rs []Range) []Range {
 }
 
 // Select keeps the ranges whose ASN is in keep, and joins the adjacent
-// ranges that remain (Normalize).
+// ranges that remain (Normalize). It drops a range that is Wide after the
+// join.
 func Select(rs []Range, keep func(asn uint32) bool) []Range {
 	var out []Range
 	for _, r := range rs {
@@ -156,10 +170,20 @@ func Select(rs []Range, keep func(asn uint32) bool) []Range {
 			out = append(out, r)
 		}
 	}
-	return Normalize(out)
+	out = Normalize(out)
+	n := 0
+	for _, r := range out {
+		if !r.Wide() {
+			out[n] = r
+			n++
+		}
+	}
+	return out[:n]
 }
 
-// Write writes a table. rs must be the output of Normalize or Select.
+// Write writes a table. rs must be the output of Normalize or Select. The
+// built time is to the second: Write drops a fraction of a second, and
+// Parse refuses one.
 func Write(w io.Writer, built time.Time, rs []Range) error {
 	bw := bufio.NewWriter(w)
 	fmt.Fprintf(bw, "%s\n%s%s\n", Magic, builtPrefix, built.UTC().Format(time.RFC3339))
@@ -201,6 +225,13 @@ func Parse(r io.Reader) (*Table, error) {
 				if err != nil {
 					return nil, fmt.Errorf("eyeball table: line %d: %w", line, err)
 				}
+				// Write keeps the time to the second, and pf fetch never
+				// writes a fraction. Parse refuses a fraction of a second.
+				// Thus a table that Parse accepts gives the same Built time
+				// after Write.
+				if when.Nanosecond() != 0 {
+					return nil, fmt.Errorf("eyeball table: line %d: built time has a fraction of a second", line)
+				}
 				t.Built = when.UTC()
 			}
 			continue
@@ -212,6 +243,9 @@ func Parse(r io.Reader) (*Table, error) {
 		rg, ok := ParseRange(f[0], f[1], f[2])
 		if !ok {
 			return nil, fmt.Errorf("eyeball table: line %d: not a range", line)
+		}
+		if rg.Wide() {
+			return nil, fmt.Errorf("eyeball table: line %d: range has more than %d addresses", line, MaxRangeAddrs)
 		}
 		if n := len(t.ranges); n > 0 && rg.First <= t.ranges[n-1].Last {
 			return nil, fmt.Errorf("eyeball table: line %d: not sorted, or overlaps the line before", line)

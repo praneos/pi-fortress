@@ -42,6 +42,20 @@ harden_put() {
 # uplink, announced by one line on stderr. apply.sh enables forwarding at
 # runtime after it loads our ruleset. The nftables.service drop-in that it
 # installs does the same at boot. Thus the two can never be out of sync again.
+# io_uring and MPTCP are off. No pf daemon and no service of the box uses
+# them, and each is a large kernel interface that a process can reach.
+# net.mptcp.enabled is per network namespace: a new namespace starts with
+# MPTCP on. The units set RestrictNamespaces=yes, so a daemon cannot make
+# one. The pf binary also listens and dials with plain TCP (go.mod sets
+# multipathtcp=0), for a kernel where this file is not loaded yet.
+# User namespaces are off (user.max_user_namespaces=0). A process that
+# makes a user namespace can then make a new network namespace, and that
+# namespace starts with the kernel defaults (for example MPTCP on). No pf
+# unit needs user namespaces: all have RestrictNamespaces=yes, and none
+# sets PrivateUsers=.
+# A key that the kernel does not have (yama.ptrace_scope on the Raspberry
+# Pi kernel, io_uring_disabled before 6.6) is skipped: sysctl -e here,
+# and systemd-sysctl at boot logs it and goes on.
 harden_sysctl_write() {
   cat >"${HARDEN_WORK}/99-pi-fortress.conf" <<'EOF'
 net.ipv4.ip_forward=0
@@ -70,6 +84,9 @@ net.ipv4.conf.default.arp_announce=2
 kernel.kptr_restrict=2
 kernel.dmesg_restrict=1
 kernel.unprivileged_bpf_disabled=2
+kernel.io_uring_disabled=2
+net.mptcp.enabled=0
+user.max_user_namespaces=0
 kernel.yama.ptrace_scope=2
 fs.protected_symlinks=1
 fs.protected_hardlinks=1

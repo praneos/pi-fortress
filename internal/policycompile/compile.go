@@ -20,7 +20,7 @@ import (
 	"pi-fortress/internal/base"
 
 	"pi-fortress/internal/corepolicy"
-	"pi-fortress/internal/fence"
+	"pi-fortress/internal/tokenrules"
 )
 
 var (
@@ -215,17 +215,6 @@ func (s Summary) Line() string {
 		line += skipLine(s.WidePrefixes, fmt.Sprintf("wider than /%d (min_ip_prefix)", s.FeedFloor))
 	}
 	return line
-}
-
-func StripLine(raw string) string {
-	line := raw
-	if i := strings.Index(line, "#"); i >= 0 {
-		line = line[:i]
-	}
-	if i := strings.Index(line, ";"); i >= 0 {
-		line = line[:i]
-	}
-	return strings.TrimSpace(line)
 }
 
 func parsePrefix4(token string) (netip.Prefix, bool) {
@@ -548,7 +537,7 @@ func asciiWarnings(policyDir string) ([]string, error) {
 			return nil, err
 		}
 		for i, line := range strings.Split(string(raw), "\n") {
-			if token := StripLine(line); !corepolicy.IsASCII(token) {
+			if token := base.StripLine(line); !corepolicy.IsASCII(token) {
 				warn = append(warn, fmt.Sprintf("%s line %d: %q is skipped (%s)", name, i+1, token, corepolicy.ASCIIHint(token)))
 			}
 		}
@@ -754,24 +743,22 @@ func CoalesceIPv4(items []string) []string {
 		}
 		nets = append(nets, p)
 	}
+	// Sort by address, then by length. A prefix that contains a second
+	// prefix comes before it. The kept prefixes do not overlap, so only
+	// the last kept prefix can contain the next prefix. One pass removes
+	// each prefix that a different prefix contains, and each duplicate.
 	sort.Slice(nets, func(i, j int) bool {
-		if nets[i].Bits() != nets[j].Bits() {
-			return nets[i].Bits() < nets[j].Bits()
+		if c := nets[i].Addr().Compare(nets[j].Addr()); c != 0 {
+			return c < 0
 		}
-		return nets[i].Addr().Compare(nets[j].Addr()) < 0
+		return nets[i].Bits() < nets[j].Bits()
 	})
 	var kept []netip.Prefix
 	for _, n := range nets {
-		covered := false
-		for _, prev := range kept {
-			if prefixContains(prev, n) {
-				covered = true
-				break
-			}
+		if len(kept) > 0 && prefixContains(kept[len(kept)-1], n) {
+			continue
 		}
-		if !covered {
-			kept = append(kept, n)
-		}
+		kept = append(kept, n)
 	}
 	collapsed := collapsePrefixes(kept)
 	out := make([]string, 0, len(collapsed))
@@ -824,8 +811,8 @@ func checkKeyRulesLocal(path string) error {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	tr, err := fence.LoadTokenRules(path)
-	if errors.Is(err, fence.ErrNoRules) {
+	tr, err := tokenrules.LoadTokenRules(path)
+	if errors.Is(err, tokenrules.ErrNoRules) {
 		return nil
 	}
 	if err == nil {
@@ -985,7 +972,7 @@ func loadTokens(path, kind string) ([]string, []badLine, error) {
 	n := 0
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		n++
-		token := StripLine(line)
+		token := base.StripLine(line)
 		if token == "" {
 			continue
 		}
@@ -1093,31 +1080,6 @@ func dnsLines(names []string) string {
 		lines = append(lines, "address=/"+name+"/0.0.0.0")
 	}
 	return strings.Join(lines, "\n") + "\n"
-}
-
-// MapHouseMark is the line in the DomainMap between the names that all
-// segments get (blacklist.domains and its feeds) and the names of the
-// house lists only. The line has no tab, so ParseMap skips it. pf observe
-// reads it to tell a house feed or house.domains from a shared feed or
-// blacklist.domains, because both halves label an operator entry "local".
-const MapHouseMark = "# house"
-
-// ParseMap reads "<item>\t<feed>" lines. This is the format of
-// generated/feeds.map and of the compiled DomainMap and IPMap. It skips
-// blank and malformed lines. The first feed named for an item wins.
-func ParseMap(text string) map[string]string {
-	m := map[string]string{}
-	for line := range strings.SplitSeq(text, "\n") {
-		item, feed, ok := strings.Cut(strings.TrimSpace(line), "\t")
-		item, feed = strings.TrimSpace(item), strings.TrimSpace(feed)
-		if !ok || item == "" || feed == "" {
-			continue
-		}
-		if _, dup := m[item]; !dup {
-			m[item] = feed
-		}
-	}
-	return m
 }
 
 // mapLines gives one "<item>\t<feed>" line for each item. An item in local
@@ -1336,7 +1298,7 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	// then, all items read as local.
 	feeds := map[string]string{}
 	if raw, err := os.ReadFile(filepath.Join(policyDir, "generated", "feeds.map")); err == nil {
-		feeds = ParseMap(string(raw))
+		feeds = base.ParseMap(string(raw))
 	}
 	if err := writeFile(out.IPMap, mapLines(ipKept, feeds, set(localIPs))); err != nil {
 		return Summary{}, err
@@ -1388,7 +1350,7 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
-	if err := writeFile(out.DomainMap, mapLines(domainFinal, feeds, set(localDomains))+MapHouseMark+"\n"+mapLines(houseFinal, feeds, houseLocal)+mapLines(houseVPNFinal, feeds, nil)); err != nil {
+	if err := writeFile(out.DomainMap, mapLines(domainFinal, feeds, set(localDomains))+base.MapHouseMark+"\n"+mapLines(houseFinal, feeds, houseLocal)+mapLines(houseVPNFinal, feeds, nil)); err != nil {
 		return Summary{}, err
 	}
 

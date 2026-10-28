@@ -121,10 +121,39 @@ func TestDigestRedactsCredentialShapedNames(t *testing.T) {
 	}
 	d := &Digest{Every: time.Hour, Stderr: io.Discard}
 	d.add(blocksRow(t0, "agent", map[string]int{jsonl.BlockSecurity: 1},
+		jsonl.BlockHit{Class: jsonl.BlockSecurity, Feed: "f", Src: "10.77.0.10", Dst: gh + ".evil.example", N: 2},
 		jsonl.BlockHit{Class: jsonl.BlockSecurity, Feed: "f", Src: "10.77.0.10", Dst: gh + ".evil.example\r\nforged", N: 1}), t0)
 	msg := d.due(t0.Add(time.Hour))
-	if strings.Contains(msg, gh) || strings.ContainsAny(msg, "\r") || !strings.Contains(msg, "(redacted).evil.example") {
+	if strings.Contains(msg, gh) || strings.ContainsAny(msg, "\r") || strings.Contains(msg, "forged") ||
+		!strings.Contains(msg, "(redacted).evil.example (f) x2") || !strings.Contains(msg, "(not shown) (f) x1") {
 		t.Fatalf("post: %q", msg)
+	}
+}
+
+// The digest shows a name only when it has the shape of a host name. Any
+// other name is a fixed word, so no scheme, port, path or markup gets into
+// a post. A long name keeps its right end, cut to 64 characters.
+func TestDigestShowsHostShapedNamesOnly(t *testing.T) {
+	long := strings.Repeat("abcdefghij.", 12) + "blocked.example"
+	d := &Digest{Every: time.Hour, Stderr: io.Discard}
+	d.add(blocksRow(t0, "agent", map[string]int{jsonl.BlockSecurity: 7, jsonl.BlockOther: 1},
+		jsonl.BlockHit{Class: jsonl.BlockSecurity, Feed: "f", Src: "10.77.0.10", Dst: "https://login.example/reset", N: 7},
+		jsonl.BlockHit{Class: jsonl.BlockSecurity, Feed: "f", Src: "10.77.0.10", Dst: "host.example:8443", N: 6},
+		jsonl.BlockHit{Class: jsonl.BlockSecurity, Feed: "f", Src: "10.77.0.10", Dst: "caf\u00e9.example", N: 5},
+		jsonl.BlockHit{Class: jsonl.BlockSecurity, Feed: "f", Src: "10.77.0.10", Dst: long, N: 4},
+		jsonl.BlockHit{Class: jsonl.BlockOther, Src: "(untracked)", Dst: "(not logged)", N: 1}), t0)
+	msg := d.due(t0.Add(time.Hour))
+	_, top, _ := strings.Cut(msg, "top: ")
+	if strings.ContainsAny(top, ":/\u00e9") || strings.Count(top, "(not shown)") != 3 {
+		t.Fatalf("post: %q", msg)
+	}
+	if !strings.Contains(msg, "(untracked) -> (not logged) (other) x1") {
+		t.Fatalf("the fixed words of pf observe changed: %q", msg)
+	}
+	i := strings.Index(msg, "...")
+	j := strings.Index(msg, "blocked.example (f) x4")
+	if i < 0 || j < 0 || j+len("blocked.example")-i != 64 || strings.Contains(msg, long) {
+		t.Fatalf("long name not cut to 64 characters: %q", msg)
 	}
 }
 
@@ -155,6 +184,33 @@ func TestDigestSurvivesARestart(t *testing.T) {
 	raw, err := os.ReadFile(state)
 	if err != nil || json.Unmarshal(raw, &st) != nil || !st.Start.Equal(t0.Add(time.Hour)) || len(st.Counts) != 0 {
 		t.Fatalf("state: %s %v", raw, err)
+	}
+}
+
+// The state file has the names of the open window, so only its owner
+// reads it. A file or a temp file from an older version with a wider mode
+// does not keep that mode.
+func TestDigestStateIsOwnerOnly(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "digest.json")
+	for _, p := range []string{state, state + ".tmp"} {
+		if err := os.WriteFile(p, []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := &Digest{Every: time.Hour, StatePath: state, Stderr: io.Discard}
+	d.load(t0)
+	d.add(blocksRow(t0.Add(time.Minute), "agent", map[string]int{jsonl.BlockSecurity: 1},
+		jsonl.BlockHit{Class: jsonl.BlockSecurity, Dst: "evil.example", N: 1}), t0.Add(time.Minute))
+	st, err := os.Stat(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := st.Mode().Perm(); m != 0o600 {
+		t.Fatalf("mode %v, want 0600", m)
+	}
+	if raw, _ := os.ReadFile(state); !strings.Contains(string(raw), "evil.example") {
+		t.Fatalf("state: %s", raw)
 	}
 }
 

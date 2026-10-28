@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"pi-fortress/internal/placeholder"
 )
 
 var refPlaceholder = regexp.MustCompile(`(?i:pf)_([0-9a-fA-F]{16})_([A-Za-z][A-Za-z0-9_]*)`)
@@ -14,7 +16,7 @@ func FuzzFindPlaceholderSpans(f *testing.F) {
 	f.Add("pf_a1b2c3d4e5f67890_CLAUDE_OAT")
 	f.Add("xpf_A1B2C3D4E5F67890_K;pf_a1b2c3d4e5f67890_Xx pf_")
 	f.Fuzz(func(t *testing.T, s string) {
-		got := FindPlaceholderSpans([]byte(s))
+		got := placeholder.FindPlaceholderSpans([]byte(s))
 		want := refPlaceholder.FindAllStringIndex(s, -1)
 		if len(got) != len(want) {
 			t.Fatalf("%q: %v want %v", s, got, want)

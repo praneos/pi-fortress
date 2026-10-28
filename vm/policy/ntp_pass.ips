@@ -15,6 +15,15 @@
 #
 # Each block below is the A records of the names, resolved 2026-10-28.
 # One /32 per address: no operator prefix is confirmed for these servers.
+#
+# List only addresses in space that the server's operator holds. Do not
+# list an address from a cloud provider's shared pool: the provider can
+# give it to a different customer, and this list then lets a segment
+# reach that customer on TCP 4460.
+#
+# Not listed: time.windows.com. Its address is in such a pool. A Windows
+# device on an NTP=pass segment sends its NTP to the gateway, as for each
+# other address that is not here. NTS to it is not possible.
 
 # Cloudflare: time.cloudflare.com (NTP and NTS)
 162.159.200.1
@@ -63,9 +72,6 @@
 17.253.18.99
 17.253.18.131
 17.253.60.37
-
-# Microsoft: time.windows.com (NTP)
-40.81.94.65
 
 # NIST: time.nist.gov (NTP)
 132.163.97.1

@@ -45,7 +45,7 @@ func TestABoundUpstreamGoesOnlyThroughItsInterface(t *testing.T) {
 	u := udpExchanger{addr: up.addr(), iface: "lo"}
 	if _, err := u.exchange(ctx, wire(t, "bound.test", dnsmessage.TypeA, 0x1111)); err != nil {
 		if errors.Is(err, syscall.EPERM) {
-			t.Skip("SO_BINDTODEVICE needs CAP_NET_RAW on this kernel; pf dns has it, this test process does not")
+			t.Skip("this kernel (older than 5.7) refuses SO_BINDTODEVICE to a process with no CAP_NET_RAW")
 		}
 		t.Fatalf("a socket bound to lo could not reach an upstream on lo: %v", err)
 	}
