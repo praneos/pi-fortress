@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -207,6 +208,160 @@ func TestParseASNFormats(t *testing.T) {
 	}
 	if _, err := parseASNs(Feed{Format: "peeringdb"}, "<html>"); err == nil {
 		t.Error("peeringdb html parsed")
+	}
+}
+
+// heapBytes gives the bytes that fn allocates on the heap.
+func heapBytes(fn func()) uint64 {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	fn()
+	runtime.ReadMemStats(&after)
+	return after.TotalAlloc - before.TotalAlloc
+}
+
+// TestEyeballPeeringDBStreams: the PeeringDB answer is read one network at
+// a time. A list with more networks than maxASNs is refused. The
+// info_types list of a network is not kept, so a long list does not use
+// memory for each item.
+func TestEyeballPeeringDBStreams(t *testing.T) {
+	pdb := Feed{Format: "peeringdb"}
+	over := `{"data":[{}` + strings.Repeat(",{}", maxASNs) + `]}`
+	if _, err := parseASNs(pdb, over); err == nil {
+		t.Errorf("%d networks parsed, want a refusal", maxASNs+1)
+	}
+	got, err := parseASNs(pdb, `{"meta":{"a":[1,{"b":null}]},"data":[{"asn":64500,"info_types":["NSP","Cable/DSL/ISP"]},null,{"asn":64501,"info_types":null}],"c":"d"}`)
+	if err != nil || strings.Join(got, " ") != "+64500" {
+		t.Errorf("other keys: %q %v", got, err)
+	}
+	for _, bad := range []string{`{"data":[]} x`, `{"data":{}}`, `{"data":[{"asn":"64500"}]}`, `{"data":[{"info_types":"Cable/DSL/ISP"}]}`, `{"data":[{}`} {
+		if got, err := parseASNs(pdb, bad); err == nil {
+			t.Errorf("%s parsed: %q", bad, got)
+		}
+	}
+	long := `{"data":[{"asn":64500,"info_types":[` + strings.Repeat(`"",`, 1<<20) + `"Cable/DSL/ISP"]}]}`
+	var items []string
+	n := heapBytes(func() { items, err = parseASNs(pdb, long) })
+	if err != nil || strings.Join(items, " ") != "+64500" {
+		t.Fatalf("long info_types: %q %v", items, err)
+	}
+	if n > 8*uint64(len(long)) {
+		t.Errorf("a body of %d bytes allocated %d bytes", len(long), n)
+	}
+}
+
+// TestEyeballASNListLines: an asn list is read line by line. Many empty
+// lines use little memory, and a line longer than the line cap is refused.
+func TestEyeballASNListLines(t *testing.T) {
+	asn := Feed{Format: "asn"}
+	body := "AS64496 home\n" + strings.Repeat("\n", 4<<20)
+	var items []string
+	var err error
+	n := heapBytes(func() { items, err = parseASNs(asn, body) })
+	if err != nil || strings.Join(items, " ") != "+64496" {
+		t.Fatalf("empty lines: %q %v", items, err)
+	}
+	if n > uint64(len(body))/4 {
+		t.Errorf("a body of %d bytes allocated %d bytes", len(body), n)
+	}
+	if got, err := parseASNs(asn, "AS64496\n"+strings.Repeat("1 ", 1<<19)+"\n"); err == nil {
+		t.Errorf("a line of 1 MiB parsed: %d items", len(got))
+	}
+}
+
+// TestEyeballCSVRecordCap: a bgp.tools CSV record longer than the line cap
+// is refused: a row of many fields, and a quoted field that joins many
+// lines into one record. The cap of one record, not the size of the body,
+// sets the memory of the parse.
+func TestEyeballCSVRecordCap(t *testing.T) {
+	for name, body := range map[string]string{
+		"commas":          "asn,class\nAS64496,Eyeball\n" + strings.Repeat(",", 1<<20) + "\n",
+		"quoted newlines": "asn,class\nAS64496,Eyeball\n" + strings.Repeat("\"a\na\",", 1<<18) + "\n",
+	} {
+		var err error
+		n := heapBytes(func() { _, err = parseASNs(Feed{Format: "bgptools"}, body) })
+		if err == nil {
+			t.Errorf("%s: parsed", name)
+		}
+		if n > 16<<20 {
+			t.Errorf("%s: a body of %d bytes allocated %d bytes", name, len(body), n)
+		}
+	}
+}
+
+// TestEyeballBodyCapPerFormat: each eyeball format has its own download
+// cap. A PeeringDB answer of 17 MiB is refused; a ranges feed of 20 MiB is
+// read.
+func TestEyeballBodyCapPerFormat(t *testing.T) {
+	pad := strings.Repeat("\n", 20<<20)
+	bodies := map[string]string{
+		eyePDBURL:    eyePDB + pad[:17<<20],
+		eyeRangesURL: eyeRanges + pad,
+	}
+	f := &Fetcher{Get: func(u, _ string, _ time.Duration) (string, error) { return bodies[u], nil }}
+	var report []string
+	if _, _, ok := f.eyeballItems(t.TempDir(), "", 0, Feed{ID: "pdb", Kind: kindASNs, Format: "peeringdb", URL: eyePDBURL}, 0, &report); ok {
+		t.Errorf("a PeeringDB answer of 17 MiB was read: %q", report)
+	}
+	if _, _, ok := f.eyeballItems(t.TempDir(), "", 0, Feed{ID: "ranges", Kind: kindRanges, Format: "ip2asn", URL: eyeRangesURL}, 100, &report); !ok {
+		t.Errorf("a ranges feed of 20 MiB was refused: %q", report)
+	}
+}
+
+// TestEyeballFailureKeepsBlocklistCommit: pf fetch writes the blocklist
+// before it gets the eyeball feeds. Thus a run that stops in the eyeball
+// step still leaves the new blocklist. At the end of the run, fetch.report
+// has the eyeball lines, and the last-good copies of all feeds stay.
+func TestEyeballFailureKeepsBlocklistCommit(t *testing.T) {
+	dir := t.TempDir()
+	for _, n := range []string{"never_block.domains", "never_block.ips", "house_never_block.domains"} {
+		if err := os.WriteFile(filepath.Join(dir, n), nil, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const blockURL = "https://block.test/domains"
+	spec := `{"feeds":[{"id":"d","kind":"domains","url":"` + blockURL + `"}],
+"eyeball":{"ranges":{"id":"ranges","format":"ip2asn","url":"` + eyeRangesURL + `"},
+ "asns":[{"id":"pdb","format":"peeringdb","url":"` + eyePDBURL + `"}]}}`
+	if err := os.WriteFile(filepath.Join(dir, "sources.json"), []byte(spec), 0644); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "generated")
+	atEyeball := ""
+	f := &Fetcher{PolicyDir: dir, OutDir: out, Get: func(u, _ string, _ time.Duration) (string, error) {
+		switch u {
+		case blockURL:
+			return "fresh.example\n", nil
+		case eyePDBURL:
+			raw, _ := os.ReadFile(filepath.Join(out, "blacklist.domains"))
+			atEyeball = string(raw)
+			return `{"data":[{}` + strings.Repeat(",{}", maxASNs) + `]}`, nil
+		case eyeRangesURL:
+			return eyeRanges, nil
+		}
+		return "", errors.New("no such feed")
+	}}
+	report, _, nDoms, err := f.Run()
+	if err != nil || nDoms != 1 {
+		t.Fatalf("err %v, domains %d, report %q", err, nDoms, report)
+	}
+	if atEyeball != "fresh.example\n" {
+		t.Errorf("blocklist at the eyeball fetch: %q, want the new list", atEyeball)
+	}
+	rep, err := os.ReadFile(filepath.Join(out, "fetch.report"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range []string{"OK d: 1 domains", "OK ranges: 6 asn ranges", "FAIL pdb: does not parse", "FAIL eyeball: no table built"} {
+		if !strings.Contains(string(rep), line) {
+			t.Errorf("fetch.report has no %q:\n%s", line, rep)
+		}
+	}
+	for _, id := range []string{"d", "ranges"} {
+		if _, err := os.Stat(filepath.Join(out, "feeds", id+".list")); err != nil {
+			t.Errorf("last-good copy of %s: %v", id, err)
+		}
 	}
 }
 

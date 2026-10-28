@@ -838,11 +838,6 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 			}
 		}
 	}
-	eyeText := f.runEyeball(spec, outDir, ua, timeout, seen, &report)
-	pruneCache(outDir, seen)
-	if err := commitEyeball(outDir, eyeText); err != nil {
-		report = append(report, "FAIL eyeball: "+err.Error())
-	}
 	ipOut := capShare(ips, maxIPs, cutIPs, "ips", &report)
 	domOut := capShare(domains, maxDoms, cutDoms, "domains", &report)
 	houseOut := capShare(houseDomains, maxDoms, cutHouse, house.Name+" domains", &report)
@@ -857,6 +852,7 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 		// Lists stay as they were. Only the report records the outage,
 		// so the Feeds screen does not show the OK lines of yesterday.
 		_ = commit(outDir, []struct{ name, text string }{{"fetch.report", repText}})
+		f.eyeballAfterCommit(spec, outDir, ua, timeout, seen, &report)
 		return report, 0, 0, fmt.Errorf("all feeds failed")
 	}
 	sampleText := ""
@@ -878,6 +874,7 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 	if err := commit(outDir, files); err != nil {
 		return report, 0, 0, err
 	}
+	f.eyeballAfterCommit(spec, outDir, ua, timeout, seen, &report)
 	return report, len(ipOut), len(domOut), nil
 }
 
