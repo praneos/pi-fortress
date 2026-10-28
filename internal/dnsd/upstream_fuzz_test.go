@@ -18,6 +18,7 @@ import (
 //     has room for;
 //   - negTTL gives a TTL over maxNegTTL, or accepts a reply with an
 //     address;
+//   - aRecords accepts an A record whose RDLENGTH is not 4;
 //   - aRecords gives an address whose owner name chainNames does not give.
 //     The forwarder judges the names of chainNames and admits the
 //     addresses of aRecords, so an owner outside that list is an address
@@ -60,6 +61,13 @@ func FuzzUpstreamReply(f *testing.F) {
 			for _, o := range aOwners(reply) {
 				if o != "" && !judged[o] {
 					t.Fatalf("address of %q is not in the chain %q", o, names)
+				}
+			}
+		}
+		if addrsOK {
+			for _, n := range aLengths(reply) {
+				if n != 4 {
+					t.Fatalf("aRecords accepted an A record with RDLENGTH %d", n)
 				}
 			}
 		}
@@ -175,6 +183,28 @@ func aOwners(msg []byte) []string {
 		}
 		if h.Type == dnsmessage.TypeA {
 			out = append(out, strings.TrimSuffix(h.Name.String(), "."))
+		}
+		if p.SkipAnswer() != nil {
+			return out
+		}
+	}
+}
+
+// aLengths is the RDLENGTH of each A record in the answer section. It
+// stops where the section stops parsing.
+func aLengths(msg []byte) []uint16 {
+	var p dnsmessage.Parser
+	if _, err := p.Start(msg); err != nil || p.SkipAllQuestions() != nil {
+		return nil
+	}
+	var out []uint16
+	for {
+		h, err := p.AnswerHeader()
+		if err != nil {
+			return out
+		}
+		if h.Type == dnsmessage.TypeA {
+			out = append(out, h.Length)
 		}
 		if p.SkipAnswer() != nil {
 			return out
