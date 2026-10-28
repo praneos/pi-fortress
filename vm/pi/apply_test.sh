@@ -3325,6 +3325,36 @@ for _u in "${here}"/*.service; do
   grep -qE '^InaccessiblePaths=(.* )?-/var/lib/pi-fortress/www( |$)' "${_u}" ||
     fail "$(basename "${_u}") can read the claim codes in /var/lib/pi-fortress/www"
 done
+# The engine and www read no log, no observe state, no webhook URL and no
+# house reservation. Each of these is optional ("-"): a box with no
+# webhook or no house has no alert.url or house.hosts.
+for _u in pf-engine www; do
+  for _p in /var/log/pi-fortress /var/lib/pi-fortress/observe /etc/pi-fortress/alert.url /etc/pi-fortress/house.hosts; do
+    grep -qE "^InaccessiblePaths=(.* )?-${_p}( |\$)" "${here}/${_u}.service" ||
+      fail "${_u}.service does not hide ${_p}"
+  done
+  grep -qE '^ReadWritePaths=.*/var/log' "${here}/${_u}.service" &&
+    fail "${_u}.service writes the log directory that it hides"
+done
+# alert.url is 0640 root:pf-sidecar, in /etc/pi-fortress and in the policy
+# tree. Only alert.service gets the pf-sidecar group. monitor runs as the
+# same user, and does not get it.
+grep -qxF '  getent group pf-sidecar >/dev/null || groupadd --system pf-sidecar' "${apply}" ||
+  fail "apply.sh does not make the pf-sidecar group"
+grep -qF 'install -m 0640 -o root -g pf-sidecar "${POLICY}/alert.url" /etc/pi-fortress/alert.url' "${apply}" ||
+  fail "apply.sh does not install alert.url 0640 root:pf-sidecar"
+grep -qF 'for _f in "${POLICY}/alert.url" /etc/pi-fortress/alert.url; do' "${apply}" ||
+  fail "apply.sh does not set the mode of an alert.url that it did not install"
+grep -qE 'install -m 0?644 .*alert\.url' "${apply}" && fail "apply.sh installs alert.url readable by all"
+grep -qxF 'SupplementaryGroups=pf-sidecar' "${here}/alert.service" ||
+  fail "alert.service is not in the pf-sidecar group, so it cannot read alert.url"
+grep -q 'pf-sidecar' <(grep '^SupplementaryGroups=' "${here}/monitor.service") &&
+  fail "monitor.service gets the group of alert.url"
+grep -q 'usermod .*pf-sidecar' "${apply}" && fail "apply.sh adds an account to the pf-sidecar group"
+_mk="$(grep -nxF '  getent group pf-sidecar >/dev/null || groupadd --system pf-sidecar' "${apply}" | head -1 | cut -d: -f1 || true)"
+_start="$(grep -nxF '  systemctl restart pi-fortress-alert.service || true' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_mk}" && -n "${_start}" && "${_mk}" -lt "${_start}" ]] ||
+  fail "apply does not make the pf-sidecar group before it starts alert.service"
 # systemd skips a "-" path that is missing when the unit starts. Thus apply
 # makes the www directory before it starts the first unit.
 _mk="$(grep -nxF '[[ "${LOCAL_ONLY}" -eq 1 ]] || install -d -m 0755 /var/lib/pi-fortress/www' "${apply}" | head -1 | cut -d: -f1 || true)"

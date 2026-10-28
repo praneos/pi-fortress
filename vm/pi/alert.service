@@ -35,6 +35,9 @@ Nice=-10
 LimitMEMLOCK=infinity
 User=pf-sidecar
 Group=pf-fortress
+# The group of alert.url (0640 root:pf-sidecar, apply.sh). Only this unit
+# gets it. monitor runs as the same user without it.
+SupplementaryGroups=pf-sidecar
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
