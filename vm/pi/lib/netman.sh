@@ -212,15 +212,18 @@ nm_profile() {
 # ssh_local_addrs: the IPv4 address of the Pi under each inbound SSH
 # session. When SSH_CONNECTION is set, it is the session that runs this
 # apply. But sudo drops it from the environment by default, and the ship
-# and timer paths never had one. Thus this also reads the sessions that
-# sshd holds: if one of them is the admin session, a delete of the link
-# under it cuts it.
+# and timer paths never had one. Thus this also reads each established
+# TCP connection to the local port 22, where sshd listens (the ruleset
+# opens only that port for SSH): if one of them is the admin session, a
+# delete of the link under it cuts it. The match is on the port, not on
+# the process (ss -p). Thus the feed refresh needs no CAP_SYS_PTRACE to
+# see the sessions of sshd.
 ssh_local_addrs() {
   {
     if [[ -n "${SSH_CONNECTION:-}" ]]; then
       awk '{print $3}' <<<"${SSH_CONNECTION}"
     fi
-    ss -Htnp state established 2>/dev/null | awk '/"sshd/ {print $3}'
+    ss -Htn state established '( sport = :22 )' 2>/dev/null | awk '{print $3}'
   } | sed -E 's/^\[//; s/^::ffff://; s/\]?:[0-9]+$//' | grep -E '^[0-9]+(\.[0-9]+){3}$' | sort -u || true
 }
 

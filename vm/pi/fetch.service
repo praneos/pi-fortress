@@ -70,10 +70,10 @@ SystemCallFilter=~@aio @keyring userfaultfd
 SystemCallErrorNumber=EPERM
 # NET_ADMIN: nft, ip, conntrack and the network sysctls. CHOWN, FOWNER,
 # FSETID, DAC_OVERRIDE and DAC_READ_SEARCH: the files of the daemon
-# accounts. LINUX_IMMUTABLE: chattr on /etc/resolv.conf. SYS_PTRACE: ss -p
-# reads the sshd sessions to keep the admin SSH link (ssh_local_addrs).
-# AUDIT_WRITE: useradd and groupadd.
-CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_FOWNER CAP_FSETID CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_LINUX_IMMUTABLE CAP_SYS_PTRACE CAP_AUDIT_WRITE
+# accounts. LINUX_IMMUTABLE: chattr on /etc/resolv.conf. AUDIT_WRITE:
+# useradd and groupadd. No SYS_PTRACE: ssh_local_addrs (lib/netman.sh)
+# finds the admin SSH sessions by port, not by process.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_FOWNER CAP_FSETID CAP_DAC_OVERRIDE CAP_DAC_READ_SEARCH CAP_LINUX_IMMUTABLE CAP_AUDIT_WRITE
 # All of /etc: useradd replaces /etc/passwd and /etc/group through a
 # rename, and apply writes nftables.conf, resolv.conf and files in many
 # directories under /etc. /usr/local: apply installs pf there. The tree:
