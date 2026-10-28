@@ -33,9 +33,9 @@ CPUWeight=200
 # opens its socket only to pf-dnsgate. Thus a stub cannot write a gate set.
 User=pf-dns
 Group=pf-fortress
-# Port 53 only. The SO_BINDTODEVICE pin on lo needs no capability
-# (dns-agent-go.service gives the reason). No NET_ADMIN: this segment
-# feeds no nft set, so it never forks nft.
+# Port 53 only, as the agent resolver. The SO_BINDTODEVICE pin on lo
+# needs no capability (dns-agent-go.service gives the reason). This
+# segment feeds no nft set, so it never asks netgate.
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 # One -config file for each instance. apply writes and checks it before

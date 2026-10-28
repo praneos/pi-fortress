@@ -1580,10 +1580,17 @@ grep -q 'lab_echo' "${here}/apply.sh" ||
 unit="${here}/dns-agent-go.service"
 [[ -f "${unit}" ]] || fail "vm/pi/dns-agent-go.service is missing"
 grep -q '^User=pf-dns' "${unit}" || fail "dns-agent-go.service does not drop to pf-dns"
-grep -qE '^CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN$' "${unit}" ||
-  fail "dns-agent-go.service bounding set is not port 53 and the nft fork"
-grep -qxF 'AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN' "${unit}" ||
-  fail "dns-agent-go.service does not give the two capabilities to pf dns and its nft fork"
+# Port 53 only. pf netgate writes the gate sets and binds the SNI queue
+# for pf dns. Thus pf dns has no NET_ADMIN, and code that runs in it
+# cannot change the ruleset, a route, a link or a bridge.
+grep -qxF 'CapabilityBoundingSet=CAP_NET_BIND_SERVICE' "${unit}" ||
+  fail "dns-agent-go.service bounding set is not port 53 only"
+grep -qxF 'AmbientCapabilities=CAP_NET_BIND_SERVICE' "${unit}" ||
+  fail "dns-agent-go.service does not give port 53 to pf dns"
+for _u in dns-agent-go dns-stub@; do
+  grep -vE '^[[:space:]]*#' "${here}/${_u}.service" | grep -q 'CAP_NET_ADMIN' &&
+    fail "${_u}.service has CAP_NET_ADMIN; pf netgate does the netfilter work of pf dns"
+done
 # pf dns pins each socket to its interface before it binds or connects it.
 # Linux 5.7 and later allow that with no capability. Thus neither pf dns
 # unit has NET_RAW.

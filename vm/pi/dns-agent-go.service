@@ -25,13 +25,14 @@ CPUWeight=200
 # A Go daemon does not drop its own privilege or reopen a log that root
 # owns. Thus systemd does both. The four capabilities that dnsmasq needed
 # for that (SETGID, SETUID, CHOWN, DAC_OVERRIDE) are removed, and the process
-# never runs as root. NET_BIND_SERVICE is for port 53, NET_ADMIN for the
-# nft that it forks to feed resolved_v4 -- ambient, so that the fork
-# inherits it. nft is in /usr/sbin, which stays readable with
-# ProtectSystem=strict. No NET_RAW: pf dns pins each socket to its
-# interface (SO_BINDTODEVICE) once, before it binds or connects it. The
-# kernel (5.7 and later) lets a process with no capability do this on a
-# socket that no device pins yet.
+# never runs as root. NET_BIND_SERVICE is for port 53, and it is the
+# only capability. No NET_ADMIN: pf netgate (netgate.service) writes the
+# gate sets and binds the SNI queue for pf dns, on request over
+# /run/pi-fortress-netgate/dns.sock. Thus code that runs in pf dns cannot
+# change the ruleset, a route, a link or a bridge. No NET_RAW: pf dns pins
+# each socket to its interface (SO_BINDTODEVICE) once, before it binds or
+# connects it. The kernel (5.7 and later) lets a process with no
+# capability do this on a socket that no device pins yet.
 # pf-dnsgate is the primary group of this unit, and of no account and no
 # other unit. The DoT stubs run as pf-dns too, with the group pf-fortress.
 # netgate opens dns.sock only to pf-dnsgate, and it checks the uid and
@@ -40,8 +41,8 @@ CPUWeight=200
 User=pf-dns
 Group=pf-dnsgate
 SupplementaryGroups=pf-fortress
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
-AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 # One flag, one path. The old flags were one environment variable each,
 # and could describe only one segment. The file is a list. Thus the house
 # (and later a segments.d entry) is an element, not a second unit with a
@@ -63,12 +64,11 @@ ProtectHostname=yes
 ProtectProc=invisible
 # AF_INET: the listeners are udp4/tcp4 by name (internal/dnsd/serve.go),
 # and a segment address that is not v4 is refused. Thus there is no v6
-# socket to allow. AF_UNIX is stderr to the journal. AF_NETLINK is for
-# the nft that it forks to add an answer to resolved_v4 (nfnetlink under
-# this same filter), for the SNI queue, and for one rtnetlink socket that
-# gets link and address events. With these events pf dns opens the
-# listeners of a segment again when its interface comes back with a new
-# index (internal/dnsd/linkwatch.go).
+# socket to allow. AF_UNIX is stderr to the journal and the socket of
+# netgate. AF_NETLINK is for one rtnetlink socket that gets link and
+# address events (receive only, no capability). With these events pf dns
+# opens the listeners of a segment again when its interface comes back
+# with a new index (internal/dnsd/linkwatch.go).
 RestrictAddressFamilies=AF_INET AF_NETLINK AF_UNIX
 RestrictNamespaces=yes
 RestrictRealtime=yes
