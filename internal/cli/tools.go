@@ -81,7 +81,7 @@ func logTool(verb string, args map[string]string, took time.Duration, err error)
 	_ = audit.Default().Append(e)
 }
 
-const fetchUsage = "usage: pf fetch [-policy DIR] [-out DIR]"
+const fetchUsage = "usage: pf fetch [-policy DIR] [-out DIR] [-fresh DURATION]"
 
 const compileUsage = "usage: pf compile --policy DIR --out-nft FILE --out-dns FILE [--out-doh-nft FILE] [--out-doh-dns FILE] [--out-house-dns FILE] [--out-house-doh-dns FILE] [--out-house-private-dns-nft FILE] [--out-direct-nft FILE] [--out-house-direct-nft FILE] [--out-house-whatsapp-nft FILE] [--out-ssh-nft FILE] [--out-ntp-pass-nft FILE] [--out-domain-map FILE] [--out-ip-map FILE]"
 
@@ -93,6 +93,7 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("fetch", stderr)
 	policy := fs.String("policy", "", "policy directory")
 	out := fs.String("out", "", "generated output directory")
+	fresh := fs.Duration("fresh", 0, "serve a feed from its last good copy when that copy is younger than this; 0 always downloads")
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}
@@ -108,6 +109,7 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 		o = filepath.Join(p, "generated")
 	}
 	f := fetch.Defaults(p, o)
+	f.FreshFor = *fresh
 	start := time.Now()
 	report, nIPs, nDoms, err := f.Run()
 	fields := map[string]string{
