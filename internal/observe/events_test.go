@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"pi-fortress/internal/policycompile"
+	"pi-fortress/internal/base"
 )
 
 func TestFeedForIPLongestPrefix(t *testing.T) {
-	feeds := prefixFeeds(policycompile.ParseMap("203.0.113.0/24\tspamhaus-drop\n203.0.113.64/26\tfeodo-tracker\n198.51.100.7\tlocal\nnot-an-ip\tx\n"))
+	feeds := prefixFeeds(base.ParseMap("203.0.113.0/24\tspamhaus-drop\n203.0.113.64/26\tfeodo-tracker\n198.51.100.7\tlocal\nnot-an-ip\tx\n"))
 	cases := []struct{ ip, feed string }{
 		{"203.0.113.9", "spamhaus-drop"},
 		{"203.0.113.70", "feodo-tracker"},
@@ -30,7 +30,7 @@ func TestFeedForIPLongestPrefix(t *testing.T) {
 }
 
 func TestFeedForNameWalksParents(t *testing.T) {
-	m := policycompile.ParseMap("evil.example\turlhaus-domains-online\nads.example\thagezi-pro\n")
+	m := base.ParseMap("evil.example\turlhaus-domains-online\nads.example\thagezi-pro\n")
 	cases := []struct{ name, feed string }{
 		{"evil.example", "urlhaus-domains-online"},
 		{"cdn.evil.example", "urlhaus-domains-online"},

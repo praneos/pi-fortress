@@ -171,3 +171,30 @@ func TestStripLineDropsBothCommentStyles(t *testing.T) {
 		}
 	}
 }
+
+func TestParseMap(t *testing.T) {
+	cases := []struct {
+		name, text string
+		want       map[string]string
+	}{
+		{"plain", "evil.example\turlhaus-domains-online\n192.0.2.0/24\tspamhaus-drop\n",
+			map[string]string{"evil.example": "urlhaus-domains-online", "192.0.2.0/24": "spamhaus-drop"}},
+		{"first feed wins", "a.example\tx\na.example\ty\n", map[string]string{"a.example": "x"}},
+		{"blank and malformed skipped", "\n \nnofeed\n\tnoitem\na.example\tx\n", map[string]string{"a.example": "x"}},
+		{"padding trimmed", "  a.example \t x \r\n", map[string]string{"a.example": "x"}},
+		{"empty", "", map[string]string{}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := ParseMap(c.text)
+			if len(got) != len(c.want) {
+				t.Fatalf("%v", got)
+			}
+			for k, v := range c.want {
+				if got[k] != v {
+					t.Fatalf("%v", got)
+				}
+			}
+		})
+	}
+}

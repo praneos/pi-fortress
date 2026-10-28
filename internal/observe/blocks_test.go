@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
+	"pi-fortress/internal/base"
 	"pi-fortress/internal/jsonl"
-	"pi-fortress/internal/policycompile"
 )
 
 const testDomainMap = "evil.example\turlhaus-domains-online\n" +
 	"mine.example\tlocal\n" +
 	"both.example\tlocal\n" +
-	policycompile.MapHouseMark + "\n" +
+	base.MapHouseMark + "\n" +
 	"ads.example\thagezi-pro\n" +
 	"vpn.example\thagezi-doh-vpn-proxy-bypass\n" +
 	"bedtime.example\tlocal\n" +
@@ -43,7 +43,7 @@ func TestDomainMapHalvesGiveTheClass(t *testing.T) {
 		}
 	}
 	// ParseMap still reads the same map: the mark is not an item.
-	if m := policycompile.ParseMap(testDomainMap); len(m) != len(o.domainFeeds) || m[policycompile.MapHouseMark] != "" {
+	if m := base.ParseMap(testDomainMap); len(m) != len(o.domainFeeds) || m[base.MapHouseMark] != "" {
 		t.Fatalf("ParseMap: %v", m)
 	}
 	// A map from before the mark reads all names as shared.

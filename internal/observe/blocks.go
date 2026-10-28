@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
+	"pi-fortress/internal/base"
 	"pi-fortress/internal/jsonl"
-	"pi-fortress/internal/policycompile"
 )
 
 const (
@@ -89,7 +89,7 @@ func (t *blockTally) rows(now time.Time) []jsonl.Blocks {
 }
 
 // domainLists is the domain map of pf compile, split at
-// policycompile.MapHouseMark. feeds is the name → feed table of all names.
+// base.MapHouseMark. feeds is the name → feed table of all names.
 // houseLocal has the names that only the house half labels "local"
 // (house.domains, the house defaults). houseFeeds has the feed ids that
 // only the house half names (the ad, tracker and bypass feeds).
@@ -108,7 +108,7 @@ func parseDomainMap(text string) (map[string]string, domainLists) {
 	house := false
 	for line := range strings.SplitSeq(text, "\n") {
 		line = strings.TrimSpace(line)
-		if line == policycompile.MapHouseMark {
+		if line == base.MapHouseMark {
 			house = true
 			continue
 		}

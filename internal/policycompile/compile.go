@@ -1084,31 +1084,6 @@ func dnsLines(names []string) string {
 	return strings.Join(lines, "\n") + "\n"
 }
 
-// MapHouseMark is the line in the DomainMap between the names that all
-// segments get (blacklist.domains and its feeds) and the names of the
-// house lists only. The line has no tab, so ParseMap skips it. pf observe
-// reads it to tell a house feed or house.domains from a shared feed or
-// blacklist.domains, because both halves label an operator entry "local".
-const MapHouseMark = "# house"
-
-// ParseMap reads "<item>\t<feed>" lines. This is the format of
-// generated/feeds.map and of the compiled DomainMap and IPMap. It skips
-// blank and malformed lines. The first feed named for an item wins.
-func ParseMap(text string) map[string]string {
-	m := map[string]string{}
-	for line := range strings.SplitSeq(text, "\n") {
-		item, feed, ok := strings.Cut(strings.TrimSpace(line), "\t")
-		item, feed = strings.TrimSpace(item), strings.TrimSpace(feed)
-		if !ok || item == "" || feed == "" {
-			continue
-		}
-		if _, dup := m[item]; !dup {
-			m[item] = feed
-		}
-	}
-	return m
-}
-
 // mapLines gives one "<item>\t<feed>" line for each item. An item in local
 // (the operator half of the list) is "local", also when a feed lists it
 // too: the operator line is the reason for the block.
@@ -1325,7 +1300,7 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	// then, all items read as local.
 	feeds := map[string]string{}
 	if raw, err := os.ReadFile(filepath.Join(policyDir, "generated", "feeds.map")); err == nil {
-		feeds = ParseMap(string(raw))
+		feeds = base.ParseMap(string(raw))
 	}
 	if err := writeFile(out.IPMap, mapLines(ipKept, feeds, set(localIPs))); err != nil {
 		return Summary{}, err
@@ -1377,7 +1352,7 @@ func Compile(policyDir string, out Out) (Summary, error) {
 	if err != nil {
 		return Summary{}, err
 	}
-	if err := writeFile(out.DomainMap, mapLines(domainFinal, feeds, set(localDomains))+MapHouseMark+"\n"+mapLines(houseFinal, feeds, houseLocal)+mapLines(houseVPNFinal, feeds, nil)); err != nil {
+	if err := writeFile(out.DomainMap, mapLines(domainFinal, feeds, set(localDomains))+base.MapHouseMark+"\n"+mapLines(houseFinal, feeds, houseLocal)+mapLines(houseVPNFinal, feeds, nil)); err != nil {
 		return Summary{}, err
 	}
 
