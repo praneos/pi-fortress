@@ -19,7 +19,11 @@ import (
 // Run the regexp only when a literal is present. If a branch has no
 // literal prefix, the prefilter is disabled and the regexp always runs.
 type tokenSet struct {
-	re        *regexp.Regexp
+	re *regexp.Regexp
+	// inner is re for a slice that does not start at the start of the text
+	// (innerRE). A candidate window and the buffer of a stream after its
+	// first cut are such slices.
+	inner     *regexp.Regexp
 	prefixes  [][]byte
 	complete  bool
 	maxPrefix int
@@ -49,7 +53,7 @@ func tokensFor(re *regexp.Regexp) *tokenSet {
 	if v, ok := tokenCache.Load(re); ok {
 		return v.(*tokenSet)
 	}
-	ts := &tokenSet{re: re}
+	ts := &tokenSet{re: re, inner: innerRE(re)}
 	var all [][]byte
 	var lead []bool
 	all, lead, ts.fold, ts.complete = tokenrules.PrefixInfo(re.String())
@@ -63,6 +67,42 @@ func tokensFor(re *regexp.Regexp) *tokenSet {
 	ts.lead = leadsFor(ts.prefixes, all, lead)
 	v, _ := tokenCache.LoadOrStore(re, ts)
 	return v.(*tokenSet)
+}
+
+// innerRE is re for a slice that starts after the start of the text. Go
+// takes the start of a slice as the start of the text, \A. The lead of a
+// rule (tokenrules.leadExpr) accepts \A. But the start of such a slice
+// has bytes before it that are not in the slice. innerRE is re with each
+// \A changed to a class that matches nothing. At each position after the
+// start of the text, \A is false, so the two regexps find the same
+// matches there. A caller that needs the lead of a prefix keeps the bytes
+// before the prefix in the slice. A regexp that compiled always parses
+// again. If the change does not compile, innerRE returns re.
+func innerRE(re *regexp.Regexp) *regexp.Regexp {
+	r, err := syntax.Parse(re.String(), syntax.Perl)
+	if err != nil || !noBeginText(r) {
+		return re
+	}
+	out, err := regexp.Compile(r.String())
+	if err != nil {
+		return re
+	}
+	return out
+}
+
+// noBeginText changes each \A below r to a class that matches nothing. It
+// reports whether it found one.
+func noBeginText(r *syntax.Regexp) bool {
+	found := false
+	for i, sub := range r.Sub {
+		if sub.Op == syntax.OpBeginText {
+			r.Sub[i] = &syntax.Regexp{Op: syntax.OpNoMatch}
+			found = true
+			continue
+		}
+		found = noBeginText(sub) || found
+	}
+	return found
 }
 
 func literalPrefixes(expr string) ([][]byte, bool, bool) {
@@ -281,7 +321,9 @@ func matchBounds(expr string) (int, bool) {
 // the byte after it is present. Thus a trailing \b is judged on real text,
 // not on the end of the window. The window starts one byte before the
 // prefix, or tokenrules.LeadMax bytes before it for a rule with a lead.
-// Thus the lead sees the escape before the prefix.
+// Thus the lead sees the escape before the prefix. A window that starts
+// after the start of the text runs inner, so the start of the window is
+// never a lead.
 const window = 4096
 
 // candidates returns sorted, merged [start,end) regions around every
@@ -379,22 +421,40 @@ func (t *tokenSet) lasting(b []byte, s int) bool {
 	return true
 }
 
-// matches returns FindAllSubmatchIndex over b, computed only inside
-// candidate windows when the prefilter is complete.
+// matches returns FindAllSubmatchIndex over b, the full text, computed
+// only inside candidate windows when the prefilter is complete.
 func (t *tokenSet) matches(b []byte) [][]int {
+	return t.matchesFrom(b, 0, true)
+}
+
+// matchesFrom is matches for b when b can be a part of a longer text. head
+// says that b[0] is the start of that text. Else \A is false at b[0], as
+// it is at each later byte. The search starts at from, where no match
+// continues. The bytes before from are in a match that the caller already
+// has. The buffered path continues its search after each match. Thus a
+// match that starts inside an earlier match is not a match of the text.
+func (t *tokenSet) matchesFrom(b []byte, from int, head bool) [][]int {
 	if t == nil {
 		return nil
 	}
 	wins, ok := t.candidates(b)
 	if !ok {
-		return t.re.FindAllSubmatchIndex(b, -1)
+		wins = [][2]int{{0, len(b)}}
 	}
 	var out [][]int
 	for _, w := range wins {
-		for _, m := range t.re.FindAllSubmatchIndex(b[w[0]:w[1]], -1) {
+		lo := max(w[0], from)
+		if lo >= w[1] {
+			continue
+		}
+		re := t.inner
+		if lo == 0 && head {
+			re = t.re
+		}
+		for _, m := range re.FindAllSubmatchIndex(b[lo:w[1]], -1) {
 			for i := range m {
 				if m[i] >= 0 {
-					m[i] += w[0]
+					m[i] += lo
 				}
 			}
 			out = append(out, m)
@@ -412,7 +472,11 @@ func (t *tokenSet) match(b []byte) bool {
 		return t.re.Match(b)
 	}
 	for _, w := range wins {
-		if t.re.Match(b[w[0]:w[1]]) {
+		re := t.inner
+		if w[0] == 0 {
+			re = t.re
+		}
+		if re.Match(b[w[0]:w[1]]) {
 			return true
 		}
 	}

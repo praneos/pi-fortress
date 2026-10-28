@@ -23,6 +23,8 @@ type fullScan struct {
 	pad    bool
 	outBuf []byte
 	pre    int
+	cut    bool
+	from   int
 	hits   map[string]int
 }
 
@@ -30,7 +32,7 @@ func (t *fullScan) scan() {
 	if len(t.Buf) == 0 {
 		return
 	}
-	ms := t.ts.matches(t.Buf)
+	ms := t.ts.matchesFrom(t.Buf, t.from, !t.cut)
 	n := len(t.Buf)
 	if !t.EOF {
 		if !t.ts.complete {
@@ -58,7 +60,7 @@ func (t *fullScan) scan() {
 		return
 	}
 	out := t.outBuf[:0]
-	pos := t.pre
+	pos, end := t.pre, t.from
 	for _, m := range ms {
 		lo, hi := t.ts.token(m)
 		if lo < t.pre {
@@ -72,7 +74,7 @@ func (t *fullScan) scan() {
 			repl = padRepl(hi - lo)
 		}
 		out = append(append(out, t.Buf[pos:lo]...), repl...)
-		pos = hi
+		pos, end = hi, hi
 		t.hits[t.ts.ruleName(m)]++
 	}
 	t.outBuf = append(out, t.Buf[pos:n]...)
@@ -80,6 +82,8 @@ func (t *fullScan) scan() {
 	keep := max(n-tokenrules.LeadMax, 0)
 	t.Buf = t.Buf[:copy(t.Buf, t.Buf[keep:])]
 	t.pre = n - keep
+	t.from = max(end-keep, 0)
+	t.cut = t.cut || keep > 0
 }
 
 // pieces gives b in reads of one byte, and sometimes in a larger read of
