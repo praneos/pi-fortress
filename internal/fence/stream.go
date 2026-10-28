@@ -178,10 +178,61 @@ type tokenStream struct {
 	// already went out as its strip.
 	run  bool
 	done int
+	// The work budget (scanPerByte). in is the number of body bytes that
+	// came in, and work is the number of bytes that the regexp searched.
+	// credit is the search that the stream can still do. kept is len(buf)
+	// after the last commit: the bytes after it are new.
+	in, work, credit int64
+	kept             int
+	// err is ErrScanBudget after the stream stopped. Read gives it.
+	err error
+}
+
+// ErrScanBudget is the error that a streamed request body returns when the
+// token scan did more work than its budget (scanPerByte). All bytes that
+// the stream forwarded before the stop were scanned. It never forwards a
+// byte after the stop. The fence is busy. The body has no fault that the
+// buffered path refuses.
+var ErrScanBudget = errors.New("fence: scan work budget spent, stream stopped")
+
+// The work budget of a token stream. Work is the number of bytes that the
+// regexp searched. A full scan searches each held prefix window again.
+// Thus a body with a prefix every few bytes, in very small reads, makes
+// the regexp search about one window for each body byte. Without the
+// budget, the agent would choose how much broker CPU one upload costs.
+//
+// The stream starts with scanSlack of credit. Each body byte that comes in
+// adds scanPerByte, up to scanSlack. Each searched byte takes one. When
+// the credit is less than zero, the stream stops. Thus the search is at
+// most scanPerByte times the body, plus scanSlack. The limit on the credit
+// stops a body that starts with many easy bytes from saving credit for a
+// costly part after them.
+//
+// Measured search for each body byte: in reads of 1448 bytes or more, at
+// most 4 for each body, also for a body that is only tokens. In reads of
+// 256 bytes, at most 13. In reads of 1 byte: JSON with a token in each 150
+// bytes, 17; a body that is only tokens, up to 75; a body that is only
+// prefixes, about 770. scanSlack is for a short burst: a token that grows
+// to the hold limit in reads of 1 byte searches its held part again at
+// each window, about 300 KiB more than scanPerByte for each byte.
+const (
+	scanPerByte = 64
+	scanSlack   = 1 << 20
+)
+
+func (t *tokenStream) Read(p []byte) (int, error) {
+	if t.err != nil {
+		return 0, t.err
+	}
+	n, err := t.ScanPump.Read(p)
+	if t.err != nil {
+		return 0, t.err
+	}
+	return n, err
 }
 
 func newTokenStream(src io.Reader, ts *tokenSet, pad bool) *tokenStream {
-	t := &tokenStream{ts: ts, pad: pad, hits: map[string]int{}}
+	t := &tokenStream{ts: ts, pad: pad, hits: map[string]int{}, credit: scanSlack}
 	t.Src, t.Scan = src, t.scan
 	return t
 }
@@ -268,6 +319,9 @@ func (t *tokenStream) scan() {
 	if len(t.Buf) == 0 {
 		return
 	}
+	got := int64(len(t.Buf) - t.kept)
+	t.in += got
+	t.credit = min(t.credit+scanPerByte*got, scanSlack)
 	out := t.outBuf[:0]
 	if t.run {
 		// Inside a long token: each token byte goes out as part of its strip.
@@ -288,7 +342,15 @@ func (t *tokenStream) scan() {
 			return
 		}
 	}
-	ms := t.ts.matchesFrom(t.Buf, t.from, !t.cut)
+	ms, work := t.ts.matchesWork(t.Buf, t.from, !t.cut)
+	t.work += int64(work)
+	if t.credit -= int64(work); t.credit < 0 {
+		// Fail closed: the bytes of this pass do not go out. EOF stops
+		// more reads by the pump. Read answers with err.
+		t.err = ErrScanBudget
+		t.Out, t.Buf, t.EOF = nil, nil, true
+		return
+	}
 	long := -1
 	if !t.EOF {
 		// If the horizon falls inside a match, the stream emits the full
@@ -380,6 +442,7 @@ func (t *tokenStream) commit(out []byte, n, end int) {
 	keep := max(n-tokenrules.LeadMax, 0)
 	tail := copy(t.Buf, t.Buf[keep:])
 	t.Buf = t.Buf[:tail]
+	t.kept = tail
 	t.pre = n - keep
 	t.from = max(end-keep, 0)
 	t.cut = t.cut || keep > 0

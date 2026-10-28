@@ -2,6 +2,7 @@ package fence
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"maps"
 	"math/rand/v2"
@@ -160,7 +161,9 @@ func (s *pieces) Read(p []byte) (int, error) {
 }
 
 // sameAsFullScan streams body through tokenStream and fullScan in the same
-// reads, and compares the bytes of each read and the strip counts.
+// reads, and compares the bytes of each read and the strip counts. The
+// full scan has no work budget. A stop of the stream at its budget ends
+// the comparison: each read before it gave the same bytes.
 func sameAsFullScan(t *testing.T, ts *tokenSet, body []byte, seed uint64, big, ones int, pad bool) {
 	t.Helper()
 	got := newTokenStream(&pieces{b: body, rng: rand.New(rand.NewPCG(seed, 1)), big: big, ones: ones}, ts, pad)
@@ -169,6 +172,12 @@ func sameAsFullScan(t *testing.T, ts *tokenSet, body []byte, seed uint64, big, o
 	pg, pr := make([]byte, 64<<10), make([]byte, 64<<10)
 	for step := 0; ; step++ {
 		ng, eg := got.Read(pg)
+		if errors.Is(eg, ErrScanBudget) {
+			if got.credit >= 0 {
+				t.Fatalf("read %d: stop with %d of credit left", step, got.credit)
+			}
+			return
+		}
 		nr, er := ref.Read(pr)
 		if ng != nr || eg != er || !bytes.Equal(pg[:ng], pr[:nr]) {
 			t.Fatalf("read %d: %d bytes, %v; the full scan gave %d bytes, %v", step, ng, eg, nr, er)

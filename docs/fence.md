@@ -169,6 +169,18 @@ streamed body holds at most 16 KiB of a match that is not complete. At that
 limit, the fence strips the part that it holds, and then the rest of the run
 as it comes. Thus a streamed body and a buffered body strip the same bytes.
 
+The token strip of a streamed body has a work budget. Each time that the
+output moves, the stream searches the prefix windows that it holds again.
+Thus a body with a prefix every few bytes, in very small reads, costs about
+one window of search for each byte. The fence counts the bytes that the
+token regexp searches. Each body byte gives 64 bytes of credit, and the
+credit is at most 1 MiB. When the credit is spent, the stream stops. No byte
+after the stop goes out. The origin connection closes, the agent gets the
+busy `503` (`pi-fortress: busy, retry shortly`), and the strip log gets a
+`scan_budget` row with `where` `body`. This is not a refusal of the body.
+In reads of 1448 bytes or more, a body costs at most about 4 bytes of search
+for each byte.
+
 A distinctive prefix (`ghp_`, `sk-ant-`, `glpat-`) matches at any position.
 A prefix that sits inside ordinary words (`sk-`, `AIza`, `npm_`) needs one of
 these before it:
