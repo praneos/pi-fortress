@@ -173,8 +173,8 @@ func sameAsFullScan(t *testing.T, ts *tokenSet, body []byte, seed uint64, big, o
 	for step := 0; ; step++ {
 		ng, eg := got.Read(pg)
 		if errors.Is(eg, ErrScanBudget) {
-			if got.work <= scanPerByte*got.in+scanSlack {
-				t.Fatalf("read %d: stop at %d bytes of search, budget not spent", step, got.work)
+			if got.credit >= 0 {
+				t.Fatalf("read %d: stop with %d of credit left", step, got.credit)
 			}
 			return
 		}
