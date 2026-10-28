@@ -13,8 +13,8 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	"pi-fortress/internal/fence"
 	"pi-fortress/internal/secrets"
+	"pi-fortress/internal/tokenrules"
 )
 
 // Heads returns the literal heads of rules, "pf_" included, for the
@@ -22,7 +22,7 @@ import (
 // either case. Match lowers the name before it looks for a head. A rule
 // with no literal head cannot be prefiltered. For that rule, Heads returns
 // nil heads and the name of the rule.
-func Heads(rules []fence.Rule) (heads []string, headless string) {
+func Heads(rules []tokenrules.Rule) (heads []string, headless string) {
 	heads = []string{"pf_"}
 	for _, r := range rules {
 		p := r.Head()

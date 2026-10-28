@@ -14,6 +14,7 @@ import (
 	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/httpwire"
 	"pi-fortress/internal/secrets"
+	"pi-fortress/internal/tokenrules"
 )
 
 func benchRoot() string {
@@ -22,7 +23,7 @@ func benchRoot() string {
 }
 
 func benchRE(b *testing.B) *regexp.Regexp {
-	re, err := LoadTokenRE(filepath.Join(benchRoot(), "vm", "policy", "key_prefixes.rules"))
+	re, err := tokenrules.LoadTokenRE(filepath.Join(benchRoot(), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -36,7 +37,7 @@ func benchRE(b *testing.B) *regexp.Regexp {
 // not as an assertion.
 func testPolicy(tb testing.TB) (*regexp.Regexp, *corepolicy.Policy) {
 	tb.Helper()
-	re, err := LoadTokenRE(filepath.Join(benchRoot(), "vm", "policy", "key_prefixes.rules"))
+	re, err := tokenrules.LoadTokenRE(filepath.Join(benchRoot(), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		tb.Fatal(err)
 	}

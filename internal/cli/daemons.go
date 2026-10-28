@@ -27,10 +27,10 @@ import (
 	"pi-fortress/internal/engine"
 	"pi-fortress/internal/eyeball"
 	"pi-fortress/internal/fakeip"
-	"pi-fortress/internal/fence"
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/keyshape"
 	"pi-fortress/internal/secrets"
+	"pi-fortress/internal/tokenrules"
 	"pi-fortress/internal/www"
 )
 
@@ -130,7 +130,7 @@ func runEngine(args []string, stdout, stderr io.Writer) int {
 	// The broker refuses to start without the rules, and so does the engine.
 	// The engine keeps only the compiled shapes in a closure. The kind
 	// column of the file does not get to the engine (docs/privilege_split.md).
-	tr, err := fence.LoadTokenRules(*rules)
+	tr, err := tokenrules.LoadTokenRules(*rules)
 	if err != nil {
 		return fail(stderr, fmt.Errorf("engine: -rules: %w", err))
 	}
@@ -285,7 +285,7 @@ func runBroker(args []string, _, stderr io.Writer) int {
 	if err != nil {
 		return fail(stderr, err)
 	}
-	tr, err := fence.LoadTokenRules(*rules)
+	tr, err := tokenrules.LoadTokenRules(*rules)
 	if err != nil {
 		return fail(stderr, err)
 	}

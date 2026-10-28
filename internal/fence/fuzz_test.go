@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"pi-fortress/internal/httpwire"
+	"pi-fortress/internal/tokenrules"
 )
 
 // FuzzForeignNeverLeaks: for all that the agent puts in the headers, URL or
@@ -82,7 +83,7 @@ func urlRefusal(err error) bool {
 
 func FuzzTokenWindows(f *testing.F) {
 	f.Add("ghp_" + strings.Repeat("A", 36) + " and sk-" + strings.Repeat("b", 48))
-	re, err := LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
+	re, err := tokenrules.LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
 	if err != nil {
 		f.Fatal(err)
 	}

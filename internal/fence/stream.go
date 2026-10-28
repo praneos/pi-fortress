@@ -7,6 +7,7 @@ import (
 
 	"pi-fortress/internal/httpwire"
 	"pi-fortress/internal/secrets"
+	"pi-fortress/internal/tokenrules"
 )
 
 // ErrPlaceholderInStream is the error that a streamed request body returns
@@ -134,10 +135,11 @@ type tokenStream struct {
 	outBuf []byte
 	// pre is the number of bytes at the head of buf that were already
 	// emitted. The stream keeps them only to judge the lead of a rule
-	// (leadExpr, up to leadMax bytes: a non-word byte, %0A, \u000a) against
-	// the real bytes before the prefix. Without them, a retained buffer
-	// starts mid-word, or past the start of an escape. Then the stream
-	// would judge a token differently from the buffered path.
+	// (tokenrules.leadExpr, up to tokenrules.LeadMax bytes: a non-word
+	// byte, %0A, \u000a) against the real bytes before the prefix. Without
+	// them, a retained buffer starts mid-word, or past the start of an
+	// escape. Then the stream would judge a token differently from the
+	// buffered path.
 	pre  int
 	hits map[string]int
 }
@@ -217,7 +219,7 @@ func (t *tokenStream) scan() {
 	}
 	t.outBuf = append(out, t.Buf[pos:n]...)
 	t.Out = t.outBuf
-	keep := max(n-leadMax, 0)
+	keep := max(n-tokenrules.LeadMax, 0)
 	tail := copy(t.Buf, t.Buf[keep:])
 	t.Buf = t.Buf[:tail]
 	t.pre = n - keep

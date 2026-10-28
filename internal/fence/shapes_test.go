@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"pi-fortress/internal/testsupport"
+	"pi-fortress/internal/tokenrules"
 )
 
 // OpenAI stopped the issue of the 48-character sk- key. What an agent finds
@@ -17,7 +18,7 @@ import (
 // foreign host, strips it off a core host of a different kind with
 // StripCore on, and does not change it on its own host.
 func TestCurrentOpenAIAndXAIShapes(t *testing.T) {
-	rules, err := LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
+	rules, err := tokenrules.LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"pi-fortress/internal/testsupport"
+	"pi-fortress/internal/tokenrules"
 )
 
 // boundedRules keep a boundary before their prefix. `sk-`, `AIza` and
@@ -23,9 +24,9 @@ var boundedRules = map[string]bool{
 	"openai_none": true, "google_api": true, "stripe_live": true, "npm": true,
 }
 
-func loadShippedRules(t *testing.T) *TokenRules {
+func loadShippedRules(t *testing.T) *tokenrules.TokenRules {
 	t.Helper()
-	rules, err := LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
+	rules, err := tokenrules.LoadTokenRules(filepath.Join(testsupport.RepoRoot(t), "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +35,7 @@ func loadShippedRules(t *testing.T) *TokenRules {
 
 // decideOut runs raw to a foreign host and returns the target and body
 // that would go out.
-func decideOut(t *testing.T, rules *TokenRules, raw string) (string, string) {
+func decideOut(t *testing.T, rules *tokenrules.TokenRules, raw string) (string, string) {
 	t.Helper()
 	req := parseReq(t, raw)
 	if _, err := Decide(Ctx{SNI: "example.com", Rules: rules}, req, loadPol(t), labSlots()); err != nil {

@@ -20,7 +20,7 @@ import (
 	"pi-fortress/internal/base"
 
 	"pi-fortress/internal/corepolicy"
-	"pi-fortress/internal/fence"
+	"pi-fortress/internal/tokenrules"
 )
 
 var (
@@ -813,8 +813,8 @@ func checkKeyRulesLocal(path string) error {
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	tr, err := fence.LoadTokenRules(path)
-	if errors.Is(err, fence.ErrNoRules) {
+	tr, err := tokenrules.LoadTokenRules(path)
+	if errors.Is(err, tokenrules.ErrNoRules) {
 		return nil
 	}
 	if err == nil {

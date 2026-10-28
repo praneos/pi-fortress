@@ -28,6 +28,7 @@ import (
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/preamble"
 	"pi-fortress/internal/secrets"
+	"pi-fortress/internal/tokenrules"
 )
 
 var (
@@ -48,7 +49,7 @@ type Broker struct {
 	Policy  *corepolicy.Policy
 	Store   *secrets.Store
 	TokenRE *regexp.Regexp
-	Rules   *fence.TokenRules
+	Rules   *tokenrules.TokenRules
 	// StripCore strips tokens of kinds a core host does not inject.
 	StripCore  bool
 	Roots      *x509.CertPool

@@ -10,6 +10,7 @@ import (
 
 	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/secrets"
+	"pi-fortress/internal/tokenrules"
 )
 
 func chunked(s string) string {
@@ -25,7 +26,7 @@ func chunked(s string) string {
 func liveOAT() string { return "sk-ant-oat01-" + strings.Repeat("A", 64) }
 
 func TestLargeBufferedBodyStripped(t *testing.T) {
-	re, _ := LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
+	re, _ := tokenrules.LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
 	pol, _ := corepolicy.Load(benchRoot() + "/vm/policy/core.hosts")
 	body := jsonBody(300<<10, liveOAT())
 	req := parseReq(t, postReq("example.com", body))
@@ -49,7 +50,7 @@ func TestLargeBufferedBodyStripped(t *testing.T) {
 }
 
 func TestChunkedBodyStreamScrubbed(t *testing.T) {
-	re, _ := LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
+	re, _ := tokenrules.LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
 	pol, _ := corepolicy.Load(benchRoot() + "/vm/policy/core.hosts")
 	body := jsonBody(300<<10, liveOAT())
 	raw := "POST /x HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n" + chunked(body)
@@ -75,7 +76,7 @@ func TestChunkedBodyStreamScrubbed(t *testing.T) {
 }
 
 func TestLargeCLBodyStreamPreservesLength(t *testing.T) {
-	re, _ := LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
+	re, _ := tokenrules.LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
 	pol, _ := corepolicy.Load(benchRoot() + "/vm/policy/core.hosts")
 	body := jsonBody((1<<20)+4096, liveOAT())
 	req := parseReq(t, postReq("example.com", body))
@@ -102,7 +103,7 @@ func TestLargeCLBodyStreamPreservesLength(t *testing.T) {
 // request body, and does not substitute it: the model behind
 // api.anthropic.com can print a credential from its prompt back reversed, past all literal scrubs.
 func TestCoreBodyPlaceholderRefused(t *testing.T) {
-	re, _ := LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
+	re, _ := tokenrules.LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
 	pol, _ := corepolicy.Load(benchRoot() + "/vm/policy/core.hosts")
 	ph := "pf_b0b1b2b3b4b5b6b7_CLAUDE_OAT"
 	req := parseReq(t, postReqPH("api.anthropic.com", jsonBody(200<<10, ph)))
@@ -114,7 +115,7 @@ func TestCoreBodyPlaceholderRefused(t *testing.T) {
 }
 
 func TestTokenPrefilterAgreesWithRegexp(t *testing.T) {
-	re, err := LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
+	re, err := tokenrules.LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +148,7 @@ func TestTokenPrefilterAgreesWithRegexp(t *testing.T) {
 }
 
 func TestTokenWindowsMatchWholeTextRegexp(t *testing.T) {
-	re, _ := LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
+	re, _ := tokenrules.LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
 	ts := tokensFor(re)
 	filler := strings.Repeat("plain text, numbers 42, sk and gh as words. ", 400)
 	toks := []string{"ghp_" + strings.Repeat("A", 36), "AKIA" + strings.Repeat("Q", 16), "sk-ant-oat01-" + strings.Repeat("Z", 70), "glpat-" + strings.Repeat("g", 25)}
@@ -174,7 +175,7 @@ func TestTokenWindowsMatchWholeTextRegexp(t *testing.T) {
 // A chunked core body streams through the scrub. A live value of a
 // different kind strips, and the header still gets its credential.
 func TestChunkedCoreBodyStripsInStream(t *testing.T) {
-	re, _ := LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
+	re, _ := tokenrules.LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
 	pol, _ := corepolicy.Load(benchRoot() + "/vm/policy/core.hosts")
 	ph := "pf_b0b1b2b3b4b5b6b7_CLAUDE_OAT"
 	foreignLive := "lab_fence_github"
@@ -237,7 +238,7 @@ func TestChunkedBodyPlaceholderStops(t *testing.T) {
 // OnInject reports each slot that the fence writes into the request: here
 // the header. It reports nothing for the streamed body, which the fence never writes into.
 func TestOnInjectReportsWrittenSlots(t *testing.T) {
-	re, _ := LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
+	re, _ := tokenrules.LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
 	pol, _ := corepolicy.Load(benchRoot() + "/vm/policy/core.hosts")
 	ph := "pf_b0b1b2b3b4b5b6b7_CLAUDE_OAT"
 	body := jsonBody(300<<10, "x")
