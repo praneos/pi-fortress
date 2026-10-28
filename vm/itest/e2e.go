@@ -317,12 +317,11 @@ func reboot(t *testing.T, host string) {
 }
 
 // Capability bits, for the bounding sets the sandboxed daemons keep.
-// CapBnd in /proc/<pid>/status is that mask in hex, so the three net
-// capabilities that a DHCP server needs read 0x3400.
+// CapBnd in /proc/<pid>/status is that mask in hex, so the two net
+// capabilities that a DHCP server keeps read 0x1400.
 const (
 	capNetBindService = 1 << 10
 	capNetAdmin       = 1 << 12
-	capNetRaw         = 1 << 13
 )
 
 // mainPID is the MainPID of the unit on the Pi, "0" when it is not running.
