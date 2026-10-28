@@ -81,8 +81,10 @@ type Ctx struct {
 }
 
 // ErrBufferBudget means that a body that must be buffered found the byte
-// budget of the caller spent (Ctx.Reserve). The fence read nothing and sent
-// nothing. A retry of the same request without a change is possible.
+// budget of the caller spent (Ctx.Reserve). It also means that the decode
+// or the unescape of a buffered body found the budget spent (scanBudget).
+// The fence sent nothing. A retry of the same request without a change is
+// possible.
 var ErrBufferBudget = errors.New("fence: byte budget spent, body not buffered")
 
 type FieldPlan struct {
@@ -793,32 +795,72 @@ const (
 	maxDecodedBody = 8 * maxBodyBuf
 )
 
+// scanBudget asks Ctx.Reserve for the memory that the scan of a buffered
+// body makes past the body itself: the decoded bytes of each coding and
+// the unescaped JSON strings. The reservation of the body counts only the
+// bytes on the wire. A gzip body of 16 KiB decodes to 8 MiB, and its
+// nested JSON escapes then unescape to four times that. Without this
+// charge, a few such requests at the same time took the broker past its
+// memory limit. After one refusal, take refuses each later request. A nil
+// reserve grants all.
+type scanBudget struct {
+	reserve func(n int64) bool
+	spent   bool
+}
+
+func (b *scanBudget) take(n int64) bool {
+	if b.spent {
+		return false
+	}
+	if b.reserve == nil || n <= 0 || b.reserve(n) {
+		return true
+	}
+	b.spent = true
+	return false
+}
+
+// budgetReader charges each byte that a decoder gives against the scan
+// budget. When the budget refuses, the read fails.
+type budgetReader struct {
+	r   io.Reader
+	bud *scanBudget
+}
+
+func (r budgetReader) Read(p []byte) (int, error) {
+	n, err := r.r.Read(p)
+	if !r.bud.take(int64(n)) {
+		return 0, ErrBufferBudget
+	}
+	return n, err
+}
+
 // decodeLayer undoes one coding. These are the same two codings that the
 // response side undoes (docs/fence.md 5.3b): gzip and its x-gzip alias
 // with compress/gzip, and deflate with compress/zlib. This is the
 // zlib-wrapped form that all libraries that send deflate write. It is not
 // raw RFC 1951, which the response path also never had to read. ok is
-// false for all other codings, for bytes that do not decode, and for a
-// decoded size past maxDecodedBody. For gzip, fields are the optional
-// fields of the member headers (gunzipMembers).
-func decodeLayer(coding string, b []byte) (decoded []byte, fields [][]byte, ok bool) {
+// false for all other codings, for bytes that do not decode, for a
+// decoded size past maxDecodedBody, and for a budget that refused. For
+// gzip, fields are the optional fields of the member headers
+// (gunzipMembers).
+func decodeLayer(coding string, b []byte, bud *scanBudget) (decoded []byte, fields [][]byte, ok bool) {
 	switch coding {
 	case "gzip", "x-gzip":
-		return gunzipMembers(b)
+		return gunzipMembers(b, bud)
 	case "deflate":
-		return inflate(b)
+		return inflate(b, bud)
 	}
 	return nil, nil, false
 }
 
 // inflate undoes the deflate coding: the zlib-wrapped form.
-func inflate(b []byte) (decoded []byte, fields [][]byte, ok bool) {
+func inflate(b []byte, bud *scanBudget) (decoded []byte, fields [][]byte, ok bool) {
 	r, err := zlib.NewReader(bytes.NewReader(b))
 	if err != nil {
 		return nil, nil, false
 	}
 	defer r.Close()
-	out, err := readBody(r, maxDecodedBody+1, -1, true)
+	out, err := readBody(budgetReader{r, bud}, maxDecodedBody+1, -1, true)
 	if err != nil || int64(len(out)) > maxDecodedBody {
 		return nil, nil, false
 	}
@@ -830,7 +872,7 @@ func inflate(b []byte) (decoded []byte, fields [][]byte, ok bool) {
 // forwards the compressed bytes, so these fields reach the origin with the
 // body. The stdlib reader keeps only the header of the first member when
 // it reads all members in one pass. Thus this reads each member alone.
-func gunzipMembers(b []byte) (decoded []byte, fields [][]byte, ok bool) {
+func gunzipMembers(b []byte, bud *scanBudget) (decoded []byte, fields [][]byte, ok bool) {
 	br := bytes.NewReader(b)
 	zr, err := gzip.NewReader(br)
 	if err != nil {
@@ -844,7 +886,7 @@ func gunzipMembers(b []byte) (decoded []byte, fields [][]byte, ok bool) {
 				fields = append(fields, f)
 			}
 		}
-		out, err := readBody(zr, maxDecodedBody+1-int64(len(decoded)), -1, true)
+		out, err := readBody(budgetReader{zr, bud}, maxDecodedBody+1-int64(len(decoded)), -1, true)
 		decoded = append(decoded, out...)
 		if err != nil || int64(len(decoded)) > maxDecodedBody {
 			return nil, nil, false
@@ -864,14 +906,14 @@ func gunzipMembers(b []byte) (decoded []byte, fields [][]byte, ok bool) {
 // stack, and for bytes that do not decode. This includes a decompression
 // bomb, because decodeLayer refuses it the same way. fields are the gzip
 // header fields of all layers.
-func decodeRequestBody(encs []string, body []byte) (decoded []byte, fields [][]byte, ok bool) {
+func decodeRequestBody(encs []string, body []byte, bud *scanBudget) (decoded []byte, fields [][]byte, ok bool) {
 	if len(encs) > maxEncodingLayers {
 		return nil, nil, false
 	}
 	decoded = body
 	for i := len(encs) - 1; i >= 0; i-- {
 		var fs [][]byte
-		if decoded, fs, ok = decodeLayer(encs[i], decoded); !ok {
+		if decoded, fs, ok = decodeLayer(encs[i], decoded, bud); !ok {
 			return nil, nil, false
 		}
 		fields = append(fields, fs...)
@@ -1023,24 +1065,32 @@ func (s *scanner) intakeBody(reserve func(n int64) bool, req *httpwire.Request, 
 			return nil, err
 		}
 	}
+	bud := &scanBudget{reserve: reserve}
 	if len(encs) > 0 {
 		// The fence never rewrites it in either case (5.3b): a clean
 		// decode only proves that the compressed bytes can go out as they are.
 		// Each gzip header field gets the scan of the body, one field at a
 		// time. A hit there refuses the request in the same way.
-		if decoded, fields, ok := decodeRequestBody(encs, body); ok {
+		if decoded, fields, ok := decodeRequestBody(encs, body, bud); ok {
 			s.noteEncodedBody(decoded)
-			s.noteJSONBody(req, decoded)
+			s.noteJSONBody(req, decoded, bud)
 			for _, f := range fields {
 				s.noteEncodedBody(f)
 			}
-		} else {
+		} else if !bud.spent {
+			// A decode that the budget stopped is a busy fence (below), not
+			// a body that does not decode.
 			s.refuse(CauseEncodedBody, "", "", "body")
 		}
 	} else {
 		s.at("body").noteAll(body, "body")
-		s.noteJSONBody(req, body)
+		s.noteJSONBody(req, body, bud)
 		plan.Body = s.at("body").classify(body)
+	}
+	// The budget refused the decode or the unescape, so the scan did not see
+	// all of the body. This is not a refusal of the body: it is a busy fence.
+	if bud.spent {
+		return nil, ErrBufferBudget
 	}
 	return body, nil
 }

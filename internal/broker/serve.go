@@ -206,6 +206,8 @@ func (b *Broker) serve(ctx context.Context, client net.Conn, br *bufio.Reader, p
 			return ErrBusy
 		}
 		defer b.Store.Release(c.harvestSlot)
+		b.harvesting.Add(1)
+		defer b.harvesting.Add(-1)
 		if done, err := b.spentRefuse(c); done {
 			return err
 		}
