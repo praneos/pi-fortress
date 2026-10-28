@@ -31,9 +31,9 @@ func TestUplinkParsers(t *testing.T) {
 	}
 	for ip, want := range map[string]bool{
 		"192.168.1.242": true,
-		"10.79.0.1":      false,
+		"10.79.0.1":     false,
 		"192.168.1.10":  false,
-		"127.0.0.2":      false,
+		"127.0.0.2":     false,
 	} {
 		if got := onLink(addrs, net.ParseIP(ip)); got != want {
 			t.Errorf("onLink(%s) = %v, want %v", ip, got, want)
