@@ -1708,6 +1708,17 @@ grep -q '^OnCalendar=\*:0/15$' "${here}/logrotate.timer" ||
 grep -q 'logrotate --state /var/lib/pi-fortress/logrotate.state /etc/pi-fortress/logrotate.conf' "${here}/logrotate.service" ||
   fail "logrotate.service does not run our conf with its own state file"
 
+# Each pf unit forbids namespaces, and none asks for its own user
+# namespace: harden.sh sets user.max_user_namespaces=0, and a unit with
+# PrivateUsers= would not start.
+for _u in "${here}"/*.service; do
+  grep -qxF RestrictNamespaces=yes "${_u}" || fail "$(basename "${_u}") has no RestrictNamespaces=yes"
+  grep -qE '^[[:space:]]*PrivateUsers[[:space:]]*=' "${_u}" &&
+    fail "$(basename "${_u}") sets PrivateUsers=; user namespaces are off on the gateway"
+done
+grep -qE 'PrivateUsers[[:space:]]*=' "${apply}" &&
+  fail "apply.sh writes a drop-in with PrivateUsers=; user namespaces are off on the gateway"
+
 # logrotate and the USB NIC switch stay root, with a sandbox, as
 # wg-alert does. logrotate writes only the log directory and its state
 # file. logrotate writes the state file through a rename, so the
@@ -1770,9 +1781,11 @@ _start="$(grep -nF 'systemctl enable --now pi-fortress-update-check.timer' "${ap
 for _l in NoNewPrivileges=yes ProtectHome=yes ProtectSystem=strict ProtectKernelModules=yes ProtectKernelLogs=yes \
   ProtectControlGroups=yes RestrictNamespaces=yes RestrictSUIDSGID=yes SystemCallArchitectures=native \
   SystemCallFilter=@system-service SystemCallErrorNumber=EPERM 'RestrictAddressFamilies=AF_UNIX AF_NETLINK' \
-  'CapabilityBoundingSet=CAP_SYS_ADMIN'; do
+  'CapabilityBoundingSet=' 'AmbientCapabilities='; do
   grep -qxF "${_l}" "${here}/usb-nic-switch.service" || fail "usb-nic-switch.service has no '${_l}'"
 done
+grep -qE '^(CapabilityBoundingSet|AmbientCapabilities)=.' "${here}/usb-nic-switch.service" &&
+  fail "usb-nic-switch.service gives a capability; the usbfs calls and the authorized write need none"
 grep -qE '^(PrivateDevices|ProtectKernelTunables)=yes' "${here}/usb-nic-switch.service" &&
   fail "usb-nic-switch.service blocks /dev/bus/usb or the writes to /sys"
 grep -qF '/authorized' "${here}/usb-nic-switch.sh" ||
@@ -1874,7 +1887,7 @@ printf 'PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"\nID=debian\nVERSION_CODENAM
 harden_run uu 2>"${hroot}/err" || fail "the hardening steps failed: $(cat "${hroot}/err")"
 cp "${hroot}/sysctl.d/99-pi-fortress.conf" "${tmp}/sysctl.conf"
 for _l in kernel.kptr_restrict=2 kernel.yama.ptrace_scope=2 fs.protected_regular=2 net.ipv4.tcp_syncookies=1 \
-  kernel.io_uring_disabled=2 net.mptcp.enabled=0; do
+  kernel.io_uring_disabled=2 net.mptcp.enabled=0 user.max_user_namespaces=0; do
   grep -qxF "${_l}" "${tmp}/sysctl.conf" || fail "99-pi-fortress.conf lacks ${_l}"
 done
 grep -qF 'label=Debian-Security' "${hroot}/apt.conf.d/52-pi-fortress-upgrades" || fail "no security origin in 52-pi-fortress-upgrades"
@@ -2733,6 +2746,18 @@ grep -qF '/etc/pi-fortress/dns-stub-*.json' "${here}/status.sh" \
   || fail "status.sh does not look for the dns-stub-<inst>.json files apply writes"
 grep -qF 'dns-stub.env' "${here}/status.sh" \
   && fail "status.sh still reads the retired dns-stub.env"
+# status.sh reads a segment file as pf render does: spaces before the key
+# and around = are permitted, quotes go, and the last line of a key wins.
+_sv="$(grep -E '^seg_val\(\) \{' "${here}/status.sh" || true)"
+[[ -n "${_sv}" ]] || fail "status.sh has no one-line seg_val"
+printf '# NTP=redirect\nIF=eth1.20\n NTP = pass\nNTP_X=no\n\tEGRESS =\t"strict"\nEGRESS=open\n' >"${tmp}/seg.env"
+for _c in NTP:pass IF:eth1.20 EGRESS:open NTP_X:no; do
+  _got="$(eval "${_sv}"; seg_val "${tmp}/seg.env" "${_c%%:*}")"
+  [[ "${_got}" == "${_c#*:}" ]] || fail "status.sh seg_val ${_c%%:*} gives '${_got}', not '${_c#*:}'"
+done
+printf '\tEGRESS =\t"strict"\n' >"${tmp}/seg2.env"
+_got="$(eval "${_sv}"; seg_val "${tmp}/seg2.env" EGRESS)"
+[[ "${_got}" == strict ]] || fail "status.sh seg_val EGRESS gives '${_got}' for '<tab>EGRESS =<tab>\"strict\"', not 'strict'"
 grep -qF 'pi-fortress-dns-stub@house.service' "${apply}" \
   || fail "apply.sh never manages the house stub instance"
 

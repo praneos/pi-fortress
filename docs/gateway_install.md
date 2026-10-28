@@ -196,7 +196,7 @@ Plan the reboot: `sudo reboot`. The agents have no gateway while it starts.
 
 It posts when this list changes, also when it becomes empty (for example after the reboot), and again each 7 days while the list stays. The state is in `/var/lib/pi-fortress/updates.last`. The unit runs as `pf-sidecar` with no capability, and runs `apt-get -s`, which changes nothing.
 
-The kernel has MPTCP and io_uring off (`net.mptcp.enabled=0`, `kernel.io_uring_disabled=2` in `/etc/sysctl.d/99-pi-fortress.conf`). No pf daemon and no service of the box uses them. The pf binary also listens and dials with plain TCP (`godebug multipathtcp=0` in `go.mod`).
+The kernel has MPTCP and io_uring off (`net.mptcp.enabled=0`, `kernel.io_uring_disabled=2` in `/etc/sysctl.d/99-pi-fortress.conf`). No pf daemon and no service of the box uses them. The pf binary also listens and dials with plain TCP (`godebug multipathtcp=0` in `go.mod`). User namespaces are also off (`user.max_user_namespaces=0`): a new network namespace starts with the kernel defaults (for example MPTCP on), and no pf unit needs user namespaces (each has `RestrictNamespaces=yes`).
 
 A Go daemon reads the system CA roots one time, when it starts. Thus `apply.sh` installs the apt hook `/etc/apt/apt.conf.d/60pi-fortress-ca`. After each dpkg run, it runs `/usr/local/lib/pi-fortress/ca-restart.sh`. When `/etc/ssl/certs/ca-certificates.crt` is different from the last run, the script restarts the running units of pf-broker, pf dns (`pi-fortress-dns-agent-go`, `pi-fortress-dns-stub@*`) and pf alert. The last hash is in `/var/lib/pi-fortress/ca-bundle.sha256` (mode 0600). The hook writes nothing to the terminal and never fails the apt run. The journal tag of a restart is `pi-fortress-ca`.
 

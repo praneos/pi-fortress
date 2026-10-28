@@ -32,8 +32,8 @@ func opsTests(t *testing.T) {
 			t.Fatal(strings.Join(bad, "\n"))
 		}
 	})
-	t.Run("MPTCP and io_uring are off, and no socket is MPTCP", func(t *testing.T) {
-		for k, want := range map[string]string{"net/mptcp/enabled": "0", "kernel/io_uring_disabled": "2"} {
+	t.Run("MPTCP, io_uring and user namespaces are off, and no socket is MPTCP", func(t *testing.T) {
+		for k, want := range map[string]string{"net/mptcp/enabled": "0", "kernel/io_uring_disabled": "2", "user/max_user_namespaces": "0"} {
 			// A kernel with no such key has nothing to turn off.
 			if out := strings.TrimSpace(pi(t, "cat /proc/sys/"+k+" 2>/dev/null || echo none")); out != want && out != "none" {
 				t.Errorf("%s is %q, not %s", k, out, want)

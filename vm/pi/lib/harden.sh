@@ -48,6 +48,11 @@ harden_put() {
 # MPTCP on. The units set RestrictNamespaces=yes, so a daemon cannot make
 # one. The pf binary also listens and dials with plain TCP (go.mod sets
 # multipathtcp=0), for a kernel where this file is not loaded yet.
+# User namespaces are off (user.max_user_namespaces=0). A process that
+# makes a user namespace can then make a new network namespace, and that
+# namespace starts with the kernel defaults (for example MPTCP on). No pf
+# unit needs user namespaces: all have RestrictNamespaces=yes, and none
+# sets PrivateUsers=.
 # A key that the kernel does not have (yama.ptrace_scope on the Raspberry
 # Pi kernel, io_uring_disabled before 6.6) is skipped: sysctl -e here,
 # and systemd-sysctl at boot logs it and goes on.
@@ -81,6 +86,7 @@ kernel.dmesg_restrict=1
 kernel.unprivileged_bpf_disabled=2
 kernel.io_uring_disabled=2
 net.mptcp.enabled=0
+user.max_user_namespaces=0
 kernel.yama.ptrace_scope=2
 fs.protected_symlinks=1
 fs.protected_hardlinks=1
