@@ -3846,7 +3846,7 @@ grep -qxF '  source "${LIB_DIR}/feeds.sh"' "${apply}" || fail "apply.sh does not
 for _u in fetch ship ship-deadman; do
   for _l in NoNewPrivileges=yes PrivateTmp=yes ProtectSystem=strict ProtectKernelModules=yes ProtectKernelLogs=yes \
     ProtectControlGroups=yes RestrictNamespaces=yes MemoryMax=1G TasksMax=256 SystemCallArchitectures=native \
-    SystemCallFilter=@system-service 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK'; do
+    SystemCallFilter=@system-service; do
     grep -qxF "${_l}" "${here}/${_u}.service" || fail "${_u}.service has no '${_l}'"
   done
   grep -q '^User=' "${here}/${_u}.service" && fail "${_u}.service names a User=; apply needs root"
@@ -3854,6 +3854,17 @@ for _u in fetch ship ship-deadman; do
   grep -qE '^(ProtectKernelTunables|RestrictSUIDSGID)=yes' "${here}/${_u}.service" &&
     fail "${_u}.service blocks the sysctl writes or the setgid directories of apply"
 done
+# The refresh opens no IP socket: pi-fortress-feeds.service downloads. A
+# ship or a dead-man rollback is a full apply, and keeps the IP families.
+for _u in ship ship-deadman; do
+  grep -qxF 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK' "${here}/${_u}.service" ||
+    fail "${_u}.service has a different set of address families"
+done
+[[ "$(grep '^RestrictAddressFamilies=' "${here}/fetch.service")" == "RestrictAddressFamilies=AF_UNIX AF_NETLINK" ]] ||
+  fail "fetch.service can open an IP socket"
+grep -qxF 'ProtectProc=invisible' "${here}/fetch.service" || fail "fetch.service sees the processes of other users"
+# The refresh writes /proc/sys/net.
+grep -q '^ProcSubset=' "${here}/fetch.service" && fail "fetch.service hides /proc/sys from apply"
 # ssh_local_addrs finds the admin SSH sessions by the local port 22, not by
 # process. ss -p would read the sockets of sshd, another uid, only with
 # SYS_PTRACE, and fetch.service does not have it. ship keeps SYS_PTRACE for

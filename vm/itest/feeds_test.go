@@ -3,6 +3,7 @@
 package itest
 
 import (
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -17,6 +18,7 @@ import (
 func feedsTests(t *testing.T) {
 	t.Run("the unit has its sandbox", feedsUnitTests)
 	t.Run("the running unit has no capability", labOnly(feedsLiveTests))
+	t.Run("pf fetch as root changes nothing", feedsRootTests)
 	t.Run("a refresh downloads as pf-feeds and keeps the canaries", feedsRefreshTests)
 	t.Run("a bad staged line refuses the whole set", labOnly(feedsRefuseTests))
 	t.Run("the unit reaches no segment", labOnly(feedsFenceTests))
@@ -132,6 +134,31 @@ func feedsLiveTests(t *testing.T) {
 	boxedStatus(t, feedsUnit, status, 0)
 	if got := procStatus(status, "CapBnd"); strings.Trim(got, "0") != "" {
 		t.Errorf("%s bounding set is %s, want 0", feedsUnit, got)
+	}
+}
+
+// L2: root does not download. sudo pf fetch exits 2 and changes no file
+// in generated/. The refresh unit, root, opens no IP socket and sees no
+// process of another user.
+func feedsRootTests(t *testing.T) {
+	p := feedsPolicyDir(t)
+	hash := "sudo find " + p + "/generated -type f -exec sha256sum {} + | sort"
+	before := pi(t, hash)
+	out, err := ssh(t, 60*time.Second, "pi", "sudo pf fetch -policy "+p+" 2>&1; echo rc=$?")
+	if err != nil || !contains(out, "rc=2") || !contains(out, "pf fetch does not run as root") {
+		t.Errorf("sudo pf fetch: %v\n%s", err, out)
+	}
+	if after := pi(t, hash); after != before {
+		t.Errorf("sudo pf fetch changed generated/:\nbefore %s\nafter  %s", before, after)
+	}
+	pr := showProps(t, "pi-fortress-fetch.service", "RestrictAddressFamilies", "ProtectProc")
+	fams := strings.Fields(pr["RestrictAddressFamilies"])
+	slices.Sort(fams)
+	if got := strings.Join(fams, " "); got != "AF_NETLINK AF_UNIX" {
+		t.Errorf("pi-fortress-fetch.service RestrictAddressFamilies=%q, want AF_UNIX AF_NETLINK", pr["RestrictAddressFamilies"])
+	}
+	if pr["ProtectProc"] != "invisible" {
+		t.Errorf("pi-fortress-fetch.service ProtectProc=%q, want invisible", pr["ProtectProc"])
 	}
 }
 

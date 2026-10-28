@@ -199,3 +199,40 @@ func TestReportTextHasOnlyPrintableASCII(t *testing.T) {
 		t.Fatalf("reportText = %q, want %q", got, want)
 	}
 }
+
+// As root, Run downloads nothing and writes nothing, in stage mode and in
+// the mode that writes generated/.
+func TestRunAsRootDownloadsNothing(t *testing.T) {
+	old := geteuid
+	geteuid = func() int { return 0 }
+	t.Cleanup(func() { geteuid = old })
+	d := newStageDirs(t)
+	get := func(string, string, time.Duration) (string, error) {
+		t.Fatal("a feed was downloaded as root")
+		return "", nil
+	}
+	for _, f := range []*Fetcher{
+		d.fetcher(strings.Repeat("ab", 16)),
+		{PolicyDir: d.policy},
+	} {
+		f.Get = get
+		if _, _, _, err := f.Run(); !errors.Is(err, ErrRoot) {
+			t.Fatalf("Run as root: %v", err)
+		}
+	}
+	for _, dir := range []string{d.state, d.gen} {
+		if ents, err := os.ReadDir(dir); err == nil && len(ents) > 0 || err != nil && !os.IsNotExist(err) {
+			t.Fatalf("%s written as root: %v %v", dir, ents, err)
+		}
+	}
+}
+
+// Run refuses root. When root runs go test, as in some containers, the
+// tests of this package use a different euid. Only the root test above
+// sets 0.
+func TestMain(m *testing.M) {
+	if geteuid() == 0 {
+		geteuid = func() int { return 65534 }
+	}
+	os.Exit(m.Run())
+}

@@ -1,6 +1,8 @@
 // Package fetch downloads the blocklist feeds named in sources.json and parses
-// them into domain and IP lists on disk. pf fetch, the TUI and internal/admin
-// call it.
+// them into domain and IP lists on disk. pf fetch calls it, as the user
+// pf-feeds in pi-fortress-feeds.service. Run does not run as root: root
+// imports the checked lists of that unit with pf feeds run
+// (internal/feedstage).
 package fetch
 
 import (
@@ -788,7 +790,17 @@ func anyFail(report []string) bool {
 	return false
 }
 
+// ErrRoot is the error of Run when the effective user is root. Thus no
+// root caller gets to the HTTP code, whichever caller it is.
+var ErrRoot = errors.New("pf fetch does not run as root; use pf apply or pf feeds run")
+
+// geteuid is a variable so that a test can be root.
+var geteuid = os.Geteuid
+
 func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
+	if geteuid() == 0 {
+		return nil, 0, 0, ErrRoot
+	}
 	policy := f.PolicyDir
 	outDir := f.OutDir
 	if outDir == "" {

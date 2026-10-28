@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -90,6 +91,10 @@ const observeUsage = "usage: pf observe once|run|show|reset"
 
 const alertUsage = "usage: pf alert run|show|once|watch|wg|updates"
 
+// runFetcher is a variable so that a test can give the error of a run
+// as root.
+var runFetcher = (*fetch.Fetcher).Run
+
 func runFetch(args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("fetch", stderr)
 	policy := fs.String("policy", "", "policy directory")
@@ -127,7 +132,11 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 		f.FreshFor, f.RunID = req.Fresh, req.Run
 	}
 	start := time.Now()
-	report, nIPs, nDoms, err := f.Run()
+	report, nIPs, nDoms, err := runFetcher(f)
+	if errors.Is(err, fetch.ErrRoot) {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	fields := map[string]string{
 		"policy": p, "out": o,
 		"ips": strconv.Itoa(nIPs), "domains": strconv.Itoa(nDoms),

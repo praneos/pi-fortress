@@ -9,12 +9,22 @@ import (
 
 	"pi-fortress/internal/audit"
 	"pi-fortress/internal/feedstage"
+	"pi-fortress/internal/fetch"
 )
+
+// notAsRoot skips a test that runs the real fetch: fetch.Run refuses root.
+func notAsRoot(t *testing.T) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("pf fetch does not run as root")
+	}
+}
 
 // In stage mode pf fetch takes -fresh and the run id from the request of
 // root, writes the run id into the stage, and writes no audit entry (the
 // unit cannot see the log; root writes the entry).
 func TestFetchStageModeTakesTheRequestOfRoot(t *testing.T) {
+	notAsRoot(t)
 	dir := t.TempDir()
 	log := filepath.Join(dir, "audit.jsonl")
 	t.Setenv(audit.PathEnv, log)
@@ -62,5 +72,25 @@ func TestFetchStageModeTakesTheRequestOfRoot(t *testing.T) {
 	stderr.Reset()
 	if code := runFetch(args, &stdout, &stderr); code != 2 || !strings.Contains(stderr.String(), "request") {
 		t.Fatalf("a bad request: exit %d: %s", code, stderr.String())
+	}
+}
+
+// pf fetch as root exits 2 with the message of fetch.Run, and writes no
+// lists line and no audit entry.
+func TestFetchAsRootExits2(t *testing.T) {
+	old := runFetcher
+	runFetcher = func(*fetch.Fetcher) ([]string, int, int, error) { return nil, 0, 0, fetch.ErrRoot }
+	t.Cleanup(func() { runFetcher = old })
+	dir := t.TempDir()
+	log := filepath.Join(dir, "audit.jsonl")
+	t.Setenv(audit.PathEnv, log)
+	var stdout, stderr strings.Builder
+	code := runFetch([]string{"-policy", dir}, &stdout, &stderr)
+	if code != 2 || stdout.Len() != 0 ||
+		stderr.String() != "pf fetch does not run as root; use pf apply or pf feeds run\n" {
+		t.Fatalf("exit %d, stdout %q, stderr %q", code, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(log); !os.IsNotExist(err) {
+		t.Fatalf("a refused run wrote an audit entry: %v", err)
 	}
 }
