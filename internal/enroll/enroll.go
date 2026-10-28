@@ -1,6 +1,6 @@
 // Package enroll is pf enroll: it mints, lists, migrates and deletes
 // slotted credentials, and makes the paste block that an agent gets.
-// internal/cli and internal/www call it. It never prints a live value on list.
+// internal/cli calls it. It never prints a live value on list.
 package enroll
 
 import (
@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"pi-fortress/internal/agentcreds"
 	"pi-fortress/internal/secrets"
 )
 
@@ -17,14 +18,6 @@ const (
 	OATPrefix = "sk-ant-oat01-"
 	ORTPrefix = "sk-ant-ort01-"
 )
-
-var claudeAIScopes = []string{
-	"user:file_upload",
-	"user:inference",
-	"user:mcp_servers",
-	"user:profile",
-	"user:sessions:claude_code",
-}
 
 func RedactLive(value string, head, tail int) string {
 	if value == "" {
@@ -71,24 +64,9 @@ func hasClaudeOAT(kinds []string) bool {
 	return false
 }
 
-// Placeholder is re-exported so callers that build agent files need not
-// import secrets for one string.
-func Placeholder(slot, kind string) string { return secrets.Placeholder(slot, kind) }
-
-func AgentCredentialsDoc(slot string) map[string]any {
-	return map[string]any{
-		"claudeAiOauth": map[string]any{
-			"accessToken":  secrets.Placeholder(slot, "CLAUDE_OAT"),
-			"refreshToken": secrets.Placeholder(slot, "CLAUDE_ORT"),
-			"expiresAt":    0,
-			"scopes":       append([]string(nil), claudeAIScopes...),
-		},
-	}
-}
-
 func AgentPaste(slot string, kinds []string) string {
 	if hasClaudeOAT(kinds) {
-		raw, _ := json.MarshalIndent(AgentCredentialsDoc(slot), "", "  ")
+		raw, _ := json.MarshalIndent(agentcreds.Doc(slot), "", "  ")
 		return "AGENT file: ~/.claude/.credentials.json (replace the file; no live tokens)\n" +
 			"expiresAt=0 forces a refresh on first use; the Pi harvests.\n" +
 			string(raw)
@@ -106,7 +84,7 @@ func WriteAgentPaste(slot string, kinds []string, dest string) error {
 	}
 	var text string
 	if hasClaudeOAT(kinds) {
-		raw, err := json.MarshalIndent(AgentCredentialsDoc(slot), "", "  ")
+		raw, err := json.MarshalIndent(agentcreds.Doc(slot), "", "  ")
 		if err != nil {
 			return err
 		}
