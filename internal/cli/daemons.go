@@ -414,6 +414,12 @@ func runBroker(args []string, _, stderr io.Writer) int {
 	acceptCapped(ctx, ln, *maxConns, "broker", func(c net.Conn) error {
 		return b.Handle(ctx, c)
 	})
+	// A stop must not cut a token refresh between the reply of the origin
+	// and the save of the new pair (Broker.WaitHarvests). The unit gives the
+	// stop 90 s.
+	if !b.WaitHarvests(20 * time.Second) {
+		log.Print("broker: a token refresh was still in flight at the stop; check the slot with pf enroll state")
+	}
 	return 0
 }
 
