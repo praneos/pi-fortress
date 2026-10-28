@@ -140,6 +140,15 @@ type tokenStream struct {
 	// would judge a token differently from the buffered path.
 	pre  int
 	hits map[string]int
+	// first is the prefix hit that firstHit found the last time, or -1.
+	// seen is len(Buf) at that time, or 0 when there is no such record.
+	// sure says that the run of the hit at first has minLen bytes, so it
+	// stays a hit when more bytes come.
+	first, seen int
+	sure        bool
+	// pin is the end of the token that held the output at the last full
+	// scan, when more bytes cannot change that token. Else it is 0.
+	pin int
 }
 
 func newTokenStream(src io.Reader, ts *tokenSet, pad bool) *tokenStream {
@@ -162,38 +171,93 @@ func (t *tokenStream) horizon() int {
 	n -= t.ts.maxPrefix - 1
 	// A prefix within a window of the tail may head a token whose last
 	// bytes have not arrived.
-	if i := t.ts.firstPrefixFrom(t.Buf, max(len(t.Buf)-window, 0)); i >= 0 && i < n {
+	if i := t.firstHit(); i >= 0 && i < n {
 		n = i
 	}
 	return max(n, 0)
+}
+
+// firstHit is t.ts.firstPrefixFrom(t.Buf, lo), with lo the start of the
+// last window of the buffer. It keeps the hit of the call before. Thus a
+// small read costs a search of its own bytes, not of the full window.
+// This is correct for two reasons. A hit that the call before saw in full
+// and did not take had a run that ended short, and that does not change.
+// A hit that it did not see in full starts in its last maxPrefix-1 bytes
+// or after them.
+func (t *tokenStream) firstHit() int {
+	b := t.Buf
+	lo := max(len(b)-window, 0)
+	i := t.first
+	// The record is of use while its hit is in the window and is still a
+	// hit. A record of no hit is always of use.
+	if t.seen > 0 && (i < 0 || i >= lo && (t.sure || t.ts.hit(b, i))) {
+		if from := max(lo, t.seen-t.ts.maxPrefix+1); i < 0 || i >= from {
+			if j := t.ts.firstPrefixFrom(b, from); j >= 0 && (i < 0 || j < i) {
+				i = j
+			}
+		}
+	} else {
+		i = t.ts.firstPrefixFrom(b, lo)
+	}
+	if i != t.first || !t.sure {
+		t.sure = i >= 0 && t.ts.lasting(b, i)
+	}
+	t.first, t.seen = i, len(b)
+	return i
+}
+
+// idle says that a full scan with horizon h cannot emit a byte. Then scan
+// does not run the regexp. Before, each read ran it again over all the
+// bytes that the stream held. Thus a body that came in small reads cost
+// about one window of regexp work for each read. The test is exact: the
+// full scan would also return without a change. Thus the output, and the
+// time at which each byte leaves, do not change.
+func (t *tokenStream) idle(h int) bool {
+	if len(t.Buf) > maxHold {
+		return false
+	}
+	// The scan emits nothing past the horizon.
+	if h <= t.pre {
+		return true
+	}
+	// The token that held the output at the last full scan still holds it.
+	return h < t.pin
 }
 
 func (t *tokenStream) scan() {
 	if len(t.Buf) == 0 {
 		return
 	}
-	ms := t.ts.matches(t.Buf)
 	n := len(t.Buf)
 	if !t.EOF {
 		n = t.horizon()
+		if t.idle(n) {
+			return
+		}
+	}
+	ms := t.ts.matches(t.Buf)
+	if !t.EOF {
 		// If the horizon falls inside a match, the stream emits the full
 		// match the next time and does not cut it. Nothing that starts
 		// before n can end after n.
+		pin := 0
 		for _, m := range ms {
 			if lo, hi := t.ts.token(m); lo < n && hi > n {
-				n = lo
+				n, pin = lo, hi
 			}
 		}
 		if len(t.Buf) > maxHold && n <= 0 {
 			n = len(t.Buf) - window
 		}
-		if n <= 0 {
+		if n <= t.pre {
+			t.pin = t.pinFor(n, pin)
 			return
 		}
 	}
 	if n <= t.pre {
 		return
 	}
+	t.pin = 0
 	out := t.outBuf[:0]
 	pos := t.pre
 	for _, m := range ms {
@@ -221,6 +285,30 @@ func (t *tokenStream) scan() {
 	tail := copy(t.Buf, t.Buf[keep:])
 	t.Buf = t.Buf[:tail]
 	t.pre = n - keep
+	if t.seen > 0 {
+		t.seen -= keep
+		if t.first >= 0 {
+			t.first -= keep
+		}
+	}
+}
+
+// pinFor is the value of pin after a full scan that emitted nothing. n is
+// where the scan stopped. hi is the end of the token that moved n back to
+// the start of that token, or 0. More bytes can change that token in two
+// ways only. The regexp can find a match that ends later or starts sooner,
+// and that match also holds the output. Or a hit near the tail can lose
+// its window, and then the merged window ends sooner. Thus pin is set only
+// for a token that ends well before the tail, and that is too short to
+// reach the end of its own window.
+func (t *tokenStream) pinFor(n, hi int) int {
+	if hi == 0 || hi-n >= window-1 {
+		return 0
+	}
+	if hi+t.ts.minLen+t.ts.maxPrefix+leadMax+1 > len(t.Buf) {
+		return 0
+	}
+	return hi
 }
 
 // events is one StripEvent per rule that fired, with the names that the

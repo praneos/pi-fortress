@@ -449,6 +449,38 @@ func (t *tokenSet) span(b []byte, s int) (int, bool) {
 	return min(i+1, len(b)), true
 }
 
+// hit is the ok of span. It does not need the end of the run, so it stops
+// after minLen bytes and does not walk a long run to the window edge.
+func (t *tokenSet) hit(b []byte, s int) bool {
+	if !t.bounded {
+		return true
+	}
+	lim := min(s+window, len(b), s+t.minLen)
+	i := s
+	for i < lim && inTokenClass(b[i]) {
+		i++
+	}
+	return i-s >= t.minLen || i == len(b)
+}
+
+// lasting says that the hit at s stays a hit when bytes come after b: its
+// run already has minLen bytes. A hit with a shorter run that reaches the
+// end of b can still end short.
+func (t *tokenSet) lasting(b []byte, s int) bool {
+	if !t.bounded {
+		return true
+	}
+	if t.minLen > window || len(b)-s < t.minLen {
+		return false
+	}
+	for _, c := range b[s : s+t.minLen] {
+		if !inTokenClass(c) {
+			return false
+		}
+	}
+	return true
+}
+
 // matches returns FindAllSubmatchIndex over b, computed only inside
 // candidate windows when the prefilter is complete.
 func (t *tokenSet) matches(b []byte) [][]int {
@@ -555,7 +587,7 @@ func (t *tokenSet) firstPrefixFrom(b []byte, lo int) int {
 				break
 			}
 			s := k + j
-			if _, ok := t.span(b, s); ok {
+			if t.hit(b, s) {
 				if best < 0 || s < best {
 					best = s
 				}
