@@ -816,7 +816,7 @@ done
 # long-running pf unit has a memory ceiling, a task and file ceiling, and
 # an OOM rank. It never stops its restarts. pf dns ranks below the broker,
 # so house DNS outlives the fence in a global OOM.
-for _u in pf-broker pf-engine dns-agent-go dns-stub@ dns-house observe alert monitor www; do
+for _u in pf-broker pf-engine dns-agent-go dns-stub@ dns-house netgate observe alert monitor www; do
   _f="${here}/${_u}.service"
   for _d in MemoryHigh MemoryMax TasksMax LimitNOFILE OOMScoreAdjust; do
     _re="^${_d}=[0-9]"
@@ -824,6 +824,8 @@ for _u in pf-broker pf-engine dns-agent-go dns-stub@ dns-house observe alert mon
     # (alert.service). DNS and DHCP keep the house up, so they go late too.
     [[ "${_u}" == alert && "${_d}" == OOMScoreAdjust ]] && _re='^OOMScoreAdjust=-900$'
     [[ "${_u}" == dns-* && "${_d}" == OOMScoreAdjust ]] && _re='^OOMScoreAdjust=-500$'
+    # netgate writes the gate sets of pf dns. Without it, no new answer.
+    [[ "${_u}" == netgate && "${_d}" == OOMScoreAdjust ]] && _re='^OOMScoreAdjust=-500$'
     grep -qE "${_re}" "${_f}" || fail "${_u}.service has no ${_d}"
   done
   grep -q '^StartLimitIntervalSec=0$' "${_f}" || fail "${_u}.service can give up restarting"
@@ -840,7 +842,7 @@ for _u in pf-broker pf-engine; do
   grep -q '^RestartSteps=[1-9]' "${here}/${_u}.service" || fail "${_u}.service has no growing restart back-off"
   grep -q '^RestartMaxDelaySec=[1-9]' "${here}/${_u}.service" || fail "${_u}.service back-off has no ceiling"
 done
-for _u in dns-agent-go dns-stub@ dns-house; do
+for _u in dns-agent-go dns-stub@ dns-house netgate; do
   grep -q '^RestartSteps=' "${here}/${_u}.service" && fail "${_u}.service backs off; house DNS must restart at once"
 done
 _oom() { sed -n 's/^OOMScoreAdjust=//p' "${here}/$1.service"; }
@@ -849,7 +851,7 @@ _oom() { sed -n 's/^OOMScoreAdjust=//p' "${here}/$1.service"; }
 # Kill order: fetch, broker, the rest of the fence, unranked processes,
 # DNS and DHCP, then alert and sshd.
 (( $(_oom fetch) > $(_oom pf-broker) )) || fail "the feed refresh does not go before the broker for the OOM killer"
-for _u in dns-agent-go dns-house dns-stub@ dhcp@; do
+for _u in dns-agent-go dns-house dns-stub@ dhcp@ netgate; do
   (( $(_oom "${_u}") < 0 && $(_oom "${_u}") > $(_oom alert) )) || fail "${_u}.service does not rank between unranked processes and alert"
 done
 grep -q '^Environment=GOMEMLIMIT=' "${here}/pf-broker.service" || fail "pf-broker.service sets no GOMEMLIMIT"
@@ -1621,6 +1623,67 @@ grep -q 'pf dns -config /etc/pi-fortress/dns.json' "${unit}" ||
   fail "dns-agent-go.service does not start pf dns from the segment list"
 grep -q '^EnvironmentFile=' "${unit}" &&
   fail "dns-agent-go.service still reads the one-variable-per-flag env file"
+
+# pf netgate holds CAP_NET_ADMIN for pf dns. The agent resolver has a
+# primary group of its own, pf-dnsgate. The DoT stubs run as the same
+# account with the group pf-fortress. netgate opens its socket only to
+# pf-dnsgate and checks the gid of each peer.
+grep -qxF 'Group=pf-dnsgate' "${unit}" || fail "dns-agent-go.service does not run with the group pf-dnsgate"
+grep -qxF 'SupplementaryGroups=pf-fortress' "${unit}" || fail "dns-agent-go.service lost pf-fortress, the group of the shared files"
+grep -qxF 'Group=pf-fortress' "${here}/dns-stub@.service" || fail "dns-stub@.service does not run with the group pf-fortress"
+grep -vE '^[[:space:]]*#' "${here}/dns-stub@.service" | grep -q 'pf-dnsgate' &&
+  fail "dns-stub@.service has the group pf-dnsgate of the agent resolver"
+grep -qE '^(After|Wants)=.*pi-fortress-netgate\.service' "${unit}" || fail "dns-agent-go.service does not want netgate"
+[[ "$(grep -cE '^(After|Wants)=.*pi-fortress-netgate\.service' "${unit}")" -eq 2 ]] ||
+  fail "dns-agent-go.service needs both Wants= and After= on netgate"
+grep -qF 'getent group pf-dnsgate >/dev/null || groupadd --system pf-dnsgate' "${apply}" ||
+  fail "apply.sh does not create the pf-dnsgate group"
+grep -qE 'usermod .*pf-dnsgate' "${apply}" &&
+  fail "apply.sh puts an account in pf-dnsgate; each unit of that account would get the group"
+grep -qxF '    useradd --system --no-create-home --gid nogroup --home /nonexistent --shell /usr/sbin/nologin pf-netgate' "${apply}" ||
+  fail "apply.sh does not make the pf-netgate account with no login and no daemon group"
+ng="${here}/netgate.service"
+[[ -f "${ng}" ]] || fail "vm/pi/netgate.service is missing"
+for _l in \
+  'User=pf-netgate' 'Group=nogroup' 'SupplementaryGroups=pf-dnsgate' 'UMask=0077' \
+  'RuntimeDirectory=pi-fortress-netgate' 'RuntimeDirectoryMode=0755' \
+  'CapabilityBoundingSet=CAP_NET_ADMIN' 'AmbientCapabilities=CAP_NET_ADMIN' \
+  'RestrictAddressFamilies=AF_UNIX AF_NETLINK' \
+  'ExecStart=/usr/local/sbin/pf netgate run -config /etc/pi-fortress/dns.json' \
+  'Restart=always' 'NoNewPrivileges=yes' 'ProtectSystem=strict' 'ProtectHome=yes' 'PrivateTmp=yes' \
+  'PrivateDevices=yes' 'ProtectKernelTunables=yes' 'ProtectKernelModules=yes' 'ProtectKernelLogs=yes' \
+  'ProtectControlGroups=yes' 'ProtectClock=yes' 'ProtectHostname=yes' 'ProtectProc=invisible' \
+  'RestrictNamespaces=yes' 'RestrictRealtime=yes' 'RestrictSUIDSGID=yes' 'LockPersonality=yes' \
+  'MemoryDenyWriteExecute=yes' 'SystemCallArchitectures=native' 'SystemCallFilter=@system-service' \
+  'SystemCallFilter=~@privileged' 'SystemCallFilter=@chown' 'ReadWritePaths=' \
+  'Before=pi-fortress-dns-agent-go.service'; do
+  grep -qxF "${_l}" "${ng}" || fail "netgate.service has no '${_l}'"
+done
+# The one daemon with NET_ADMIN for pf dns reads no log, no state, no claim
+# code, no webhook URL and no house reservation.
+for _p in /etc/pi-fortress/broker /var/lib/pi-fortress/engine /var/lib/pi-fortress/www /var/log/pi-fortress \
+  /var/lib/pi-fortress/observe /etc/pi-fortress/alert.url /etc/pi-fortress/house.hosts; do
+  grep -qE "^InaccessiblePaths=(.* )?-${_p}( |\$)" "${ng}" || fail "netgate.service does not hide ${_p}"
+done
+grep -vE '^[[:space:]]*#' "${ng}" | grep -qE 'CAP_(SYS|DAC|CHOWN|SETUID|SETGID|NET_RAW|NET_BIND)' &&
+  fail "netgate.service has a capability other than NET_ADMIN"
+grep -vE '^[[:space:]]*#' "${ng}" | grep -q 'pf-fortress' &&
+  fail "netgate.service is in pf-fortress, the group of the shared logs and state"
+# apply installs and enables netgate, and restarts it after the pf dns
+# stop and before the pf dns restart: it reads the gate sets from the
+# dns.json that this apply wrote.
+grep -qxF 'install -m 0644 "${PI_LIB}/netgate.service" /etc/systemd/system/pi-fortress-netgate.service' "${apply}" ||
+  fail "apply.sh does not install netgate.service"
+grep -qxF 'systemctl enable pi-fortress-netgate.service >/dev/null 2>&1 || true' "${apply}" ||
+  fail "apply.sh does not enable netgate"
+_ngr="$(grep -nxF 'systemctl restart pi-fortress-netgate.service' "${apply}" | head -1 | cut -d: -f1 || true)"
+_dsr="$(grep -nxF 'systemctl restart pi-fortress-dns-agent-go.service' "${apply}" | head -1 | cut -d: -f1 || true)"
+_dss="$(grep -nxF 'systemctl stop pi-fortress-dns-agent-go.service >/dev/null 2>&1 || true' "${apply}" | tail -1 | cut -d: -f1 || true)"
+_djs="$(grep -nxF 'install -m 0644 "${WORKDIR}/dns.json" /etc/pi-fortress/dns.json' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_ngr}" && -n "${_dsr}" && -n "${_dss}" && -n "${_djs}" &&
+  "${_djs}" -lt "${_dss}" && "${_dss}" -lt "${_ngr}" && "${_ngr}" -lt "${_dsr}" ]] ||
+  fail "apply.sh does not restart netgate after dns.json and the pf dns stop, and before the pf dns restart (lines ${_djs:-?} ${_dss:-?} ${_ngr:-?} ${_dsr:-?})"
+grep -qxF '  pi-fortress-netgate.service \' "${apply}" || fail "netgate is not in units.required"
 
 # The house dnsmasq parses DHCP off the wire from all devices that the
 # house connects. It was the last long-running daemon with no seccomp
@@ -3226,6 +3289,12 @@ EOF
   _dstart="$(grep -n '^restart pi-fortress-dns-agent-go.service$' "${lab2}.systemctl" | head -1 | cut -d: -f1 || true)"
   [[ -n "${_dstop}" && -n "${_dstart}" && "${_dstop}" -lt "${_dstart}" ]] ||
     fail "apply does not stop pf dns before the policy flush and start it after"
+  # netgate restarts in that gap: it reads the gate sets of the new
+  # dns.json before pf dns asks it for a write.
+  _ngstart="$(grep -n '^restart pi-fortress-netgate.service$' "${lab2}.systemctl" | head -1 | cut -d: -f1 || true)"
+  [[ -n "${_ngstart}" && "${_dstop}" -lt "${_ngstart}" && "${_ngstart}" -lt "${_dstart}" ]] ||
+    fail "apply does not restart netgate between the pf dns stop and its start: $(grep -n 'netgate\|dns-agent-go' "${lab2}.systemctl" | tr '\n' ' ')"
+  [[ -f "${lab2}/etc/systemd/system/pi-fortress-netgate.service" ]] || fail "apply --local did not install netgate.service"
   local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
   grep -q '^stdin: flush set' "${lab2}.nft" &&
     fail "an apply with the same DNS policy flushed a resolved set: $(grep '^stdin: flush' "${lab2}.nft")"

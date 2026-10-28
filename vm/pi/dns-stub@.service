@@ -29,6 +29,8 @@ CPUWeight=200
 # %i is the instance: "main" answers the box and the agents. "house"
 # exists only when the house resolves through a different provider
 # (docs/user_guide/home_network.md). Only their config files are different.
+# The group is pf-fortress, not pf-dnsgate of the agent resolver. netgate
+# opens its socket only to pf-dnsgate. Thus a stub cannot write a gate set.
 User=pf-dns
 Group=pf-fortress
 # Port 53 only. The SO_BINDTODEVICE pin on lo needs no capability

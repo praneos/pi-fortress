@@ -504,6 +504,18 @@ else
   # are in it. Not pf-fence, because the engine is in it. The journal has
   # each name that the agent resolved, and the broker is its only reader.
   getent group pf-fakeip >/dev/null || groupadd --system pf-fakeip
+  # pf-dnsgate: the primary group of the agent resolver (Group= in
+  # dns-agent-go.service), and of no account. The DoT stubs run as pf-dns
+  # with the group pf-fortress. netgate opens its socket for pf dns only to
+  # this group, and checks the gid of each peer. Thus a stub cannot write a
+  # gate set. No usermod: an account in it would give the group to each
+  # unit of that account.
+  getent group pf-dnsgate >/dev/null || groupadd --system pf-dnsgate
+  # pf-netgate: pf netgate, the one daemon with CAP_NET_ADMIN for pf dns.
+  # It is in no group of the other daemons. It reads no log and no state.
+  if ! id -u pf-netgate >/dev/null 2>&1; then
+    useradd --system --no-create-home --gid nogroup --home /nonexistent --shell /usr/sbin/nologin pf-netgate
+  fi
   usermod -aG pf-fakeip pf-broker
   usermod -aG pf-fence pf-broker
   usermod -aG pf-fence pf-engine
@@ -1889,10 +1901,12 @@ fi
 rm -rf /etc/systemd/system/dnsmasq.service.d
 systemctl disable --now dnsmasq.service >/dev/null 2>&1 || true
 systemctl mask dnsmasq.service >/dev/null 2>&1 || true
-if [[ ! -f "${PI_LIB}/dns-agent-go.service" ]]; then
-  echo "pi-fortress: ${PI_LIB}/dns-agent-go.service missing" >&2
-  exit 1
-fi
+for _u in dns-agent-go netgate; do
+  if [[ ! -f "${PI_LIB}/${_u}.service" ]]; then
+    echo "pi-fortress: ${PI_LIB}/${_u}.service missing" >&2
+    exit 1
+  fi
+done
 # systemd drops the privilege that this daemon does not drop itself. Thus
 # the daemon owns the log that it appends to. apply creates the account with
 # the other system users, well before the DoT stub needs it.
@@ -1913,6 +1927,9 @@ for _i in "${!SEG_NAME[@]}"; do
   chmod 0640 "${_slog}"
 done
 install -m 0644 "${PI_LIB}/dns-agent-go.service" /etc/systemd/system/pi-fortress-dns-agent-go.service
+# netgate writes the gate sets for pf dns (netgate.service). It reads the
+# sets from dns.json, so it restarts below with pf dns, before it.
+install -m 0644 "${PI_LIB}/netgate.service" /etc/systemd/system/pi-fortress-netgate.service
 # A box that upgrades from the dnsmasq resolver still has that unit, and it
 # wants the same address and port that pf dns will take. apply does not
 # generate it now, so this is the one-time removal.
@@ -1928,6 +1945,7 @@ if [[ -n "${HOUSE_IF}" ]]; then
   systemctl stop pi-fortress-dns-house.service >/dev/null 2>&1 || true
 fi
 systemctl daemon-reload
+systemctl enable pi-fortress-netgate.service >/dev/null 2>&1 || true
 systemctl enable pi-fortress-dns-agent-go.service >/dev/null 2>&1 || true
 # An element of a resolved set does not name the DNS name that gave it.
 # Thus, when the DNS policy of the operator changes (an operator block
@@ -1946,6 +1964,11 @@ RESOLVED_POLICY_STATE=/var/lib/pi-fortress/resolved-policy.state
 systemctl stop pi-fortress-dns-agent-go.service >/dev/null 2>&1 || true
 "${PF}" nftsets policy --table "inet fortress" --config /etc/pi-fortress/dns.json --policy "${POLICY}" --state "${RESOLVED_POLICY_STATE}" ||
   echo "pi-fortress: could not compare the DNS policy of the resolved-address sets; a name that this apply blocks can keep its addresses in the set until they expire (2h)" >&2
+# netgate reads the gate sets from dns.json at its start. Thus it restarts
+# here, after apply wrote dns.json and while pf dns is stopped, and before
+# pf dns. A pf dns that comes up first answers SERVFAIL until netgate is
+# there.
+systemctl restart pi-fortress-netgate.service
 systemctl restart pi-fortress-dns-agent-go.service
 
 # House WireGuard egress. Nested on HOUSE_IF so that
@@ -2614,6 +2637,7 @@ audit_apply "${_settled}"
 install -d -m 0755 /var/lib/pi-fortress
 printf '%s\n' \
   nftables.service \
+  pi-fortress-netgate.service \
   pi-fortress-dns-agent-go.service \
   pi-fortress-broker.service \
   pi-fortress-engine.service \

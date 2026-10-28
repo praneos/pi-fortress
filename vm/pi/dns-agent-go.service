@@ -1,7 +1,7 @@
 [Unit]
 Description=pi-fortress segment DNS (pf dns)
-After=network-online.target
-Wants=network-online.target
+After=network-online.target pi-fortress-netgate.service
+Wants=network-online.target pi-fortress-netgate.service
 # Always restart, with no limit (pf-broker.service gives the reason).
 StartLimitIntervalSec=0
 
@@ -32,8 +32,14 @@ CPUWeight=200
 # interface (SO_BINDTODEVICE) once, before it binds or connects it. The
 # kernel (5.7 and later) lets a process with no capability do this on a
 # socket that no device pins yet.
+# pf-dnsgate is the primary group of this unit, and of no account and no
+# other unit. The DoT stubs run as pf-dns too, with the group pf-fortress.
+# netgate opens dns.sock only to pf-dnsgate, and it checks the uid and
+# the gid of each peer. Thus a stub cannot write a gate set. pf-fortress
+# stays a supplementary group, for the files that the daemons share.
 User=pf-dns
-Group=pf-fortress
+Group=pf-dnsgate
+SupplementaryGroups=pf-fortress
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
 AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN
 # One flag, one path. The old flags were one environment variable each,
