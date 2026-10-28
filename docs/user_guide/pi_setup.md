@@ -289,6 +289,8 @@ Each block on the agent segment causes a digest. When a digest goes out, it give
 - The five most frequent destinations, with the feed and the number of blocks. A house list block is only a number.
 - On the agent segment, the address of the agent device for each destination. The digest does not name the devices of other segments.
 
+Between two counts, `pf observe` keeps a maximum of 512 destinations for each segment. A block to a different destination after that limit is only a number in its class. The limit is for each segment, thus the destinations of one segment do not push out the destinations of a different segment.
+
 A digest shows the zone of a name that has the shape of a key or a placeholder, for example `(redacted).example.com`. It never shows the full name. `pf observe` sends its counts to `pf alert` each time that it writes its ledger. This occurs each 15 minutes by default. Thus a block can be in the digest of the next window.
 
 The alert service keeps the open window in `/var/lib/pi-fortress/alert/digest.json`. After a restart, the service continues the same window. It does not send a digest two times. If the service stops while a digest is not yet sent, you lose that digest only.
