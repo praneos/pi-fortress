@@ -155,3 +155,19 @@ func TestPolicyDirResolvesLikeApply(t *testing.T) {
 		t.Fatalf("PI_FORTRESS_POLICY: %q", got)
 	}
 }
+
+func TestStripLineDropsBothCommentStyles(t *testing.T) {
+	for in, want := range map[string]string{
+		"  example.com  # note": "example.com",
+		"192.0.2.1 ; note # x":  "192.0.2.1",
+		"# only a comment":      "",
+		"  \t ":                 "",
+		"host.test":             "host.test",
+		"a ; b # c":             "a",
+		"a # b ; c":             "a",
+	} {
+		if got := StripLine(in); got != want {
+			t.Errorf("StripLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

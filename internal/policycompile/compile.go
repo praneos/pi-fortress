@@ -217,17 +217,6 @@ func (s Summary) Line() string {
 	return line
 }
 
-func StripLine(raw string) string {
-	line := raw
-	if i := strings.Index(line, "#"); i >= 0 {
-		line = line[:i]
-	}
-	if i := strings.Index(line, ";"); i >= 0 {
-		line = line[:i]
-	}
-	return strings.TrimSpace(line)
-}
-
 func parsePrefix4(token string) (netip.Prefix, bool) {
 	token = strings.TrimSpace(token)
 	if token == "" {
@@ -548,7 +537,7 @@ func asciiWarnings(policyDir string) ([]string, error) {
 			return nil, err
 		}
 		for i, line := range strings.Split(string(raw), "\n") {
-			if token := StripLine(line); !corepolicy.IsASCII(token) {
+			if token := base.StripLine(line); !corepolicy.IsASCII(token) {
 				warn = append(warn, fmt.Sprintf("%s line %d: %q is skipped (%s)", name, i+1, token, corepolicy.ASCIIHint(token)))
 			}
 		}
@@ -985,7 +974,7 @@ func loadTokens(path, kind string) ([]string, []badLine, error) {
 	n := 0
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		n++
-		token := StripLine(line)
+		token := base.StripLine(line)
 		if token == "" {
 			continue
 		}

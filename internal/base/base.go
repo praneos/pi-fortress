@@ -68,6 +68,19 @@ func ParseEnv(raw []byte) map[string]string {
 	return out
 }
 
+// StripLine removes a # or ; comment and the space around the rest of a
+// list line.
+func StripLine(raw string) string {
+	line := raw
+	if i := strings.Index(line, "#"); i >= 0 {
+		line = line[:i]
+	}
+	if i := strings.Index(line, ";"); i >= 0 {
+		line = line[:i]
+	}
+	return strings.TrimSpace(line)
+}
+
 // LoadEnvFile parses path. It tells apart a file that is not there and a
 // file that is there but could not be read. The first is a configuration
 // and gives an empty map. The second is a fault and gives the error. A

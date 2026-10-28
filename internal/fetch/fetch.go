@@ -20,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"pi-fortress/internal/base"
 	"pi-fortress/internal/policycompile"
 )
 
@@ -156,7 +157,7 @@ func ParseHosts(body string) []string { return slices.Collect(hostsSeq(body)) }
 func hostsSeq(body string) iter.Seq[string] {
 	return func(yield func(string) bool) {
 		for line := range strings.SplitSeq(body, "\n") {
-			tok := policycompile.StripLine(line)
+			tok := base.StripLine(line)
 			if tok == "" {
 				continue
 			}
@@ -440,7 +441,7 @@ func ParsePlain(body, kind string) []string { return slices.Collect(plainSeq(bod
 func plainSeq(body, kind string) iter.Seq[string] {
 	return func(yield func(string) bool) {
 		for line := range strings.SplitSeq(body, "\n") {
-			tok := policycompile.StripLine(line)
+			tok := base.StripLine(line)
 			if tok == "" {
 				continue
 			}
@@ -469,7 +470,7 @@ func spamhausSeq(body string) iter.Seq[string] {
 			if strings.HasPrefix(strings.TrimLeft(raw, " \t"), ";") {
 				continue
 			}
-			tok := policycompile.StripLine(raw)
+			tok := base.StripLine(raw)
 			if tok == "" {
 				continue
 			}
@@ -501,7 +502,7 @@ func readListFile(path, kind string, report *[]string) []string {
 	n := 0
 	for line := range strings.SplitSeq(string(raw), "\n") {
 		n++
-		tok := policycompile.StripLine(line)
+		tok := base.StripLine(line)
 		if tok == "" {
 			continue
 		}

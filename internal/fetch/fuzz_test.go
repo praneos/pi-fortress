@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"pi-fortress/internal/base"
 	"pi-fortress/internal/policycompile"
 )
 
@@ -84,7 +85,7 @@ func FuzzParseFeeds(f *testing.F) {
 		// A sink address with a field after it gives the name or nothing,
 		// never an address.
 		for line := range strings.SplitSeq(body, "\n") {
-			if f := strings.Fields(policycompile.StripLine(line)); len(f) < 2 || !sinkAddr(f[0]) {
+			if f := strings.Fields(base.StripLine(line)); len(f) < 2 || !sinkAddr(f[0]) {
 				continue
 			}
 			for _, d := range ParsePlain(line, "domains") {
