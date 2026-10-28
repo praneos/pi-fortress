@@ -57,7 +57,7 @@ func tokensFor(re *regexp.Regexp) *tokenSet {
 	var all [][]byte
 	var lead []bool
 	all, lead, ts.fold, ts.complete = tokenrules.PrefixInfo(re.String())
-	ts.minLen, ts.bounded = matchBounds(re.String())
+	ts.minLen, ts.bounded = tokenrules.MatchBounds(re.String())
 	for _, p := range all {
 		if len(p) > ts.maxPrefix {
 			ts.maxPrefix = len(p)
@@ -235,86 +235,9 @@ func (t *tokenSet) index(b, p []byte) int {
 	return httpwire.Index(b, p)
 }
 
-func inTokenClass(c byte) bool {
-	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
-		c == '_' || c == '-' || c == '.'
-}
-
-func classWithin(r *syntax.Regexp) bool {
-	for i := 0; i+1 < len(r.Rune); i += 2 {
-		lo, hi := r.Rune[i], r.Rune[i+1]
-		if lo < 0 || hi > 0x7f {
-			return false
-		}
-		for c := lo; c <= hi; c++ {
-			if !inTokenClass(byte(c)) {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-// bounds is the shortest string this node can match, and whether every
-// byte it can match is in tokenClass.
-func bounds(r *syntax.Regexp) (int, bool) {
-	// The lead is judged on the bytes before the prefix. span and the window
-	// supply those bytes. The lead adds nothing to the length of a match.
-	if tokenrules.IsLead(r) {
-		return 0, true
-	}
-	switch r.Op {
-	case syntax.OpEmptyMatch, syntax.OpWordBoundary, syntax.OpNoWordBoundary,
-		syntax.OpBeginText, syntax.OpEndText, syntax.OpBeginLine, syntax.OpEndLine:
-		return 0, true
-	case syntax.OpLiteral:
-		for _, c := range r.Rune {
-			if c > 0x7f || !inTokenClass(byte(c)) {
-				return len(r.Rune), false
-			}
-		}
-		return len(r.Rune), true
-	case syntax.OpCharClass:
-		return 1, classWithin(r)
-	case syntax.OpCapture:
-		return bounds(r.Sub[0])
-	case syntax.OpConcat:
-		n, ok := 0, true
-		for _, sub := range r.Sub {
-			sn, sok := bounds(sub)
-			n, ok = n+sn, ok && sok
-		}
-		return n, ok
-	case syntax.OpAlternate:
-		n, ok := -1, true
-		for _, sub := range r.Sub {
-			sn, sok := bounds(sub)
-			if n < 0 || sn < n {
-				n = sn
-			}
-			ok = ok && sok
-		}
-		return max(n, 0), ok
-	case syntax.OpStar, syntax.OpQuest:
-		_, ok := bounds(r.Sub[0])
-		return 0, ok
-	case syntax.OpPlus:
-		return bounds(r.Sub[0])
-	case syntax.OpRepeat:
-		n, ok := bounds(r.Sub[0])
-		return n * r.Min, ok
-	}
-	return 0, false
-}
-
-func matchBounds(expr string) (int, bool) {
-	r, err := syntax.Parse(expr, syntax.Perl)
-	if err != nil {
-		return 0, false
-	}
-	n, ok := bounds(r.Simplify())
-	return n, ok && n > 0
-}
+// inTokenClass is tokenrules.InTokenClass: letters, digits, '_', '-' and
+// '.'.
+func inTokenClass(c byte) bool { return tokenrules.InTokenClass(c) }
 
 // window is the limit on how far past a literal prefix the regexp runs. No
 // credential is a kilobyte long. A hit inside the window is complete, and
@@ -507,10 +430,12 @@ func (t *tokenSet) replace(b []byte, repl []byte) []byte {
 // a prefix in each window makes it, because the windows then merge. The
 // stream holds at most maxHold of a token that is still in transit (see
 // tokenStream). Thus for such a token, the strip goes on to the end of its
-// run of token bytes, on the stream and on the buffered path. Each shipped
-// rule is written from tokenClass (TestShippedRulesArmTheFilter). Thus a
-// match ends at or before the end of the run, and a match that starts
-// inside the run is a part of the strip.
+// run of token bytes, on the stream and on the buffered path. Each rule is
+// written from tokenClass: the broker does not start with a rule that can
+// match other bytes (tokenrules Streamable), and
+// TestShippedRulesArmTheFilter checks the shipped rules. Thus a match ends
+// at or before the end of the run, and a match that starts inside the run
+// is a part of the strip.
 func cover(b []byte, lo, hi int) int {
 	if hi-lo > maxHold {
 		return runEnd(b, hi)

@@ -2,7 +2,10 @@
 #
 # Each rule must start with a literal prefix (ghp_, AKIA, sk-). The
 # broker does not start with a rule that has no prefix, because the stream
-# scan uses the prefixes to find where a key can start.
+# scan uses the prefixes to find where a key can start. Each rule must
+# match only letters, digits, underscore, hyphen and dot. For a long key,
+# the stream and the buffered scan both end the strip at the first other
+# byte. The broker does not start with a rule that can match other bytes.
 #
 # A leading \b is a boundary that also counts the escapes that can come
 # before a token in text: \n \t \r \b \f \xXX \uXXXX and %XX. The rules

@@ -5,9 +5,11 @@
 #   name	regexp	[KIND]
 #
 # Use the format of key_prefixes.rules. Start each rule with a literal
-# prefix, for example acme_. pf apply refuses a rule that does not
-# compile or that has no literal prefix. Write a length as a minimum
-# ({32,}), with no closing \b. Give the KIND of the token when a core
-# host injects it, so that the fence does not strip it on that host.
+# prefix, for example acme_. The rule must match only letters, digits,
+# _, - and a literal dot: no /, +, = and no "." for any character.
+# pf apply refuses a rule that does not compile, that has no literal
+# prefix, or that can match other characters. Write a length as a
+# minimum ({32,}), with no closing \b. Give the KIND of the token when a
+# core host injects it, so that the fence does not strip it on that host.
 #
 #   acme	acme_[A-Za-z0-9]{32,}	ACME_TOKEN

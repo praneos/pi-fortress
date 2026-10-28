@@ -1,0 +1,7 @@
+go test fuzz v1
+string("jB\x00")
+string("00000000000")
+byte('\t')
+byte('\x1f')
+byte('\v')
+byte(')')

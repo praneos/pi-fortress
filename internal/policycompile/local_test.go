@@ -79,6 +79,7 @@ func TestCompileChecksTheLocalKeyRules(t *testing.T) {
 	for _, bad := range []string{
 		"acme\tacme_[A-Za-z0-9{32,}\n",
 		"acme\t[A-Za-z0-9]{40,}\n",
+		"acme\tacme_[A-Za-z0-9+/]{32,}\n",
 	} {
 		err := run(bad)
 		if err == nil || !strings.Contains(err.Error(), "key_prefixes.rules.local") || !strings.Contains(err.Error(), "acme") {

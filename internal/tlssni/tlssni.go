@@ -247,6 +247,7 @@ func parseServerName(data []byte) (string, error) {
 }
 
 // normalizeHostName changes the name to lowercase and removes a trailing dot.
+// It checks the length after it removes the dot, as hello.ValidHostName does.
 // It rejects all values that are not a possible DNS name. It rejects an SNI
 // value of only digits and dots (an IP literal, or garbage). A router that
 // decides on SNI must never use an IP as a routable hostname.

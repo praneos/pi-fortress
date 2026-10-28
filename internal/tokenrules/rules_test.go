@@ -38,7 +38,8 @@ func TestTruncatedRulesFileRefused(t *testing.T) {
 	}
 }
 
-// A rule with no literal prefix is refused, and the error names it.
+// A rule with no literal prefix is refused, and the error names it. A
+// rule that can match a byte that is not a token byte is refused also.
 func TestStreamableRefusesRuleWithNoPrefix(t *testing.T) {
 	for _, tc := range []struct {
 		name, expr string
@@ -50,6 +51,14 @@ func TestStreamableRefusesRuleWithNoPrefix(t *testing.T) {
 		{"class", `[A-Za-z0-9]{40}`, false},
 		{"dot", `.{32}`, false},
 		{"optional", `(?:tok_)?[a-f0-9]{32}`, false},
+		{"slash plus", `acme_[A-Za-z0-9+/]{32,}`, false},
+		{"equals", `acme_[A-Za-z0-9]{32}=*`, false},
+		{"any byte", `acme_.{32}`, false},
+		{"space", `acme_[a-z0-9\x20]{32}`, false},
+		{"not class", `acme_[^"]{32}`, false},
+		{"non-ASCII", `acme_[a-zé]{32}`, false},
+		{"token bytes", `acme_[A-Za-z0-9_.-]{32,}`, true},
+		{"word class", `acme_\w{32,}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "key_prefixes.rules")
