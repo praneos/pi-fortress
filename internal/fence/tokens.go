@@ -492,11 +492,39 @@ func (t *tokenSet) replace(b []byte, repl []byte) []byte {
 	pos := 0
 	for _, m := range ms {
 		lo, hi := t.token(m)
+		if lo < pos {
+			continue
+		}
 		out = append(out, b[pos:lo]...)
 		out = append(out, repl...)
-		pos = hi
+		pos = cover(b, lo, hi)
 	}
 	return append(out, b[pos:]...)
+}
+
+// cover is the end of the strip for the token [lo, hi) of a match in b. A
+// token longer than maxHold is not one key. Only a run of token bytes with
+// a prefix in each window makes it, because the windows then merge. The
+// stream holds at most maxHold of a token that is still in transit (see
+// tokenStream). Thus for such a token, the strip goes on to the end of its
+// run of token bytes, on the stream and on the buffered path. Each shipped
+// rule is written from tokenClass (TestShippedRulesArmTheFilter). Thus a
+// match ends at or before the end of the run, and a match that starts
+// inside the run is a part of the strip.
+func cover(b []byte, lo, hi int) int {
+	if hi-lo > maxHold {
+		return runEnd(b, hi)
+	}
+	return hi
+}
+
+// runEnd is the first byte at or after i that is not in tokenClass, or
+// len(b).
+func runEnd(b []byte, i int) int {
+	for i < len(b) && inTokenClass(b[i]) {
+		i++
+	}
+	return i
 }
 
 // token is the part of match m that is the key: the named group of the
@@ -523,14 +551,21 @@ func (t *tokenSet) ruleName(m []int) string {
 	return "token"
 }
 
-// rules names the rule each match in b belongs to, in order.
+// rules names the rule of each strip in b, in order. A match inside the
+// strip of a long token (cover) is not a strip of its own.
 func (t *tokenSet) rules(b []byte) []string {
 	ms := t.matches(b)
 	if len(ms) == 0 {
 		return nil
 	}
 	out := make([]string, 0, len(ms))
+	pos := 0
 	for _, m := range ms {
+		lo, hi := t.token(m)
+		if lo < pos {
+			continue
+		}
+		pos = cover(b, lo, hi)
 		out = append(out, t.ruleName(m))
 	}
 	return out

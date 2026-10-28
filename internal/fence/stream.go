@@ -108,12 +108,18 @@ func (g *placeholderGuard) scan() {
 	g.Buf = g.Buf[:tail]
 }
 
-// maxHold is the limit on how much body the token stream can hold while it
-// waits for a match to complete. candidates() limits a match to window
-// bytes. Thus with a complete prefilter, the horizon always advances well
-// before this limit. maxHold exists for a rules file with a disabled
-// prefilter. There, a match has no length limit, and without maxHold the
-// agent would choose how much broker memory one upload costs.
+// maxHold is the limit on how much of one token the token stream can hold
+// while it waits for the token to complete. candidates() limits a match to
+// one window after each prefix. But a run of token bytes with a prefix in
+// each window merges the windows into one match of any length. A rules file
+// with a disabled prefilter has no limit at all. Without maxHold, the agent
+// would choose how much broker memory one upload costs.
+//
+// At the limit, the stream does not let the token go out. It strips the
+// part that it holds, and then each token byte that continues the run
+// (cover). The buffered path strips a token longer than maxHold in the
+// same way. Thus the two paths agree, and the stream holds no more than
+// about maxHold and one window.
 const maxHold = 4 * window
 
 // tokenStream runs the token-prefix rules over a streamed request body.
@@ -160,8 +166,18 @@ type tokenStream struct {
 	first, seen int
 	sure        bool
 	// pin is the end of the token that held the output at the last full
-	// scan, when more bytes cannot change that token. Else it is 0.
-	pin int
+	// scan, when more bytes cannot change that token. For a long token, it
+	// is the part that more bytes cannot remove (pinFor). Else it is 0.
+	// grow says that the long token reached the tail of buf. Then more
+	// bytes can make it longer, up to the hold limit.
+	pin  int
+	grow bool
+	// run says that the stream is inside a token longer than maxHold
+	// (cover). Each token byte that comes next is part of that token, up to
+	// the first byte that is not one. done is how many bytes of the token
+	// already went out as its strip.
+	run  bool
+	done int
 }
 
 func newTokenStream(src io.Reader, ts *tokenSet, pad bool) *tokenStream {
@@ -226,7 +242,10 @@ func (t *tokenStream) firstHit() int {
 // full scan would also return without a change. Thus the output, and the
 // time at which each byte leaves, do not change.
 func (t *tokenStream) idle(h int) bool {
-	if len(t.Buf) > maxHold {
+	// A token that the stream holds can reach the hold limit. Then the full
+	// scan strips it. A pin that cannot grow is a token that already ended
+	// before the limit.
+	if len(t.Buf) > maxHold+t.tail() && (t.pin == 0 || t.grow) {
 		return false
 	}
 	// The scan emits nothing past the horizon.
@@ -237,72 +256,139 @@ func (t *tokenStream) idle(h int) bool {
 	return h < t.pin
 }
 
+// tail is how many of the last bytes of buf can change the end of a merged
+// window when more bytes come. A hit there can have a run that ends short.
+// Then it loses its window. A hit before the tail keeps its window, and a
+// window only grows.
+func (t *tokenStream) tail() int {
+	return t.ts.minLen + t.ts.maxPrefix + tokenrules.LeadMax + 1
+}
+
 func (t *tokenStream) scan() {
 	if len(t.Buf) == 0 {
 		return
+	}
+	out := t.outBuf[:0]
+	if t.run {
+		// Inside a long token: each token byte goes out as part of its strip.
+		e := runEnd(t.Buf, t.pre)
+		out = t.strip(out, e-t.pre)
+		if e == len(t.Buf) && !t.EOF {
+			t.commit(out, e, e)
+			return
+		}
+		// The token ends at e. As after each strip, the search starts there.
+		t.run, t.pre, t.from = false, e, e
 	}
 	n := len(t.Buf)
 	if !t.EOF {
 		n = t.horizon()
 		if t.idle(n) {
+			t.commit(out, t.pre, t.from)
 			return
 		}
 	}
 	ms := t.ts.matchesFrom(t.Buf, t.from, !t.cut)
+	long := -1
 	if !t.EOF {
 		// If the horizon falls inside a match, the stream emits the full
 		// match the next time and does not cut it. Nothing that starts
 		// before n can end after n.
-		pin := 0
-		for _, m := range ms {
-			if lo, hi := t.ts.token(m); lo < n && hi > n {
-				n, pin = lo, hi
+		k, hi := -1, 0
+		for i, m := range ms {
+			if lo, h := t.ts.token(m); lo < n && h > n {
+				n, k, hi = lo, i, h
 			}
 		}
-		if len(t.Buf) > maxHold && n <= 0 {
-			n = len(t.Buf) - window
-		}
-		if n <= t.pre {
-			t.pin = t.pinFor(n, pin)
+		// The hold limit: more bytes cannot make this token maxHold bytes or
+		// shorter (tail). The buffered path strips such a token on to the
+		// end of its run (cover). Thus the stream strips it now, and does
+		// not hold more of it.
+		if k >= 0 && min(hi, len(t.Buf)-t.tail())-n > maxHold {
+			long = k
+		} else if n <= t.pre {
+			t.pin, t.grow = t.pinFor(n, hi)
+			t.commit(out, t.pre, t.from)
 			return
 		}
 	}
-	if n <= t.pre {
-		return
-	}
-	t.pin = 0
-	out := t.outBuf[:0]
+	t.pin, t.grow = 0, false
 	pos, end := t.pre, t.from
-	for _, m := range ms {
+	for i, m := range ms {
 		lo, hi := t.ts.token(m)
 		// A token that starts in the context bytes got its decision when
 		// those bytes were emitted. Its lead can be there. The token cannot.
-		// The search starts after the last token that the stream stripped,
-		// and the scan before did not cut a token. Thus only a cut at
-		// maxHold leaves such a token.
-		if lo < t.pre {
-			continue
+		// A token that starts inside the strip of a long token is a part of
+		// that strip. If a token at the hold limit starts in the context
+		// bytes all the same, the stream strips the part of it that is not
+		// out.
+		if lo < pos {
+			if i != long || hi <= pos {
+				continue
+			}
+			hi, lo = cover(t.Buf, lo, hi), pos
 		}
-		if hi > n {
+		if hi > n && i != long {
 			break
 		}
-		repl := stripRepl
-		if t.pad {
-			repl = padRepl(hi - lo)
-		}
+		hi = cover(t.Buf, lo, hi)
 		out = append(out, t.Buf[pos:lo]...)
-		out = append(out, repl...)
-		pos, end = hi, hi
+		t.done = 0
+		out = t.strip(out, hi-lo)
 		t.hits[t.ts.ruleName(m)]++
+		// The strip of a long token can go past n. Each byte in it is a
+		// token byte of its run. Thus a token that starts there is a part of
+		// the strip, and the stream does not hold such a byte.
+		pos, end, n = hi, hi, max(n, hi)
+		if hi == len(t.Buf) && !t.EOF {
+			// The run goes on past buf.
+			t.run = true
+			break
+		}
 	}
-	t.outBuf = append(out, t.Buf[pos:n]...)
-	t.Out = t.outBuf
+	n = max(n, pos)
+	t.commit(append(out, t.Buf[pos:n]...), n, end)
+}
+
+// strip appends the replacement of the next k bytes of a token. done is
+// how many bytes of that token went out before them. Without pad, the
+// strip is one marker at the start of the token. With pad, it is
+// padRepl of the full token, in parts.
+func (t *tokenStream) strip(out []byte, k int) []byte {
+	if !t.pad {
+		if t.done == 0 {
+			out = append(out, stripRepl...)
+		}
+	} else {
+		for i := t.done; i < t.done+k; i++ {
+			c := byte('*')
+			if i < len(stripRepl) {
+				c = stripRepl[i]
+			}
+			out = append(out, c)
+		}
+	}
+	t.done += k
+	return out
+}
+
+// commit gives out to the reader. The bytes of buf before n are done. The
+// stream keeps tokenrules.LeadMax of them as context. end is the end of
+// the last token that the stream stripped: the next search starts there.
+func (t *tokenStream) commit(out []byte, n, end int) {
+	t.outBuf, t.Out = out, out
 	keep := max(n-tokenrules.LeadMax, 0)
 	tail := copy(t.Buf, t.Buf[keep:])
 	t.Buf = t.Buf[:tail]
 	t.pre = n - keep
 	t.from = max(end-keep, 0)
 	t.cut = t.cut || keep > 0
+	// The horizon keeps n at or before the hit of the record. Only the strip
+	// of a long token goes past it. Then the hit is in that strip, and the
+	// record is of no use.
+	if t.first >= 0 && t.first < n {
+		t.first, t.seen, t.sure = -1, 0, false
+	}
 	if t.seen > 0 {
 		t.seen -= keep
 		if t.first >= 0 {
@@ -311,22 +397,31 @@ func (t *tokenStream) scan() {
 	}
 }
 
-// pinFor is the value of pin after a full scan that emitted nothing. n is
-// where the scan stopped. hi is the end of the token that moved n back to
-// the start of that token, or 0. More bytes can change that token in two
-// ways only. The regexp can find a match that ends later or starts sooner,
-// and that match also holds the output. Or a hit near the tail can lose
-// its window, and then the merged window ends sooner. Thus pin is set only
-// for a token that ends well before the tail, and that is too short to
-// reach the end of its own window.
-func (t *tokenStream) pinFor(n, hi int) int {
-	if hi == 0 || hi-n >= window-1 {
-		return 0
+// pinFor is the value of pin and grow after a full scan that emitted
+// nothing. n is where the scan stopped. hi is the end of the token that
+// moved n back to the start of that token, or 0. More bytes can change
+// that token in two ways only. The regexp can find a match that ends later
+// or starts sooner, and that match also holds the output. Or a hit in the
+// tail can lose its window, and then the merged window ends sooner. Thus
+// for a short token, pin is set only when the token ends before the tail.
+// A long token (one window or more) can reach the tail and grow. Its pin
+// is the part before the tail, which stays in the token. Without this pin,
+// each small read of a long token ran the regexp over all of it again.
+func (t *tokenStream) pinFor(n, hi int) (int, bool) {
+	if hi == 0 {
+		return 0, false
 	}
-	if hi+t.ts.minLen+t.ts.maxPrefix+tokenrules.LeadMax+1 > len(t.Buf) {
-		return 0
+	safe := len(t.Buf) - t.tail()
+	if hi-n >= window-1 {
+		if p := min(hi, safe); p > n {
+			return p, hi > safe
+		}
+		return 0, false
 	}
-	return hi
+	if hi > safe {
+		return 0, false
+	}
+	return hi, false
 }
 
 // events is one StripEvent per rule that fired, with the names that the
