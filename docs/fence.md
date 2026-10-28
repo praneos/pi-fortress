@@ -605,7 +605,9 @@ the /24. A ClientHello that does not parse, or that has an extension type
 two times, does not pass.
 The verdict of a flow is in its conntrack mark, and only a flow with no
 verdict goes to the check. Thus a flow that the check passed continues when
-pf dns restarts (each apply restarts it). A flow that is in its check at the
+pf dns or pf netgate restarts (each apply restarts both). pf netgate binds
+the queue and relays its packets to pf dns, which holds no
+`CAP_NET_ADMIN` (`privilege_split.md`). A flow that is in its check at the
 restart gets a TCP reset (`data with no SYN before it` in the journal), and
 the client opens it again.
 `direct_ip.allow` ships empty: nothing that an agent runs has needed it.

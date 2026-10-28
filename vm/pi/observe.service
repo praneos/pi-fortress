@@ -27,7 +27,7 @@ Group=pf-fortress
 # (ProtectKernelLogs closes /dev/kmsg; -k needs the boot ID, which
 # ProcSubset=pid hides). pf-leases: the DHCP lease files, for the client
 # names (apply.sh and lib/dhcp.sh give them this group). pf-ctgate: the
-# socket of pf netgate for the conntrack table. No other unit has it.
+# socket of pf netgate for the conntrack table. No other client has it.
 SupplementaryGroups=systemd-journal pf-leases pf-ctgate
 UMask=0027
 NoNewPrivileges=yes

@@ -109,10 +109,10 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   `/etc/pi-fortress` and in the policy tree. Only `alert.service` gets the
   `pf-sidecar` group (`SupplementaryGroups`). monitor runs as the same user
   without that group, so it does not read `alert.url`.
-- A fourth user, `pf-observe`, runs observe. Its only capability is
-  `CAP_NET_ADMIN` (ambient), for the conntrack netlink dump. It reads the
-  query logs and `strip.jsonl` through `pf-fortress`, and the DHCP lease
-  files through `pf-leases`. The `systemd-journal` group gives it read
+- A fourth user, `pf-observe`, runs observe. It has no capability. The
+  conntrack dump needs `CAP_NET_ADMIN`, so `pf netgate` (below) runs it
+  for observe. It reads the query logs and `strip.jsonl` through
+  `pf-fortress`, and the DHCP lease files through `pf-leases`. The `systemd-journal` group gives it read
   access to the full system journal. Of the journal, observe reads only
   the kernel log.
   It owns `/var/lib/pi-fortress/observe` (its ledger and checkpoints),
@@ -138,11 +138,66 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   `/etc/pi-fortress/house.hosts`. The two files are optional (`-`),
   because a box with no webhook or no house does not have them.
 - The claims and the ledger have the live claim codes. Their group is
-  `pf-fortress`, and all daemons are in it. Thus each other daemon unit
-  (engine, broker, sidecars, observe, DNS, DHCP) lists
+  `pf-fortress`, and almost all daemons are in it. Thus each other daemon
+  unit (engine, broker, sidecars, observe, DNS, DHCP, netgate) lists
   `/var/lib/pi-fortress/www` in `InaccessiblePaths`. Only root and www can
   read a code. apply makes the directory before it starts the first unit,
   because systemd ignores an optional path that is missing at the start.
+- `pf netgate` (`netgate.service`) is the one daemon that holds
+  `CAP_NET_ADMIN` for pf dns and observe. Both parse bytes from the
+  network, and neither has the capability. With it, code that runs in a
+  process can change the ruleset, a route, a link or a bridge. netgate
+  does three fixed jobs, and nothing else:
+  - GATE, for the agent resolver: add public IPv4 addresses to a resolver
+    gate set (`resolved_v4`, `resolved_house_v4`, `resolved_<name>_v4`),
+    or restart their timeout. It writes only a set that `dns.json` names,
+    only addresses that pass the public check of the resolver
+    (`internal/gateset`), at most 64 in one request and at most 200
+    requests each second (burst 400). The write is the same `nft` command
+    that pf dns ran before, with a 3 s timeout.
+  - SNI, for the agent resolver: netgate binds the NFQUEUE of the house
+    SNI check while pf dns is connected, and relays each queued packet to
+    pf dns. It reads only the id, the mark and the length of the packet,
+    and copies the payload. pf dns sends back the verdict and a code for
+    the SNI bits. netgate sets only these bits of the mark that the kernel
+    gave. A verdict for a packet that waits for none has no effect. A
+    packet that waits more than 15 s is dropped. An NFQUEUE socket cannot
+    go to pf dns as a file descriptor: the kernel checks the capability of
+    the sender of each verdict.
+  - CT, for observe: run `conntrack -L -o extended` (fixed arguments, at
+    most one each 2 s, 5 s, 48 MiB) and stream the output back.
+
+  netgate runs as `pf-netgate` (group `nogroup`), with `CAP_NET_ADMIN` as
+  its only capability, only `AF_UNIX` and `AF_NETLINK`, and the sandbox and
+  system-call filter of pf dns (plus `@chown`). It reads `dns.json` at
+  start, for the table, the sets and the queues. apply restarts it after it
+  writes `dns.json`, before pf dns. It reads no log and no state.
+
+  Its sockets are in its `RuntimeDirectory`, `/run/pi-fortress-netgate`
+  (`0755`): `dns.sock` (`pf-netgate:pf-dnsgate 0660`) and `ct.sock`
+  (`pf-netgate:pf-ctgate 0660`). Each is `SOCK_SEQPACKET`, with fixed
+  binary messages. netgate also checks the uid and the primary gid of each
+  peer (`SO_PEERCRED`): `pf-dns` with `pf-dnsgate` on `dns.sock`, and
+  `pf-observe` with `pf-fortress` on `ct.sock`. A message that is not
+  valid closes the connection. Each refusal is logged, at most one line
+  each second.
+
+  Each client fails closed. When netgate is down, a GATE fails and pf dns
+  answers SERVFAIL. No socket binds the SNI queue, so the kernel drops its
+  packets. observe gets no conntrack table, so the flow and volume rows
+  stop, and observe says so in the journal. netgate restarts at once
+  (`Restart=always`), and pf dns and observe have `Wants=` and `After=`
+  on it.
+
+  Limits: netgate holds `CAP_NET_ADMIN`, so code that runs in netgate has
+  full control of the network. Its input is fixed messages from two
+  accounts and the netlink attributes of the kernel. It uses only the
+  standard library and two small packages of this tree
+  (`internal/netgate/imports_test.go`). pf dns still decides what goes into
+  a gate set and the SNI verdict of a queued house packet. Thus code that
+  runs in pf dns can open a public IPv4 address to its segment, as its
+  answers can. It cannot flush or change the ruleset, add a route, a link
+  or a bridge, or write a set that is not a resolver set.
 - The feed refresh (`fetch.service`, `pf apply --refresh`), the signed ship
   (`ship.service`) and the ship dead-man (`ship-deadman.service`) stay root.
   apply loads nft, sets sysctls, adds the daemon accounts and writes `/etc`.
@@ -185,12 +240,15 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   - `pf-broker`: the broker. It owns `secrets.env` `0600`.
   - `pf-sidecar`: alert and monitor.
   - `pf-observe`: observe.
-  - `pf-dns`: `pf dns`, the agent resolver and the DoT stubs. Its
-    capabilities are `CAP_NET_BIND_SERVICE` and, for the agent resolver
-    only, `CAP_NET_ADMIN` (the nft fork that feeds `resolved_v4`, and the
-    SNI queue). It has no `CAP_NET_RAW`. It pins each new socket to its
-    interface (`SO_BINDTODEVICE`) before the bind, and Linux 5.7 and
-    later allow that with no capability.
+  - `pf-dns`: `pf dns`, the agent resolver and the DoT stubs. Its one
+    capability is `CAP_NET_BIND_SERVICE`. pf netgate writes the gate sets
+    and binds the SNI queue for it. The agent resolver runs with the
+    primary group `pf-dnsgate`. The stubs run with `pf-fortress`, so they
+    cannot use netgate. It has no `CAP_NET_RAW`. It pins each new socket
+    to its interface (`SO_BINDTODEVICE`) before the bind, and Linux 5.7
+    and later allow that with no capability.
+  - `pf-netgate`: pf netgate, in the group `nogroup`. Its one capability
+    is `CAP_NET_ADMIN`.
   - `pf-dhcp-<name>`: each DHCP dnsmasq, in the group `nogroup`. Its
     capability is `CAP_NET_BIND_SERVICE` (port 67). It has no
     `CAP_NET_ADMIN`: its conf has `dhcp-broadcast`, so dnsmasq sends the
@@ -203,11 +261,11 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
     to an address before it offers that address. The pin of the DHCP
     socket to its interface needs no capability (Linux 5.7 and later).
   - www has a dynamic user (`DynamicUser=yes`).
-- There are five groups:
+- There are seven groups:
   - `pf-fortress` has all pf daemons, for the files that they share (logs,
-    state, the claims directories). The DHCP accounts are not in it. Of
-    the daemons, only www gets a path to the claims directories
-    (`InaccessiblePaths` above).
+    state, the claims directories). The DHCP accounts and `pf-netgate` are
+    not in it. Of the daemons, only www gets a path to the claims
+    directories (`InaccessiblePaths` above).
   - `pf-fence` has the engine and the broker, and nobody else. It exists to
     gate the broker socket.
   - `pf-fakeip` has the broker only. It is the group of the fake-IP journal
@@ -220,6 +278,13 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
     The engine and www do not see these files (`InaccessiblePaths` above).
   - `pf-sidecar` has no member account. Only `alert.service` gets it,
     through `SupplementaryGroups`. It is the group of `alert.url`.
+  - `pf-dnsgate` has no member account. It is the primary group of the
+    agent resolver (`Group=` in `dns-agent-go.service`) and the group of
+    `dns.sock` of netgate. netgate gets it as a supplementary group, only
+    to give it to that socket.
+  - `pf-ctgate` has no member account. Only `observe.service` and
+    `netgate.service` get it, through `SupplementaryGroups`. It is the
+    group of `ct.sock` of netgate.
 
   The broker runs `Group=pf-fence`, with `pf-fortress` as a supplementary
   group. The engine is the other way round. `/run/pi-fortress` is
