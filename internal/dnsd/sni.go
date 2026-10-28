@@ -381,10 +381,18 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 // /24 as one that it resolves to now. A CDN gives a set that rotates, and
 // the device asked a short time ago through the same profile and exit, not
 // now. A device can also use an expired answer after a long idle, when the
-// CDN has moved the name to a different range. ECH hides the real name behind the public name of
-// the provider. Thus an ECH flow goes through only to the published
-// ranges of that provider: the resolver of the device already filtered
-// its inner name.
+// CDN has moved the name to a different range.
+//
+// ECH hides the real name behind the public name of the provider. Thus an
+// ECH flow also goes through to the published ranges of that provider:
+// the resolver of the device already filtered its inner name. The ranges
+// only add to the rules above, and the /24 rule comes before them. Chrome
+// and Firefox send a GREASE encrypted_client_hello extension in each hello
+// when the site has no ECH config, and that hello names the real site.
+// Before, such a hello lost the /24 rule. An ECH flow that passes by the
+// /24 gets nothing more than a plain hello with the same outer name to
+// the same address: the outer name still resolves through the house and
+// is not blocked.
 func (c *sniCheck) judge(ctx context.Context, key sniFlowKey, h tlssni.Hello) (uint32, string) {
 	if h.ServerName == "" {
 		return sniBad, "no server name"
@@ -407,16 +415,16 @@ func (c *sniCheck) judge(ctx context.Context, key sniFlowKey, h tlssni.Hello) (u
 	if c.seen != nil && c.seen(h.ServerName, dst) {
 		return sniOK, ""
 	}
-	if h.ECH {
-		if inPrefixes(c.ech, dst) {
-			return sniOK, ""
-		}
-		return sniBad, fmt.Sprintf("ECH to %s (outer name %s) outside the ECH ranges", dst, h.ServerName)
-	}
 	for _, a := range addrs {
 		if p, err := a.Prefix(24); err == nil && p.Contains(dst) {
 			return sniOK, ""
 		}
+	}
+	if h.ECH {
+		if inPrefixes(c.ech, dst) {
+			return sniOK, ""
+		}
+		return sniBad, fmt.Sprintf("ECH to %s (outer name %s) outside the /24 of its answers and the ECH ranges", dst, h.ServerName)
 	}
 	return sniBad, fmt.Sprintf("%s does not resolve to %s", h.ServerName, dst)
 }

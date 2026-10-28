@@ -531,6 +531,46 @@ func TestSNIJudgesECHByRange(t *testing.T) {
 	}
 }
 
+// Chrome and Firefox send a GREASE encrypted_client_hello extension when
+// the site has no ECH config, so the hello carries the real name and
+// tlssni reports ECH. The /24 rule comes before the ECH ranges, so such a
+// flow to a neighbour of an answer passes, as a plain hello does. An ECH
+// flow outside both still fails, and the outer name must still resolve
+// and not be blocked.
+func TestSNISlash24BeforeECHRanges(t *testing.T) {
+	r := &fakeResolve{
+		ans: map[string][]netip.Addr{
+			"news.example":       {netip.MustParseAddr("151.101.1.10")},
+			"cloudflare-ech.com": {netip.MustParseAddr("104.18.10.10")},
+		},
+		block: map[string]bool{"tracker.example": true},
+	}
+	c, _ := newTestCheck(t, r)
+	ctx := context.Background()
+	key := func(dst string) sniFlowKey {
+		return sniFlowKey{netip.MustParseAddrPort("10.78.0.160:1"), netip.AddrPortFrom(netip.MustParseAddr(dst), 443)}
+	}
+	grease := tlssni.Hello{ServerName: "news.example", ECH: true}
+	if m, why := c.judge(ctx, key("151.101.1.77"), grease); m != sniOK {
+		t.Fatalf("a GREASE hello to the /24 of an answer, outside the ECH ranges, refused: %s", why)
+	}
+	m, why := c.judge(ctx, key("198.51.100.7"), grease)
+	if m != sniBad || !strings.Contains(why, "outside the /24 of its answers and the ECH ranges") {
+		t.Fatalf("an ECH hello outside the /24 and the ECH ranges: %#x %q", m, why)
+	}
+	// A real ECH flow: the ranges still pass it. A blocked outer name
+	// passes nowhere, and a name with no answer has no /24.
+	if m, why := c.judge(ctx, key("104.21.3.4"), tlssni.Hello{ServerName: "cloudflare-ech.com", ECH: true}); m != sniOK {
+		t.Fatalf("ECH inside the ranges refused: %s", why)
+	}
+	if m, _ := c.judge(ctx, key("104.21.3.4"), tlssni.Hello{ServerName: "tracker.example", ECH: true}); m != sniBad {
+		t.Fatal("ECH with a blocked outer name accepted")
+	}
+	if m, _ := c.judge(ctx, key("151.101.1.77"), tlssni.Hello{ServerName: "nothing.example", ECH: true}); m != sniBad {
+		t.Fatal("ECH with an outer name that has no answer accepted outside the ECH ranges")
+	}
+}
+
 // After a long idle, a device opens a flow with an expired answer. The CDN
 // has moved the name to a different range, so the answer now does not
 // match. The address that the same name resolved to before still passes.
