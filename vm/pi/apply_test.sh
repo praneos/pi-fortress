@@ -1708,6 +1708,17 @@ grep -q '^OnCalendar=\*:0/15$' "${here}/logrotate.timer" ||
 grep -q 'logrotate --state /var/lib/pi-fortress/logrotate.state /etc/pi-fortress/logrotate.conf' "${here}/logrotate.service" ||
   fail "logrotate.service does not run our conf with its own state file"
 
+# Each pf unit forbids namespaces, and none asks for its own user
+# namespace: harden.sh sets user.max_user_namespaces=0, and a unit with
+# PrivateUsers= would not start.
+for _u in "${here}"/*.service; do
+  grep -qxF RestrictNamespaces=yes "${_u}" || fail "$(basename "${_u}") has no RestrictNamespaces=yes"
+  grep -qE '^[[:space:]]*PrivateUsers[[:space:]]*=' "${_u}" &&
+    fail "$(basename "${_u}") sets PrivateUsers=; user namespaces are off on the gateway"
+done
+grep -qE 'PrivateUsers[[:space:]]*=' "${apply}" &&
+  fail "apply.sh writes a drop-in with PrivateUsers=; user namespaces are off on the gateway"
+
 # logrotate and the USB NIC switch stay root, with a sandbox, as
 # wg-alert does. logrotate writes only the log directory and its state
 # file. logrotate writes the state file through a rename, so the
@@ -1874,7 +1885,7 @@ printf 'PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"\nID=debian\nVERSION_CODENAM
 harden_run uu 2>"${hroot}/err" || fail "the hardening steps failed: $(cat "${hroot}/err")"
 cp "${hroot}/sysctl.d/99-pi-fortress.conf" "${tmp}/sysctl.conf"
 for _l in kernel.kptr_restrict=2 kernel.yama.ptrace_scope=2 fs.protected_regular=2 net.ipv4.tcp_syncookies=1 \
-  kernel.io_uring_disabled=2 net.mptcp.enabled=0; do
+  kernel.io_uring_disabled=2 net.mptcp.enabled=0 user.max_user_namespaces=0; do
   grep -qxF "${_l}" "${tmp}/sysctl.conf" || fail "99-pi-fortress.conf lacks ${_l}"
 done
 grep -qF 'label=Debian-Security' "${hroot}/apt.conf.d/52-pi-fortress-upgrades" || fail "no security origin in 52-pi-fortress-upgrades"
