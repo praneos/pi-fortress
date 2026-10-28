@@ -140,7 +140,18 @@ type tokenStream struct {
 	// them, a retained buffer starts mid-word, or past the start of an
 	// escape. Then the stream would judge a token differently from the
 	// buffered path.
-	pre  int
+	pre int
+	// cut says that the stream dropped bytes from the head of buf. Then
+	// buf[0] is not the start of the body, and the regexp must not take
+	// it as the start of the text (\A). A prefix there follows bytes that
+	// the stream no longer holds.
+	cut bool
+	// from is where the regexp starts in buf: the end of the last token
+	// that the stream stripped, or 0. The buffered path continues its
+	// search after each match. Thus a match that starts inside that token
+	// is one that the buffered path never sees. If the stream saw it, the
+	// match could go past the context bytes and hide the next token.
+	from int
 	hits map[string]int
 	// first is the prefix hit that firstHit found the last time, or -1.
 	// seen is len(Buf) at that time, or 0 when there is no such record.
@@ -237,7 +248,7 @@ func (t *tokenStream) scan() {
 			return
 		}
 	}
-	ms := t.ts.matches(t.Buf)
+	ms := t.ts.matchesFrom(t.Buf, t.from, !t.cut)
 	if !t.EOF {
 		// If the horizon falls inside a match, the stream emits the full
 		// match the next time and does not cut it. Nothing that starts
@@ -261,11 +272,14 @@ func (t *tokenStream) scan() {
 	}
 	t.pin = 0
 	out := t.outBuf[:0]
-	pos := t.pre
+	pos, end := t.pre, t.from
 	for _, m := range ms {
 		lo, hi := t.ts.token(m)
 		// A token that starts in the context bytes got its decision when
 		// those bytes were emitted. Its lead can be there. The token cannot.
+		// The search starts after the last token that the stream stripped,
+		// and the scan before did not cut a token. Thus only a cut at
+		// maxHold leaves such a token.
 		if lo < t.pre {
 			continue
 		}
@@ -278,7 +292,7 @@ func (t *tokenStream) scan() {
 		}
 		out = append(out, t.Buf[pos:lo]...)
 		out = append(out, repl...)
-		pos = hi
+		pos, end = hi, hi
 		t.hits[t.ts.ruleName(m)]++
 	}
 	t.outBuf = append(out, t.Buf[pos:n]...)
@@ -287,6 +301,8 @@ func (t *tokenStream) scan() {
 	tail := copy(t.Buf, t.Buf[keep:])
 	t.Buf = t.Buf[:tail]
 	t.pre = n - keep
+	t.from = max(end-keep, 0)
+	t.cut = t.cut || keep > 0
 	if t.seen > 0 {
 		t.seen -= keep
 		if t.first >= 0 {
