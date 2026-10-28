@@ -36,6 +36,11 @@ type Installer struct {
 
 	WAN, Agent, House string // -wan/-agent/-house; empty means propose
 	Yes               bool   // -yes: fail rather than prompt if WAN/Agent still empty after proposing
+	// Journal is -journal: "disk" keeps the system journal on the disk
+	// across reboots (JOURNAL_PERSIST=1), "ram" keeps it in RAM only
+	// (JOURNAL_PERSIST=0). Empty asks in the wizard, and with no wizard
+	// keeps the default of apply (RAM on Raspberry Pi OS).
+	Journal string
 
 	Dir          string // /opt/pi-fortress
 	VersionPath  string // /var/lib/pi-fortress/ship.version
@@ -225,6 +230,9 @@ func (in *Installer) Run() error {
 	}
 	fmt.Fprintf(in.out(), "pf install: target %s\n", label)
 
+	if in.Journal != "" && in.Journal != "disk" && in.Journal != "ram" {
+		return fmt.Errorf("pf install: -journal %q: use disk or ram", in.Journal)
+	}
 	if in.Bundle == "" || in.Sig == "" {
 		return errors.New("pf install: -bundle and -sig are required; install.sh downloads and verifies these before running pf install")
 	}
@@ -363,6 +371,9 @@ func (in *Installer) writeSettings(signers string) error {
 		return fmt.Errorf("pf install: %w", err)
 	}
 	if err := WriteHouseEnv(in.HouseEnvPath, in.House); err != nil {
+		return fmt.Errorf("pf install: %w", err)
+	}
+	if err := WriteJournalPersist(in.NetEnvLocal, in.Journal); err != nil {
 		return fmt.Errorf("pf install: %w", err)
 	}
 	if err := RemoveLabMarker(in.LabMarker); err != nil {
@@ -515,7 +526,27 @@ func (in *Installer) wizard() error {
 	} else {
 		in.House = ""
 	}
+	if in.Journal == "" {
+		in.Journal = promptJournal(in.out(), r)
+	}
 	return nil
+}
+
+// promptJournal asks where the system journal stays. Raspberry Pi OS keeps
+// it in RAM, to write less to the SD card. Then a crash, an OOM kill or a
+// power cut also removes the log of what came before it. A bare Enter, or
+// no more input, keeps the default: RAM.
+func promptJournal(w io.Writer, r *bufio.Reader) string {
+	fmt.Fprint(w, "keep the system log on the disk across reboots? It keeps the log of a crash or a power cut, and writes more to an SD card [y/N]: ")
+	line, _ := r.ReadString('\n')
+	switch strings.ToLower(strings.TrimSpace(line)) {
+	case "y", "yes":
+		return "disk"
+	}
+	if line == "" {
+		fmt.Fprintln(w)
+	}
+	return "ram"
 }
 
 // noTerminal is the wizard with nobody to ask: a piped or headless run

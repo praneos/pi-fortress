@@ -377,3 +377,45 @@ func TestSysfsHardwareSkipsBridgesTunsAndEnslavedPorts(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallAsksWhereTheJournalStays(t *testing.T) {
+	for _, c := range []struct{ answers, want, env string }{
+		{"eth1\neth0\n\ny\n", "disk", "JOURNAL_PERSIST=1"},
+		{"eth1\neth0\n\n\n", "ram", "JOURNAL_PERSIST=0"},
+		// No more input after the interfaces: the default, RAM.
+		{"eth1\neth0\n\n", "ram", "JOURNAL_PERSIST=0"},
+	} {
+		r := wizardRig(t)
+		r.in.TTY = func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader(c.answers)), nil }
+		if err := r.in.Run(); err != nil {
+			t.Fatal(err)
+		}
+		if r.in.Journal != c.want {
+			t.Errorf("answers %q: journal %q, want %q", c.answers, r.in.Journal, c.want)
+		}
+		b, err := os.ReadFile(r.in.NetEnvLocal)
+		if err != nil || !strings.Contains(string(b), c.env+"\n") {
+			t.Errorf("answers %q: net.env.local %q lacks %s (%v)", c.answers, b, c.env, err)
+		}
+	}
+}
+
+func TestInstallJournalFlag(t *testing.T) {
+	r := newInstallRig(t)
+	r.in.Journal = "sdcard"
+	r.in.Bundle, r.in.Sig = r.bundle(200, r.priv)
+	if err := r.in.Run(); err == nil || !strings.Contains(err.Error(), "-journal") {
+		t.Fatalf("err = %v, want a refusal of -journal sdcard", err)
+	}
+	r.nothingWritten()
+	// A pinned install with no -journal asks nothing and writes no key:
+	// apply keeps its default.
+	r = newInstallRig(t)
+	r.in.Bundle, r.in.Sig = r.bundle(200, r.priv)
+	if err := r.in.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(r.in.NetEnvLocal); strings.Contains(string(b), "JOURNAL_PERSIST") {
+		t.Fatalf("a pinned install wrote %q", b)
+	}
+}

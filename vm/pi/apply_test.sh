@@ -850,6 +850,13 @@ for _l in 'SystemMaxUse=200M' 'SystemKeepFree=1G' 'RuntimeMaxUse=64M' \
   grep -qF -- "${_l}" "${apply}" || fail "apply.sh does not write ${_l}"
 done
 grep -qF 'under 1 GiB' "${here}/status.sh" || fail "status.sh does not warn on low disk"
+# The journal stays where the OS keeps it unless JOURNAL_PERSIST=1. The
+# Storage line comes only from that key; net.env ships 0.
+grep -qxF 'JOURNAL_PERSIST=0' "${here}/net.env" || fail "net.env does not ship JOURNAL_PERSIST=0"
+grep -A1 -F 'if [[ "${JOURNAL_PERSIST}" == 1 ]]; then' "${apply}" | grep -qF "printf '%s\\n' 'Storage=persistent'" ||
+  fail "apply.sh does not write Storage=persistent for JOURNAL_PERSIST=1 only"
+grep -qF 'is not 0 or 1 (net.env or ${NET_ENV_LOCAL})' "${apply}" && grep -qF 'JOURNAL_PERSIST='"'"'${JOURNAL_PERSIST}'"'"' is not 0 or 1' "${apply}" ||
+  fail "apply.sh does not refuse a JOURNAL_PERSIST other than 0 or 1"
 
 # The gate must run before the redirect rewrites the destination.
 _gate_line="$(grep -n 'chain resolver_gate' "${tmp}/no-house.nft" | cut -d: -f1)"

@@ -101,6 +101,16 @@ func WriteNetEnvLocal(path, wan, agent string) error {
 	return UpsertEnv(path, kv, netEnvLocalHeader)
 }
 
+// WriteJournalPersist writes JOURNAL_PERSIST to net.env.local: 1 for
+// "disk", 0 for "ram". Empty writes nothing, so apply keeps its default.
+func WriteJournalPersist(path, journal string) error {
+	v := map[string]string{"disk": "1", "ram": "0"}[journal]
+	if v == "" {
+		return nil
+	}
+	return UpsertEnv(path, map[string]string{"JOURNAL_PERSIST": v}, netEnvLocalHeader)
+}
+
 // WriteGatewayRole marks this box as a box that pf install made a gateway.
 // apply.sh refuses a host that is not a Pi, a lab VM or the appliance. On
 // any other supported box, this file lets the first apply, and each later

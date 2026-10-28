@@ -76,6 +76,7 @@ All arguments go directly to `pf install`. `install.sh` does these steps:
    - With `-yes`, it prints the proposal and accepts it.
    - In all other cases, it asks on `/dev/tty`, never on stdin. Under `curl | sudo bash`, stdin is the script. An optional third prompt asks for the house NIC.
    - With no terminal, or at end of input at a prompt, it refuses and names `-wan`, `-agent` and `-yes`. It never gives a silent yes.
+   - After the interfaces, it asks one more question: keep the system journal on the disk across reboots (`y`), or in RAM (`N`, the default). Raspberry Pi OS keeps the journal in RAM to write less to the SD card. Then a crash or a power cut removes the log of what came before it. The answer goes to `net.env.local` as `JOURNAL_PERSIST=1` or `0`. A bare Enter, or end of input, gives RAM. `-journal disk` or `-journal ram` answers it. With `-yes`, or with both `-wan` and `-agent`, it asks nothing and writes no key: the default of `net.env` (0) applies.
    - It refuses an uplink that is also the agent (or house) interface. This refusal comes before it writes the signer file, `net.env.local`, `gateway.role` or the floor.
 
    Then it keeps two files for `pf upgrade`:
