@@ -172,3 +172,36 @@ func TestParseASN(t *testing.T) {
 		}
 	}
 }
+
+// A range of more than one /8 is not in a table. Select drops it, also
+// when it is the join of smaller ranges, and Parse refuses a table with
+// it. One /8 is the limit, and it stays.
+func TestRangeWiderThanSlash8IsDropped(t *testing.T) {
+	rs := []Range{
+		mustRange(t, "0.0.0.0", "255.255.255.255", "64497"),
+		mustRange(t, "20.0.0.0", "20.127.255.255", "64496"),
+		mustRange(t, "20.128.0.0", "20.255.255.255", "64496"),
+		mustRange(t, "21.0.0.0", "21.0.0.255", "64496"),
+		mustRange(t, "73.0.0.0", "73.255.255.255", "64498"),
+	}
+	got := Select(rs[1:], func(uint32) bool { return true })
+	if len(got) != 1 || got[0].String() != "73.0.0.0 73.255.255.255 64498" {
+		t.Fatalf("Select: %v", got)
+	}
+	got = Select(rs[:1], func(uint32) bool { return true })
+	if len(got) != 0 {
+		t.Fatalf("Select kept %v", got)
+	}
+	head := Magic + "\n# built 2026-10-01T00:00:00Z\n"
+	for _, body := range []string{
+		head + "0.0.0.0 255.255.255.255 64497\n",
+		head + "20.0.0.0 21.0.0.0 64496\n",
+	} {
+		if _, err := Parse(strings.NewReader(body)); err == nil {
+			t.Errorf("Parse accepted %q", body)
+		}
+	}
+	if tab, err := Parse(strings.NewReader(head + "73.0.0.0 73.255.255.255 64498\n")); err != nil || tab.Len() != 1 {
+		t.Fatalf("one /8: %v, %v", tab, err)
+	}
+}
