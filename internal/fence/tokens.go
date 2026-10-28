@@ -9,6 +9,7 @@ import (
 	"sync"
 
 	"pi-fortress/internal/httpwire"
+	"pi-fortress/internal/tokenrules"
 )
 
 // tokenSet puts a literal prefilter in front of a token-prefix regexp.
@@ -34,8 +35,8 @@ type tokenSet struct {
 	minLen  int
 	bounded bool
 	// lead says, for each prefix, that a rule that starts with it has a lead
-	// (leadExpr). Thus its window starts leadMax bytes early, so the lead
-	// sees the escape.
+	// (tokenrules.leadExpr). Thus its window starts tokenrules.LeadMax
+	// bytes early, so the lead sees the escape.
 	lead []bool
 }
 
@@ -51,7 +52,7 @@ func tokensFor(re *regexp.Regexp) *tokenSet {
 	ts := &tokenSet{re: re}
 	var all [][]byte
 	var lead []bool
-	all, lead, ts.fold, ts.complete = prefixInfo(re.String())
+	all, lead, ts.fold, ts.complete = tokenrules.PrefixInfo(re.String())
 	ts.minLen, ts.bounded = matchBounds(re.String())
 	for _, p := range all {
 		if len(p) > ts.maxPrefix {
@@ -65,42 +66,8 @@ func tokensFor(re *regexp.Regexp) *tokenSet {
 }
 
 func literalPrefixes(expr string) ([][]byte, bool, bool) {
-	out, _, fold, ok := prefixInfo(expr)
+	out, _, fold, ok := tokenrules.PrefixInfo(expr)
 	return out, fold, ok
-}
-
-// prefixInfo is literalPrefixes, plus for each branch whether it starts
-// with the lead of a rule (leadExpr). A lead needs the bytes before the prefix.
-func prefixInfo(expr string) ([][]byte, []bool, bool, bool) {
-	r, err := syntax.Parse(expr, syntax.Perl)
-	if err != nil {
-		return nil, nil, false, false
-	}
-	r = r.Simplify()
-	branches := []*syntax.Regexp{r}
-	if r.Op == syntax.OpAlternate {
-		branches = r.Sub
-	}
-	var out [][]byte
-	var lead []bool
-	fold := false
-	for _, br := range branches {
-		p, f, ok := branchPrefix(br)
-		if !ok || len(p) == 0 {
-			return nil, nil, false, false
-		}
-		out = append(out, p)
-		lead = append(lead, br.Op == syntax.OpConcat && len(br.Sub) > 1 && isLead(br.Sub[0]))
-		fold = fold || f
-	}
-	// One fold search for the full set. A folded search for an exact prefix
-	// finds a superset. This costs a candidate, never a match.
-	if fold {
-		for i, p := range out {
-			out[i] = bytes.ToLower(p)
-		}
-	}
-	return out, lead, fold, true
 }
 
 // leadsFor says, for each searched prefix, whether a rule for which it opens
@@ -137,75 +104,6 @@ next:
 		out = append(out, p)
 	}
 	return out
-}
-
-// branchPrefix is the literal at the start of the match of a branch, and
-// whether any of it matches either ASCII case: a (?i) literal, or a [Kk]
-// class. foldASCII uses this class for the two letters whose Unicode fold
-// goes past ASCII.
-func branchPrefix(r *syntax.Regexp) ([]byte, bool, bool) {
-	for r.Op == syntax.OpCapture {
-		r = r.Sub[0]
-	}
-	// The lead of a rule (leadExpr) comes before its prefix and is not part
-	// of it. The literal is what follows.
-	if r.Op == syntax.OpConcat && len(r.Sub) > 1 && isLead(r.Sub[0]) {
-		if len(r.Sub) == 2 {
-			return branchPrefix(r.Sub[1])
-		}
-		return branchPrefix(&syntax.Regexp{Op: syntax.OpConcat, Sub: r.Sub[1:]})
-	}
-	subs := []*syntax.Regexp{r}
-	if r.Op == syntax.OpConcat {
-		subs = r.Sub
-	}
-	var lit []byte
-	fold := false
-	for _, s := range subs {
-		switch s.Op {
-		case syntax.OpWordBoundary, syntax.OpBeginText, syntax.OpBeginLine, syntax.OpEmptyMatch:
-			continue
-		case syntax.OpLiteral:
-			if s.Flags&syntax.FoldCase != 0 {
-				if !asciiRunes(s.Rune) {
-					return lit, fold, len(lit) > 0
-				}
-				fold = true
-			}
-			lit = append(lit, string(s.Rune)...)
-			continue
-		case syntax.OpCharClass:
-			if c, ok := casePair(s.Rune); ok {
-				lit = append(lit, c)
-				fold = true
-				continue
-			}
-		}
-		break
-	}
-	return lit, fold, len(lit) > 0
-}
-
-func asciiRunes(rs []rune) bool {
-	for _, r := range rs {
-		if r >= 0x80 {
-			return false
-		}
-	}
-	return true
-}
-
-// casePair reports a class that is one ASCII letter in both cases, [Kk],
-// as that letter in lower case.
-func casePair(rs []rune) (byte, bool) {
-	if len(rs) != 4 || rs[0] != rs[1] || rs[2] != rs[3] {
-		return 0, false
-	}
-	up, lo := rs[0], rs[2]
-	if up < 'A' || up > 'Z' || lo != up+'a'-'A' {
-		return 0, false
-	}
-	return byte(lo), true
 }
 
 // indexFold is httpwire.Index with ASCII case folded. needle is lower
@@ -322,7 +220,7 @@ func classWithin(r *syntax.Regexp) bool {
 func bounds(r *syntax.Regexp) (int, bool) {
 	// The lead is judged on the bytes before the prefix. span and the window
 	// supply those bytes. The lead adds nothing to the length of a match.
-	if isLead(r) {
+	if tokenrules.IsLead(r) {
 		return 0, true
 	}
 	switch r.Op {
@@ -382,8 +280,8 @@ func matchBounds(expr string) (int, bool) {
 // credential is a kilobyte long. A hit inside the window is complete, and
 // the byte after it is present. Thus a trailing \b is judged on real text,
 // not on the end of the window. The window starts one byte before the
-// prefix, or leadMax bytes before it for a rule with a lead. Thus the lead
-// sees the escape before the prefix.
+// prefix, or tokenrules.LeadMax bytes before it for a rule with a lead.
+// Thus the lead sees the escape before the prefix.
 const window = 4096
 
 // candidates returns sorted, merged [start,end) regions around every
@@ -396,7 +294,7 @@ func (t *tokenSet) candidates(b []byte) ([][2]int, bool) {
 	for i, p := range t.prefixes {
 		back := 1
 		if t.lead[i] {
-			back = leadMax
+			back = tokenrules.LeadMax
 		}
 		for k := 0; k < len(b); {
 			j := t.index(b[k:], p)
@@ -506,8 +404,8 @@ func (t *tokenSet) replace(b []byte, repl []byte) []byte {
 }
 
 // token is the part of match m that is the key: the named group of the
-// rule. It does not include the lead (leadExpr) that a bounded rule matched
-// before its prefix. A regexp with no named group is all token.
+// rule. It does not include the lead (tokenrules.leadExpr) that a bounded
+// rule matched before its prefix. A regexp with no named group is all token.
 func (t *tokenSet) token(m []int) (int, int) {
 	names := t.re.SubexpNames()
 	for i := 1; 2*i+1 < len(m) && i < len(names); i++ {

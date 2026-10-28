@@ -12,8 +12,8 @@ import (
 
 	"pi-fortress/internal/base"
 	"pi-fortress/internal/dnslog"
-	"pi-fortress/internal/fence"
 	"pi-fortress/internal/keyshape"
+	"pi-fortress/internal/tokenrules"
 )
 
 const (
@@ -137,7 +137,7 @@ type segKeys struct {
 }
 
 func loadSegKeys(path string) (*segKeys, error) {
-	tr, err := fence.LoadTokenRules(path)
+	tr, err := tokenrules.LoadTokenRules(path)
 	if err != nil {
 		return nil, err
 	}

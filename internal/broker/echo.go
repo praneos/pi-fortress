@@ -8,6 +8,7 @@ import (
 
 	"pi-fortress/internal/fence"
 	"pi-fortress/internal/httpwire"
+	"pi-fortress/internal/placeholder"
 	"pi-fortress/internal/preamble"
 	"pi-fortress/internal/secrets"
 )
@@ -107,7 +108,7 @@ func (b *Broker) echo(w io.Writer, p *preamble.Preamble, req *httpwire.Request, 
 		payload = map[string]any{
 			"authorization": auth,
 			"host":          host,
-			"substituted":   auth != "" && len(secrets.FindPlaceholderSpans([]byte(auth))) == 0,
+			"substituted":   auth != "" && len(placeholder.FindPlaceholderSpans([]byte(auth))) == 0,
 			"sni":           p.SNI,
 		}
 	} else {

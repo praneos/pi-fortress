@@ -6,10 +6,12 @@ import (
 	"math/rand"
 	"path/filepath"
 	"testing"
+
+	"pi-fortress/internal/tokenrules"
 )
 
 func realTokens(t testing.TB) *tokenSet {
-	tr, err := LoadTokenRules(filepath.Join("..", "..", "vm", "policy", "key_prefixes.rules"))
+	tr, err := tokenrules.LoadTokenRules(filepath.Join("..", "..", "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		t.Fatal(err)
 	}

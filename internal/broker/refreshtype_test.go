@@ -15,11 +15,11 @@ import (
 	"time"
 
 	"pi-fortress/internal/corepolicy"
-	"pi-fortress/internal/fence"
 	"pi-fortress/internal/httpwire"
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/preamble"
 	"pi-fortress/internal/secrets"
+	"pi-fortress/internal/tokenrules"
 )
 
 // A refresh body that is not application/json gets the one refusal for a
@@ -119,7 +119,7 @@ func benchBroker(bm *testing.B) *Broker {
 	if err != nil {
 		bm.Fatal(err)
 	}
-	re, err := fence.LoadTokenRE(filepath.Join("..", "..", "vm", "policy", "key_prefixes.rules"))
+	re, err := tokenrules.LoadTokenRE(filepath.Join("..", "..", "vm", "policy", "key_prefixes.rules"))
 	if err != nil {
 		bm.Fatal(err)
 	}

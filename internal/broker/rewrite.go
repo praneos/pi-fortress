@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"pi-fortress/internal/httpwire"
+	"pi-fortress/internal/placeholder"
 	"pi-fortress/internal/secrets"
 )
 
@@ -12,7 +13,7 @@ func scrubPairs(slots map[string]secrets.Slot) ([][2][]byte, []string) {
 	var pairs [][2][]byte
 	var keys []string
 	for _, sl := range slots {
-		if sl.Live == "" || secrets.IsPlaceholder(sl.Live) {
+		if sl.Live == "" || placeholder.IsPlaceholder(sl.Live) {
 			continue
 		}
 		pairs = append(pairs, [2][]byte{[]byte(sl.Live), []byte(sl.Dummy)})
@@ -33,8 +34,8 @@ func rewriteHeaders(resp *httpwire.Response, slots map[string]secrets.Slot) ([]s
 	var hit []string
 	for _, f := range resp.Fields {
 		name := []byte(f.Name)
-		for _, sp := range secrets.FindPlaceholderSpans(name) {
-			hit = append(hit, secrets.EnvKey(secrets.PlaceholderParts(name, sp)))
+		for _, sp := range placeholder.FindPlaceholderSpans(name) {
+			hit = append(hit, secrets.EnvKey(placeholder.PlaceholderParts(name, sp)))
 		}
 		for j, p := range pairs {
 			if bytes.Contains(name, p[0]) {

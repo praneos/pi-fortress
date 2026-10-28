@@ -16,7 +16,9 @@ import (
 
 	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/httpwire"
+	"pi-fortress/internal/placeholder"
 	"pi-fortress/internal/secrets"
+	"pi-fortress/internal/tokenrules"
 )
 
 type Disposition int
@@ -50,7 +52,7 @@ type Ctx struct {
 	TokenRE *regexp.Regexp
 	// Rules, with StripCore set, makes a core host strip each token kind
 	// that it does not inject. With StripCore off, core hosts run no prefix rules.
-	Rules     *TokenRules
+	Rules     *tokenrules.TokenRules
 	StripCore bool
 	// OnInject, when set, receives the slot id each time the fence writes a
 	// live value into the request: into a header, or into the buffered body
@@ -464,7 +466,7 @@ func (s *scanner) noInject() *scanner {
 // injectable returns the live value for the placeholder at span, or nil
 // when it is not exact, unknown, empty, or not a kind this SNI may carry.
 func (s *scanner) injectable(b []byte, span [2]int) []byte {
-	if !secrets.PlaceholderExact(b, span) {
+	if !placeholder.PlaceholderExact(b, span) {
 		return nil
 	}
 	sl, ok := s.idx.ByDummy[secrets.PlaceholderKey(b, span)]
@@ -486,7 +488,7 @@ func (s *scanner) injected(b []byte, span [2]int) []byte {
 }
 
 func (s *scanner) classify(b []byte) Disposition {
-	for _, span := range secrets.FindPlaceholderSpans(b) {
+	for _, span := range placeholder.FindPlaceholderSpans(b) {
 		if s.injectable(b, span) != nil {
 			return DispInject
 		}
@@ -506,7 +508,7 @@ func (s *scanner) classify(b []byte) Disposition {
 }
 
 func (s *scanner) injectAll(b []byte) []byte {
-	spans := secrets.FindPlaceholderSpans(b)
+	spans := placeholder.FindPlaceholderSpans(b)
 	if len(spans) == 0 {
 		return b
 	}

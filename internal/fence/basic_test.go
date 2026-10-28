@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"pi-fortress/internal/httpwire"
+	"pi-fortress/internal/placeholder"
 	"pi-fortress/internal/secrets"
 )
 
@@ -232,7 +233,7 @@ func FuzzBasicNeverLeaks(f *testing.F) {
 		if !ok {
 			t.Fatalf("forwarded credential no longer decodes\nraw=%q\nauth=%q", raw, auth)
 		}
-		if len(secrets.FindPlaceholderSpans(dec)) > 0 || len(secrets.FindPlaceholderSpans([]byte(auth))) > 0 {
+		if len(placeholder.FindPlaceholderSpans(dec)) > 0 || len(placeholder.FindPlaceholderSpans([]byte(auth))) > 0 {
 			t.Fatalf("placeholder forwarded\nraw=%q\ndec=%q", raw, dec)
 		}
 		kinds := pol.KindsFor(sni)

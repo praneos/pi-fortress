@@ -12,7 +12,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 
 	"pi-fortress/internal/dnslog"
-	"pi-fortress/internal/fence"
+	"pi-fortress/internal/tokenrules"
 )
 
 // shippedRules is the policy that the Pi runs. Thus the test tries a rule
@@ -48,7 +48,7 @@ func TestLiteralHead(t *testing.T) {
 		`[A-Z]{3}x`:                           "",
 		`(?i)abc`:                             "abc",
 	} {
-		if got := (fence.Rule{Name: "t", Expr: expr}).Head(); got != want {
+		if got := (tokenrules.Rule{Name: "t", Expr: expr}).Head(); got != want {
 			t.Errorf("%s: %q, want %q", expr, got, want)
 		}
 	}

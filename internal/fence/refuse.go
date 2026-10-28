@@ -5,6 +5,7 @@ import (
 
 	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/httpwire"
+	"pi-fortress/internal/placeholder"
 	"pi-fortress/internal/secrets"
 )
 
@@ -159,12 +160,12 @@ func (e *RefusedError) Error() string { return "fence: substitution refused" }
 // or records nothing when it can. note reads the kind from the placeholder,
 // not from the slot. Thus a placeholder that names a kind that this SNI
 // cannot carry gets a decision on that alone. It never needs a store lookup first.
-// A placeholder that is not exact (secrets.PlaceholderExact) has no slot:
+// A placeholder that is not exact (placeholder.PlaceholderExact) has no slot:
 // the fence never substitutes it, and refuses it as slot_unknown.
 func (s *scanner) note(b []byte, span [2]int, where string) {
-	slot, kind := secrets.PlaceholderParts(b, span)
+	slot, kind := placeholder.PlaceholderParts(b, span)
 	sl, ok := s.idx.ByDummy[secrets.Placeholder(slot, kind)]
-	ok = ok && secrets.PlaceholderExact(b, span)
+	ok = ok && placeholder.PlaceholderExact(b, span)
 	switch {
 	case !s.inject || !corepolicy.KindAllowed(kind, s.kinds):
 		s.refuse(CauseKindNotAllowed, slot, kind, where)
@@ -191,7 +192,7 @@ func (s *scanner) note(b []byte, span [2]int, where string) {
 // both call injectable over the same bytes. A cause recorded inside
 // injectable would be recorded twice.
 func (s *scanner) noteAll(b []byte, where string) {
-	for _, span := range secrets.FindPlaceholderSpans(b) {
+	for _, span := range placeholder.FindPlaceholderSpans(b) {
 		s.note(b, span, where)
 	}
 }
@@ -210,8 +211,8 @@ func (s *scanner) noteNames(fields httpwire.Fields) {
 	for _, f := range fields {
 		b = append(append(b, f.Name...), '\n')
 	}
-	for _, span := range secrets.FindPlaceholderSpans(b) {
-		slot, kind := secrets.PlaceholderParts(b, span)
+	for _, span := range placeholder.FindPlaceholderSpans(b) {
+		slot, kind := placeholder.PlaceholderParts(b, span)
 		s.refuse(CauseKeyInHeaderName, slot, kind, "header_name")
 	}
 	for _, f := range fields {
@@ -249,8 +250,8 @@ func (s *scanner) noteRepeats(fields httpwire.Fields) {
 // noteNames, on the method.
 func (s *scanner) noteMethod(method string) {
 	b := []byte(method)
-	for _, span := range secrets.FindPlaceholderSpans(b) {
-		slot, kind := secrets.PlaceholderParts(b, span)
+	for _, span := range placeholder.FindPlaceholderSpans(b) {
+		slot, kind := placeholder.PlaceholderParts(b, span)
 		s.refuse(CauseKeyInMethod, slot, kind, "method")
 	}
 	for _, sl := range s.idx.Lives {

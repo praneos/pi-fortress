@@ -28,7 +28,6 @@ import (
 	"pi-fortress/internal/dnslog"
 	"pi-fortress/internal/jsonl"
 	"pi-fortress/internal/leases"
-	"pi-fortress/internal/policycompile"
 )
 
 const (
@@ -1092,7 +1091,7 @@ func (o *Observer) loadMaps() {
 		if i == 0 {
 			o.domainFeeds, o.domainLists = parseDomainMap(string(raw))
 		} else {
-			o.ipFeeds = prefixFeeds(policycompile.ParseMap(string(raw)))
+			o.ipFeeds = prefixFeeds(base.ParseMap(string(raw)))
 		}
 	}
 }

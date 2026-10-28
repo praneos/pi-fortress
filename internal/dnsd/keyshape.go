@@ -4,8 +4,8 @@ import (
 	"log"
 	"regexp"
 
-	"pi-fortress/internal/fence"
 	"pi-fortress/internal/keyshape"
+	"pi-fortress/internal/tokenrules"
 )
 
 // keyShapes applies key_prefixes.rules of the fence to query names. The
@@ -29,7 +29,7 @@ type keyShapes struct {
 }
 
 func loadKeyShapes(path string) (*keyShapes, error) {
-	tr, err := fence.LoadTokenRules(path)
+	tr, err := tokenrules.LoadTokenRules(path)
 	if err != nil {
 		return nil, err
 	}

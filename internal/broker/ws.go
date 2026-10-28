@@ -16,6 +16,7 @@ import (
 	"pi-fortress/internal/fence"
 	"pi-fortress/internal/httpwire"
 	"pi-fortress/internal/jsonl"
+	"pi-fortress/internal/placeholder"
 	"pi-fortress/internal/preamble"
 	"pi-fortress/internal/secrets"
 )
@@ -511,11 +512,11 @@ func (b *Broker) logTooBig(ip, host, where string, size, limit int64) {
 // transformed, past the literal scrub. Thus the only correct action is to
 // refuse the frame.
 func wsPlaceholder(p []byte) (slot, kind string, ok bool) {
-	sp := secrets.FindPlaceholderSpans(p)
+	sp := placeholder.FindPlaceholderSpans(p)
 	if len(sp) == 0 {
 		return "", "", false
 	}
-	slot, kind = secrets.PlaceholderParts(p, sp[0])
+	slot, kind = placeholder.PlaceholderParts(p, sp[0])
 	return slot, kind, true
 }
 

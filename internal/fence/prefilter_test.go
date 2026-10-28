@@ -4,11 +4,13 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"pi-fortress/internal/tokenrules"
 )
 
 func benchTokenSet(t *testing.T) *tokenSet {
 	t.Helper()
-	re, err := LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
+	re, err := tokenrules.LoadTokenRE(benchRoot() + "/vm/policy/key_prefixes.rules")
 	if err != nil {
 		t.Fatal(err)
 	}
