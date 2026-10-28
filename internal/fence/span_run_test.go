@@ -14,8 +14,9 @@ import (
 	"pi-fortress/internal/tokenrules"
 )
 
-// candidatesEachWalk is candidates as it was before tokenRun. span walked
-// the run of each hit again, up to the window. The tests below compare
+// candidatesEachWalk is candidates as it was before tokenRun and
+// foldIndex. span walked the run of each hit again, up to the window, and
+// each hit had a search of its own (indexBefore). The tests below compare
 // candidates with it.
 func candidatesEachWalk(t *tokenSet, b []byte) ([][2]int, bool) {
 	if !t.complete {
@@ -28,7 +29,7 @@ func candidatesEachWalk(t *tokenSet, b []byte) ([][2]int, bool) {
 			back = tokenrules.LeadMax
 		}
 		for k := 0; k < len(b); {
-			j := t.index(b[k:], p)
+			j := indexBefore(t, b[k:], p)
 			if j < 0 {
 				break
 			}
@@ -97,10 +98,11 @@ func TestSpanWalksARunOnce(t *testing.T) {
 		{"all prefixes, last first", string(bytes.Repeat(rev, (1<<20)/len(rev))), len(ts.prefixes)},
 	} {
 		b := []byte(c.body)
-		wins, ok, walked := ts.candidatesWalk(b)
+		wins, ok, work := ts.candidatesWalk(b)
 		if !ok || len(wins) == 0 {
 			t.Fatalf("%s: no windows, ok=%v", c.name, ok)
 		}
+		walked := work.walked
 		t.Logf("%s: span walked %d bytes of a %d byte body", c.name, walked, len(b))
 		if lim := c.passes * len(b); walked > lim {
 			t.Errorf("%s: span walked %d bytes of a %d byte body, limit %d", c.name, walked, len(b), lim)
