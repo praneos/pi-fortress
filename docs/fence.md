@@ -711,7 +711,10 @@ first one.
 
 The table: `pf fetch` builds `generated/eyeball.table` from the `eyeball`
 section of `sources.json`. `pf apply` installs it as
-`/etc/pi-fortress/eyeball.table`.
+`/etc/pi-fortress/eyeball.table`. The copy goes to a temp file in the same
+directory, then to the disk, then into place with one rename. Thus the
+broker reads the old table or the full new table, never no table or a part
+of a table. `eyeball.allow` goes in the same way.
 
 - The ranges feed maps each announced IPv4 range to its ASN (iptoasn.com,
   public domain).

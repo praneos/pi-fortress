@@ -932,18 +932,32 @@ install -m 0644 "${POLICY}/house_ech.ips" /etc/pi-fortress/house-ech.ips
 # go when HOUSE_ALLOW_WHATSAPP is on. They ship for the same reason.
 install -m 0644 "${POLICY}/house_whatsapp.ips" /etc/pi-fortress/house-whatsapp.ips
 install -m 0644 "${WORKDIR}/house-doh.domains" /etc/pi-fortress/house-doh-domains.conf
+# install_atomic MODE SRC DST copies SRC to DST with one rename. The copy
+# goes to DST.new in the same directory, and is on the disk before the
+# rename. Thus a process that reads DST at any time gets the old file or
+# the full new file. It never gets no file or a part of a file. A copy
+# that fails leaves DST as it was.
+install_atomic() {
+  local tmp="${3}.new"
+  if ! install -m "${1}" "${2}" "${tmp}" || ! sync "${tmp}"; then
+    rm -f "${tmp}"
+    return 1
+  fi
+  mv -f "${tmp}" "${3}"
+}
 # The table of eyeball networks that pf fetch built, and the exemptions
 # of the operator. The broker loads both again when they change, so
-# neither is a fence input and neither restarts the fence. No table
-# leaves the installed copy. Its age stops its use in the broker. No
-# eyeball.allow in the policy directory means no exemptions.
+# neither is a fence input and neither restarts the fence. The broker can
+# read them during the copy, so the copy is atomic. No table leaves the
+# installed copy. Its age stops its use in the broker. No eyeball.allow in
+# the policy directory means no exemptions.
 if [[ -s "${POLICY}/generated/eyeball.table" ]]; then
   cmp -s "${POLICY}/generated/eyeball.table" /etc/pi-fortress/eyeball.table ||
-    install -m 0644 "${POLICY}/generated/eyeball.table" /etc/pi-fortress/eyeball.table
+    install_atomic 0644 "${POLICY}/generated/eyeball.table" /etc/pi-fortress/eyeball.table
 fi
 if [[ -f "${POLICY}/eyeball.allow" ]]; then
   if [[ ! "${POLICY}/eyeball.allow" -ef /etc/pi-fortress/eyeball.allow ]]; then
-    install -m 0644 "${POLICY}/eyeball.allow" /etc/pi-fortress/eyeball.allow
+    install_atomic 0644 "${POLICY}/eyeball.allow" /etc/pi-fortress/eyeball.allow
   fi
 else
   rm -f /etc/pi-fortress/eyeball.allow
