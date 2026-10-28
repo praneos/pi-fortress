@@ -2072,6 +2072,14 @@ if [[ -n "${HOUSE_IF}" ]]; then
   # rotates it (internal/dnsd sweepLogs). A dnsmasq with an fd to
   # the same inode would continue to write to the rotated file, and
   # observe tails that log by byte offset.
+  #
+  # no-ping: dnsmasq does not send an ICMP echo to an address before it
+  # offers that address. The check needs a raw ICMP socket, and thus
+  # CAP_NET_RAW. Without the check, the unit does not have that
+  # capability. Most clients probe a new address with ARP and decline it
+  # (DHCPDECLINE) if a different device answers. dnsmasq then offers a
+  # different address. Keep the static addresses of the house out of
+  # the DHCP range, or reserve them in house.hosts.
   cat >"${WORKDIR}/dns-house.conf" <<EOF
 interface=${HOUSE_IF}
 except-interface=lo
@@ -2079,6 +2087,7 @@ bind-dynamic
 port=0
 dhcp-range=${HOUSE_DHCP_START},${HOUSE_DHCP_END},12h
 dhcp-authoritative
+no-ping
 dhcp-option=option:router,${HOUSE_IP}
 dhcp-option=option:dns-server,${HOUSE_IP}
 dhcp-option=option:ntp-server,${HOUSE_IP}

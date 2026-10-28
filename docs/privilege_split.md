@@ -191,7 +191,12 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
     SNI queue). It has no `CAP_NET_RAW`. It pins each new socket to its
     interface (`SO_BINDTODEVICE`) before the bind, and Linux 5.7 and
     later allow that with no capability.
-  - `pf-dhcp-<name>`: each DHCP dnsmasq, in the group `nogroup`.
+  - `pf-dhcp-<name>`: each DHCP dnsmasq, in the group `nogroup`. Its
+    capabilities are `CAP_NET_BIND_SERVICE` (port 67) and `CAP_NET_ADMIN`
+    (the ARP entry for the reply to a client that has no address yet). It
+    has no `CAP_NET_RAW`: its conf has `no-ping`, so dnsmasq sends no ICMP
+    echo to an address before it offers that address. The pin of the DHCP
+    socket to its interface needs no capability (Linux 5.7 and later).
   - www has a dynamic user (`DynamicUser=yes`).
 - There are five groups:
   - `pf-fortress` has all pf daemons, for the files that they share (logs,

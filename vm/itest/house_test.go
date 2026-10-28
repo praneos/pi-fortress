@@ -153,13 +153,13 @@ func houseTests(t *testing.T) {
 	// from any device that the house connects. It was the last
 	// long-running daemon with no seccomp filter. It also no longer drops
 	// its own privilege: systemd starts it as its own account,
-	// pf-dhcp-house. That lets the unit deny @privileged and give it three
+	// pf-dhcp-house. That lets the unit deny @privileged and give it two
 	// capabilities, not seven. No other DHCP instance runs as that account.
 	// Thus no other instance can write its lease file or its log.
 	t.Run("the DHCP daemon runs boxed in", func(t *testing.T) {
 		since := piClock(t)
 		pid, filter := unitSandbox(t, "pi-fortress-dns-house", "pf-dhcp-house",
-			capNetBindService|capNetAdmin|capNetRaw)
+			capNetBindService|capNetAdmin)
 		// The one @privileged call that is added again: dnsmasq fchowns its
 		// log to the --user account at each start, root or not. If the
 		// filter denies it, the daemon dies before it reads a packet.
@@ -182,7 +182,7 @@ func houseTests(t *testing.T) {
 		}
 		// The three things that reach this daemon in normal use, in the
 		// order that a box sees them. A lease is the packet path (and with
-		// it the ping-before-offer socket and the ARP-cache ioctl). HUP is
+		// it the ARP-cache ioctl, with no ping before the offer). HUP is
 		// pf apply and systemctl reload. USR2 is the hourly rotation.
 		// Through sudo: dhclient is in /sbin, which is on the secure_path
 		// of root, not of the client account.

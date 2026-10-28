@@ -46,7 +46,7 @@ the Pi:
 - It listens on UDP 67, only on the interface of that segment.
 - A DHCP-only dnsmasq that is bound to that interface answers (`port=0`, no
   DNS).
-- It runs in the sandbox of the house unit, with three capabilities. Each
+- It runs in the sandbox of the house unit, with two capabilities. Each
   DHCP instance has its own account (`pf-dhcp-<name>`, `pf-dhcp-house` for
   the house). An instance can write only its own lease file and log.
 

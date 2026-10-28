@@ -139,8 +139,8 @@ func segDHCPTests(t *testing.T) {
 			t.Errorf("%s runs as %s, want pf-dhcp-%s", unit, u, name)
 		}
 		// The box of the house DHCP daemon (house_test.go): a seccomp
-		// filter, no_new_privs and the three net capabilities.
-		procBoxed(t, unit, capNetBindService|capNetAdmin|capNetRaw)
+		// filter, no_new_privs and the two net capabilities.
+		procBoxed(t, unit, capNetBindService|capNetAdmin)
 		if s := pi(t, "sudo stat -c '%U %a' /var/lib/pi-fortress/dhcp-"+name+".leases /var/log/pi-fortress/dhcp-"+name+".log"); strings.Count(s, "pf-dhcp-"+name+" 640") != 2 {
 			t.Errorf("lease file and log are not pf-dhcp-%s 0640:\n%s", name, s)
 		}

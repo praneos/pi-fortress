@@ -1646,8 +1646,8 @@ grep -qx '  dhcp_account house' "${apply}" ||
 grep -q '^Group=nogroup$' "${hunit}" ||
   fail "dns-house.service does not name a group; dnsmasq's built-in default is dip"
 for _l in \
-  'CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_NET_RAW' \
-  'AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN CAP_NET_RAW' \
+  'CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN' \
+  'AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN' \
   'RestrictAddressFamilies=AF_INET AF_NETLINK AF_UNIX' \
   'SystemCallArchitectures=native' \
   'SystemCallFilter=@system-service' \
@@ -1656,6 +1656,14 @@ for _l in \
 done
 grep -vE '^[[:space:]]*#' "${hunit}" | grep -qE 'CAP_SETUID|CAP_SETGID|CAP_CHOWN|CAP_DAC_OVERRIDE' &&
   fail "dns-house.service still carries a capability only dnsmasq's own privilege drop needed"
+# No ping before an offer. That ICMP socket was the only use of NET_RAW.
+# Thus no DHCP unit has NET_RAW, and each conf has no-ping (the segment
+# conf is checked below, with seg_dhcp_conf).
+for _u in dns-house dhcp@; do
+  grep -vE '^[[:space:]]*#' "${here}/${_u}.service" | grep -q 'CAP_NET_RAW' &&
+    fail "${_u}.service has CAP_NET_RAW, which a DHCP server with no-ping does not need"
+done
+grep -qx 'no-ping' "${apply}" || fail "dns-house.conf has no no-ping; dnsmasq would open an ICMP socket that it has no capability for"
 # A killed DHCP daemon restarts in two seconds and leaves a SECCOMP
 # audit line. EPERM in a rare renew path makes one device silently lose
 # its lease weeks later. Thus the default action stays kill.
@@ -2525,7 +2533,7 @@ dhcp_sync on 2>"${droot}/on.err" || fail "seg_dhcp_sync failed: $(cat "${droot}/
 dconf="${droot}/etc/dhcp-iot.conf"
 [[ -f "${dconf}" ]] || fail "no dnsmasq conf for the DHCP segment"
 [[ ! -e "${droot}/etc/dhcp-desk.conf" ]] || fail "a conf was written for the desk, which has no DHCP"
-for _l in 'interface=eth1.30' 'except-interface=lo' 'bind-dynamic' 'port=0' 'dhcp-range=10.30.0.100,10.30.0.199,12h' \
+for _l in 'interface=eth1.30' 'except-interface=lo' 'bind-dynamic' 'port=0' 'dhcp-range=10.30.0.100,10.30.0.199,12h' 'no-ping' \
   'dhcp-option=option:router,10.30.0.1' 'dhcp-option=option:dns-server,10.30.0.1' 'dhcp-option=option:ntp-server,10.30.0.1' \
   "dhcp-leasefile=${droot}/lib/dhcp-iot.leases" "log-facility=${droot}/log/dhcp-iot.log"; do
   grep -qxF -- "${_l}" "${dconf}" || fail "dhcp-iot.conf lacks '${_l}':$(printf '\n%s' "$(cat "${dconf}")")"

@@ -31,7 +31,8 @@ source "${_pf_lib}/guard.sh" && pf_guard_target lib/dhcp.sh || return 1 2>/dev/n
 # instance. It is the house conf (apply.sh, dns-house.conf) with the segment
 # names: bound to its one interface, port=0 so it never answers DNS (pf dns
 # holds 53 on IP), the Pi as router, resolver and NTP server (chrony,
-# apply.sh chrony_conf), its own leases and log. It sends no other
+# apply.sh chrony_conf), its own leases and log, no ping before an offer
+# (apply.sh gives the reason at dns-house.conf). It sends no other
 # option: no domain, no search list, no WPAD. HOSTS is
 # the SEG_DHCP_HOSTS of the segment: the reservations from dhcp.<name>.hosts
 # that render checked. Each MAC,IP[,name] becomes a dhcp-host line. The
@@ -47,6 +48,7 @@ bind-dynamic
 port=0
 dhcp-range=${start},${end},12h
 dhcp-authoritative
+no-ping
 dhcp-option=option:router,${ip}
 dhcp-option=option:dns-server,${ip}
 dhcp-option=option:ntp-server,${ip}
