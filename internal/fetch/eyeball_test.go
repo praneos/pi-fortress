@@ -294,10 +294,13 @@ func TestEyeballCSVRecordCap(t *testing.T) {
 // cap. A PeeringDB answer of 17 MiB is refused; a ranges feed of 20 MiB is
 // read.
 func TestEyeballBodyCapPerFormat(t *testing.T) {
-	pad := strings.Repeat("\n", 20<<20)
+	pad := strings.Repeat("\n", 17<<20)
+	// The ranges feed gets rows with ASN 0 as padding, not empty lines. A
+	// ranges feed with many lines that are not rows is refused.
+	row := "192.0.2.0\t192.0.2.0\t0\tNone\t" + strings.Repeat("x", 1000) + "\n"
 	bodies := map[string]string{
-		eyePDBURL:    eyePDB + pad[:17<<20],
-		eyeRangesURL: eyeRanges + pad,
+		eyePDBURL:    eyePDB + pad,
+		eyeRangesURL: eyeRanges + strings.Repeat(row, (20<<20)/len(row)+1),
 	}
 	f := &Fetcher{Get: func(u, _ string, _ time.Duration) (string, error) { return bodies[u], nil }}
 	var report []string
