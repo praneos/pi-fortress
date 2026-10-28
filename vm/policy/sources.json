@@ -59,7 +59,7 @@
     }
   ],
   "eyeball": {
-    "comment": "The table of eyeball networks (home broadband and mobile) for the eyeball check of the broker (docs/fence.md, eyeball_network). An ASN is in the table when an asns feed includes it and none excludes it. bgp.tools asks for a contact in the User-Agent; put yours in user_agent.",
+    "comment": "The table of eyeball networks (home broadband and mobile) for the eyeball check of the broker (docs/fence.md, eyeball_network). An ASN is in the table when an asns feed includes it and none excludes it. user_agent is the User-Agent of each feed of this section: iptoasn.com, bgp.tools and PeeringDB. bgp.tools asks for a contact in it. A contact that you put in user_agent goes to all these publishers, not only to bgp.tools.",
     "user_agent": "pi-fortress eyeball bgp.tools - https://github.com/praneos/pi-fortress",
     "max_ranges": 1000000,
     "ranges": {

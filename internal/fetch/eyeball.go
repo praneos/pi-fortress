@@ -27,8 +27,10 @@ import (
 // none excludes it.
 type EyeballSpec struct {
 	Comment string `json:"comment,omitempty"`
-	// UserAgent replaces the user_agent of the spec for these feeds. Some
-	// publishers ask for a contact in it.
+	// UserAgent replaces the user_agent of the spec for all the feeds of
+	// this section, the ranges feed and each ASN feed. Some publishers ask
+	// for a contact in it. That contact then goes to each publisher of the
+	// section, not only to the one that asks.
 	UserAgent string `json:"user_agent,omitempty"`
 	// MaxRanges caps the ranges that the ranges feed can give. 0 means
 	// defaultEyeballRanges.
@@ -223,7 +225,10 @@ func rangeLine(line []byte) (rg eyeball.Range, ok, row bool) {
 	s := string(line[:end])
 	first, last, asn := s[:i], s[i+1:j], s[j+1:]
 	if rg, ok = eyeball.ParseRange(first, last, asn); ok {
-		return rg, true, true
+		// A row wider than eyeball.MaxRangeAddrs is a row, but not a range
+		// of the table. Normalize keeps the first of two ranges that
+		// overlap, so such a row would also remove the rows inside it.
+		return rg, !rg.Wide(), true
 	}
 	if _, err := netip.ParseAddr(first); err != nil {
 		return rg, false, false
@@ -631,7 +636,11 @@ func (f *Fetcher) runEyeball(spec Spec, outDir, ua string, timeout time.Duration
 		if len(fl) != 3 {
 			continue
 		}
-		if rg, ok := eyeball.ParseRange(fl[0], fl[1], fl[2]); ok {
+		// A last-good copy can have a wide range of an older pf, or the
+		// join of a network that is not an eyeball network. Select drops a
+		// wide range after its join. This drop before Normalize keeps the
+		// ranges inside such a range.
+		if rg, ok := eyeball.ParseRange(fl[0], fl[1], fl[2]); ok && !rg.Wide() {
 			rs = append(rs, rg)
 		}
 	}

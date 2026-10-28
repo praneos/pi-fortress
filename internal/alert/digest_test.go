@@ -187,6 +187,33 @@ func TestDigestSurvivesARestart(t *testing.T) {
 	}
 }
 
+// The state file has the names of the open window, so only its owner
+// reads it. A file or a temp file from an older version with a wider mode
+// does not keep that mode.
+func TestDigestStateIsOwnerOnly(t *testing.T) {
+	dir := t.TempDir()
+	state := filepath.Join(dir, "digest.json")
+	for _, p := range []string{state, state + ".tmp"} {
+		if err := os.WriteFile(p, []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := &Digest{Every: time.Hour, StatePath: state, Stderr: io.Discard}
+	d.load(t0)
+	d.add(blocksRow(t0.Add(time.Minute), "agent", map[string]int{jsonl.BlockSecurity: 1},
+		jsonl.BlockHit{Class: jsonl.BlockSecurity, Dst: "evil.example", N: 1}), t0.Add(time.Minute))
+	st, err := os.Stat(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m := st.Mode().Perm(); m != 0o600 {
+		t.Fatalf("mode %v, want 0600", m)
+	}
+	if raw, _ := os.ReadFile(state); !strings.Contains(string(raw), "evil.example") {
+		t.Fatalf("state: %s", raw)
+	}
+}
+
 // Through the Alerter: a Blocks row from the notice log goes into the
 // digest, does not post alone and does not replace alert.last. The same
 // row in the strip log is only a console line. At the end of the window,

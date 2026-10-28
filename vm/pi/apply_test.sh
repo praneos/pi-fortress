@@ -735,6 +735,37 @@ grep -qF "PARANOID is not on or off" "${tmp}/pdesk.err" || fail "segment PARANOI
   [[ "$(stat -c %a "${tmp}/seed/allow.desk.domains")" == 644 ]] || fail "the seeded allowlist is not 0644, so pf dns cannot read it"
 )
 
+# The eyeball table and its allow list go in with one rename. The broker
+# reads them again when they change, so it must never see no file or a
+# part of a file. The test copies install_atomic out of apply and runs it.
+# A copy that fails, as on a full disk, leaves the installed file as it
+# was, and no temp file.
+(
+  # shellcheck source=/dev/null
+  source <(sed -n '/^install_atomic() {$/,/^}$/p' "${apply}")
+  declare -F install_atomic >/dev/null || fail "install_atomic is gone from apply.sh"
+  grep -qF 'install_atomic 0644 "${POLICY}/generated/eyeball.table" /etc/pi-fortress/eyeball.table' "${apply}" ||
+    fail "apply does not install eyeball.table with install_atomic"
+  grep -qF 'install_atomic 0644 "${POLICY}/eyeball.allow" /etc/pi-fortress/eyeball.allow' "${apply}" ||
+    fail "apply does not install eyeball.allow with install_atomic"
+  ia="${tmp}/install-atomic"
+  mkdir -p "${ia}/bin"
+  printf 'old\n' >"${ia}/dst"
+  printf 'new\n' >"${ia}/src"
+  install_atomic 0644 "${ia}/src" "${ia}/dst" || fail "install_atomic failed"
+  [[ "$(cat "${ia}/dst")" == new && ! -e "${ia}/dst.new" ]] || fail "install_atomic did not put the new file in place"
+  [[ "$(stat -c %a "${ia}/dst")" == 644 ]] || fail "install_atomic did not set the mode"
+  # An install that writes a part of the file and then fails.
+  printf '#!/bin/bash\nprintf ne >"${*: -1}"\nexit 1\n' >"${ia}/bin/install"
+  chmod +x "${ia}/bin/install"
+  printf 'old\n' >"${ia}/dst"
+  if PATH="${ia}/bin:${PATH}" install_atomic 0644 "${ia}/src" "${ia}/dst"; then
+    fail "install_atomic did not report the failed copy"
+  fi
+  [[ "$(cat "${ia}/dst")" == old ]] || fail "a failed copy changed the installed file: $(cat "${ia}/dst")"
+  [[ ! -e "${ia}/dst.new" ]] || fail "a failed copy left its temp file"
+)
+
 # AGENT_DNS=fakeip (internal/render fakeIPGate) goes to pf render from
 # the environment of apply. The gate admits the pool where it admitted
 # @resolved_v4. apply.env gives AGENT_DNS and FAKEIP_NET back, as checked.

@@ -382,6 +382,20 @@ func TestParseRangesPlainAndGzip(t *testing.T) {
 	}
 }
 
+// A ranges row of more than one /8 is a row, but not a range of the
+// table. The rows inside it stay.
+func TestParseRangesDropsRowWiderThanSlash8(t *testing.T) {
+	body := "0.0.0.0\t255.255.255.255\t64496\tZZ\tWIDE\n" + eyeRanges
+	items, _, err := parseRanges(body, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _, _ := parseRanges(eyeRanges, 100)
+	if strings.Join(items, "|") != strings.Join(want, "|") {
+		t.Fatalf("items %q, want %q", items, want)
+	}
+}
+
 func TestMergeSeedEyeball(t *testing.T) {
 	seed := []byte(`{"feeds":[],"eyeball":{"ranges":{"id":"r","format":"ip2asn","url":"https://r.test/x"},` +
 		`"asns":[{"id":"a","format":"asn","url":"https://a.test/x"},{"id":"b","format":"asn","url":"https://b.test/x"}]}}`)

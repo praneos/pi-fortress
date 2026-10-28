@@ -103,7 +103,8 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   gives the sidecar exactly the files that the sidecar rewrites
   (`alert.offset`, `alert-notice.offset`, `alert.last`). `alert.service`
   can write these three files and its `StateDirectory`,
-  `/var/lib/pi-fortress/alert` (the pressure and digest state).
+  `/var/lib/pi-fortress/alert` (the pressure and digest state). The digest
+  state has the full names of the blocks, so it is `0600`.
   `alert.url` (the webhook URL) is `root:pf-sidecar 0640`, in
   `/etc/pi-fortress` and in the policy tree. Only `alert.service` gets the
   `pf-sidecar` group (`SupplementaryGroups`). monitor runs as the same user

@@ -81,11 +81,20 @@ func (b *Broker) eyeballRefused(p *preamble.Preamble) bool {
 	if !hit {
 		return false
 	}
-	refuse := b.Eyeball.Mode == eyeball.Refuse
+	refuse := b.eyeballRefuse(sni)
 	where := whereAudit
 	if refuse {
 		where = "preamble"
 	}
 	b.logEyeball(sni, sni, clientIP(p), where, p.OrigDst.Addr(), asn)
 	return refuse
+}
+
+// eyeballRefuse reports whether a hit for name stops the dial. That is so
+// only in refuse mode, and never for a core.hosts name: the agent needs
+// those hosts, and a bad table must not cut them. A hit for a core name is
+// an audit row. The dial to a core name still verifies the certificate of
+// that name, so a home line cannot take its place.
+func (b *Broker) eyeballRefuse(name string) bool {
+	return b.Eyeball.Mode == eyeball.Refuse && !b.Policy.HostAllowed(name)
 }

@@ -11,9 +11,12 @@ import (
 )
 
 const (
-	// maxTallyHits bounds the destinations that one flush window keeps. A
-	// block past it still counts in its class. Only its name is not kept.
-	// An agent selects the names, so the table must not grow with them.
+	// maxTallyHits bounds the destinations that one flush window keeps for
+	// one segment. A block past it still counts in its class. Only its name
+	// is not kept. An agent selects the names, so the table must not grow
+	// with them. The bound is for each segment, so that the names of one
+	// segment never take the place of the names of a different segment.
+	// The segments come from the configuration, so their number is small.
 	maxTallyHits = 512
 	// maxRowHits is the number of destinations in one Blocks row.
 	maxRowHits = 20
@@ -31,6 +34,8 @@ type blockKey struct {
 type blockTally struct {
 	counts map[string]map[string]int
 	hits   map[blockKey]int
+	// segHits is the number of keys in hits for each segment.
+	segHits map[string]int
 }
 
 func (t *blockTally) add(seg, class, feed, src, dst string, n int) {
@@ -40,6 +45,7 @@ func (t *blockTally) add(seg, class, feed, src, dst string, n int) {
 	if t.counts == nil {
 		t.counts = map[string]map[string]int{}
 		t.hits = map[blockKey]int{}
+		t.segHits = map[string]int{}
 	}
 	if t.counts[seg] == nil {
 		t.counts[seg] = map[string]int{}
@@ -50,8 +56,11 @@ func (t *blockTally) add(seg, class, feed, src, dst string, n int) {
 		return
 	}
 	k := blockKey{seg, class, feed, src, dst}
-	if _, ok := t.hits[k]; ok || len(t.hits) < maxTallyHits {
+	if _, ok := t.hits[k]; ok {
 		t.hits[k] += n
+	} else if t.segHits[seg] < maxTallyHits {
+		t.hits[k] = n
+		t.segHits[seg]++
 	}
 }
 
