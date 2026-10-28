@@ -83,7 +83,9 @@ func (h *harness) start(mod func(*Config)) {
 	}
 	h.t.Cleanup(h.stop)
 	h.waitSocket("dns.sock")
-	h.waitSocket("ct.sock")
+	if !cfg.NoCT {
+		h.waitSocket("ct.sock")
+	}
 }
 
 // waitSocket waits until name is open to the group: the last step of

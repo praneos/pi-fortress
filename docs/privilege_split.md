@@ -190,7 +190,9 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   packets. observe gets no conntrack table, so the flow and volume rows
   stop, and observe says so in the journal. netgate restarts at once
   (`Restart=always`), and pf dns and observe have `Wants=` and `After=`
-  on it.
+  on it. When the account of observe or the group `pf-ctgate` is missing,
+  netgate logs the reason and starts without `ct.sock`. Then only the
+  conntrack table stops, not the gate set writes and the SNI queue.
 
   Limits: netgate holds `CAP_NET_ADMIN`, so code that runs in netgate has
   full control of the network. Its input is fixed messages from two

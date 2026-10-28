@@ -57,26 +57,11 @@ func runNetgateDaemon(config string, stderr io.Writer) int {
 	for _, s := range skipped {
 		log.Printf("pf netgate: %s names set %q, which is not a resolver gate set; GATE refuses it", config, s)
 	}
-	dns, err := netgate.LookupPeer(netgate.DNSUser, netgate.DNSGroup)
+	cfg, err := netgateConfig(dc, netgate.LookupPeer, netgate.LookupGroup, log.Printf)
 	if err != nil {
-		return fail(stderr, fmt.Errorf("pf netgate: the agent resolver account: %w", err))
+		return fail(stderr, err)
 	}
-	ct, err := netgate.LookupPeer(netgate.CTUser, netgate.CTUserGroup)
-	if err != nil {
-		return fail(stderr, fmt.Errorf("pf netgate: the observe account: %w", err))
-	}
-	ctGroup, err := netgate.LookupGroup(netgate.CTGroup)
-	if err != nil {
-		return fail(stderr, fmt.Errorf("pf netgate: the group of ct.sock: %w", err))
-	}
-	srv, err := netgate.New(netgate.Config{
-		Dir:       netgate.Dir,
-		DNSConfig: dc,
-		DNS:       dns,
-		DNSGroup:  int(dns.GID),
-		CT:        ct,
-		CTGroup:   ctGroup,
-	})
+	srv, err := netgate.New(cfg)
 	if err != nil {
 		return fail(stderr, err)
 	}
@@ -87,4 +72,30 @@ func runNetgateDaemon(config string, stderr io.Writer) int {
 		return fail(stderr, err)
 	}
 	return 0
+}
+
+// netgateConfig gives the Config of the daemon, with the uid and gid of
+// each client. The agent resolver account is required: without it,
+// netgate has nothing to serve. A fault in the setup of observe (its
+// account, the group of ct.sock) is logged, and netgate starts without
+// ct.sock. Thus such a fault stops only the conntrack table, never the
+// gate set writes and the SNI queue of pf dns, and with them the DNS
+// answers and the house flows.
+func netgateConfig(dc netgate.DNSConfig, peer func(account, group string) (netgate.Peer, error),
+	group func(string) (int, error), logf func(string, ...any)) (netgate.Config, error) {
+	dns, err := peer(netgate.DNSUser, netgate.DNSGroup)
+	if err != nil {
+		return netgate.Config{}, fmt.Errorf("pf netgate: the agent resolver account: %w", err)
+	}
+	cfg := netgate.Config{Dir: netgate.Dir, DNSConfig: dc, DNS: dns, DNSGroup: int(dns.GID)}
+	ct, err := peer(netgate.CTUser, netgate.CTUserGroup)
+	if err == nil {
+		cfg.CT = ct
+		cfg.CTGroup, err = group(netgate.CTGroup)
+	}
+	if err != nil {
+		logf("pf netgate: no ct.sock, so observe gets no conntrack table: %v", err)
+		cfg.NoCT = true
+	}
+	return cfg, nil
 }

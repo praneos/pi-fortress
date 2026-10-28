@@ -29,9 +29,12 @@ type Config struct {
 	DNS      Peer
 	DNSGroup int
 	// CT is observe, the one client of ct.sock, and CTGroup is the group
-	// of that socket.
+	// of that socket. NoCT opens no ct.sock: a fault in the setup of CT
+	// (the account of observe, the group of its socket) then stops only
+	// the conntrack table, not the GATE and SNI of pf dns.
 	CT      Peer
 	CTGroup int
+	NoCT    bool
 	// CTArgv is the conntrack command. Nil is ctArgv. A test gives a fake.
 	CTArgv []string
 	// Run runs nft (gateset.Cmd.Run). Nil runs the nft command. A test
@@ -123,14 +126,17 @@ func New(cfg Config) (*Server, error) {
 		conns: dnsConns,
 		buf:   maxGate + 1,
 		serve: s.serveDNS,
-	}, {
-		name:  "ct.sock",
-		peer:  cfg.CT,
-		group: cfg.CTGroup,
-		conns: ctConns,
-		buf:   ctRequestLen + 1,
-		serve: func(c *net.UnixConn, first, _ []byte) { s.ct.serve(c, first) },
 	}}
+	if !cfg.NoCT {
+		s.socks = append(s.socks, &sock{
+			name:  "ct.sock",
+			peer:  cfg.CT,
+			group: cfg.CTGroup,
+			conns: ctConns,
+			buf:   ctRequestLen + 1,
+			serve: func(c *net.UnixConn, first, _ []byte) { s.ct.serve(c, first) },
+		})
+	}
 	return s, nil
 }
 

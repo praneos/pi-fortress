@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"pi-fortress/internal/nfq"
 )
 
 // fakeConntrack writes a script that prints out and stderr and exits with
@@ -155,5 +157,32 @@ func TestCTRequestWire(t *testing.T) {
 		if err := decodeCTRequest(b); !errors.Is(err, errProto) {
 			t.Errorf("CT request %v: %v", b, err)
 		}
+	}
+}
+
+// With NoCT, netgate opens no ct.sock. A CT request fails, and the GATE
+// and SNI of pf dns work as before.
+func TestNoCTKeepsGateAndSNI(t *testing.T) {
+	h, fq, _ := sniHarness(t, func(c *Config) {
+		c.NoCT = true
+		c.CTArgv = fakeConntrack(t, table(3), "", 0, 0)
+	})
+	if _, err := os.Stat(h.sock("ct.sock")); err == nil {
+		t.Fatal("ct.sock exists with NoCT")
+	}
+	if _, err := ReadCT(h.sock("ct.sock")); err == nil {
+		t.Fatal("a CT request passed with NoCT")
+	}
+	if err := NewGateClient(h.sock("dns.sock")).Add("resolved_v4", v4s("1.1.1.1")); err != nil {
+		t.Fatalf("GATE with NoCT: %v", err)
+	}
+	sc, err := DialSNI(h.sock("dns.sock"), 1)
+	if err != nil {
+		t.Fatalf("SNI with NoCT: %v", err)
+	}
+	defer sc.Close()
+	fq.in <- nfq.Packet{ID: 4}
+	if _, err := sc.Recv(); err != nil {
+		t.Fatal(err)
 	}
 }
