@@ -743,24 +743,22 @@ func CoalesceIPv4(items []string) []string {
 		}
 		nets = append(nets, p)
 	}
+	// Sort by address, then by length. A prefix that contains a second
+	// prefix comes before it. The kept prefixes do not overlap, so only
+	// the last kept prefix can contain the next prefix. One pass removes
+	// each prefix that a different prefix contains, and each duplicate.
 	sort.Slice(nets, func(i, j int) bool {
-		if nets[i].Bits() != nets[j].Bits() {
-			return nets[i].Bits() < nets[j].Bits()
+		if c := nets[i].Addr().Compare(nets[j].Addr()); c != 0 {
+			return c < 0
 		}
-		return nets[i].Addr().Compare(nets[j].Addr()) < 0
+		return nets[i].Bits() < nets[j].Bits()
 	})
 	var kept []netip.Prefix
 	for _, n := range nets {
-		covered := false
-		for _, prev := range kept {
-			if prefixContains(prev, n) {
-				covered = true
-				break
-			}
+		if len(kept) > 0 && prefixContains(kept[len(kept)-1], n) {
+			continue
 		}
-		if !covered {
-			kept = append(kept, n)
-		}
+		kept = append(kept, n)
 	}
 	collapsed := collapsePrefixes(kept)
 	out := make([]string, 0, len(collapsed))
