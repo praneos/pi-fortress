@@ -454,3 +454,40 @@ func FuzzEyeballFeeds(f *testing.F) {
 		}
 	})
 }
+
+// A young copy of each eyeball feed serves with no download. The table
+// then has the time of the copies, not the time of the run.
+func TestEyeballFreshCopySkipsTheDownload(t *testing.T) {
+	base := time.Date(2026, 10, 28, 4, 0, 0, 0, time.UTC)
+	clock := base
+	feeds := &eyeFeeds{down: map[string]bool{}, uas: map[string]string{}}
+	f, out := eyeDir(t, "0", feeds, func() time.Time { return clock })
+	f.Run()
+	ents, err := os.ReadDir(filepath.Join(out, "feeds"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range ents {
+		if err := os.Chtimes(filepath.Join(out, "feeds", e.Name()), base, base); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for u := range feeds.uas {
+		delete(feeds.uas, u)
+	}
+	f.FreshFor = 30 * time.Minute
+	clock = base.Add(5 * time.Minute)
+	report, _, _, _ := f.Run()
+	if len(feeds.uas) != 0 {
+		t.Errorf("downloads %v, want none", feeds.uas)
+	}
+	text := strings.Join(report, "\n")
+	for _, line := range []string{"OK ranges: 6 asn ranges (last good 5m ago", "OK pdb: 2 asns (last good 5m ago", "OK eyeball: 3 ranges"} {
+		if !strings.Contains(text, line) {
+			t.Errorf("report %q has no %q", report, line)
+		}
+	}
+	if tab := readEyeTable(t, out); tab.Len() != 3 || !tab.Built.Equal(base) {
+		t.Errorf("len %d built %v, want 3 and %v", tab.Len(), tab.Built, base)
+	}
+}

@@ -227,6 +227,23 @@ func mustFailAllOn(t *testing.T, host string, cmds ...string) {
 	}
 }
 
+// mustFailOnEach is mustFailAllOn for one command on more than one host.
+// The hosts run it at the same time.
+func mustFailOnEach(t *testing.T, cmd string, hosts ...string) {
+	t.Helper()
+	outs := make([]string, len(hosts))
+	errs := make([]error, len(hosts))
+	var wg sync.WaitGroup
+	for i, host := range hosts {
+		wg.Go(func() { outs[i], errs[i] = sshNoSkip(t, 25*time.Second, host, cmd) })
+	}
+	wg.Wait()
+	for i, host := range hosts {
+		sudoSkip(t, host, cmd, errs[i])
+		failedAsExpected(t, host, cmd, outs[i], errs[i])
+	}
+}
+
 // failedAsExpected fails the test unless cmd itself failed on host.
 func failedAsExpected(t *testing.T, host, cmd, out string, err error) {
 	t.Helper()

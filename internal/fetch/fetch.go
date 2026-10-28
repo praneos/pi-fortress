@@ -205,7 +205,13 @@ type Fetcher struct {
 	Get func(url, ua string, timeout time.Duration) (string, error)
 	// Now dates a stale feed against its cached copy; nil means time.Now.
 	Now func() time.Time
-	web *client
+	// FreshFor, when more than zero, lets a feed whose last good copy is
+	// younger than FreshFor serve from that copy, with no download. Two
+	// applies in a few minutes (a ship and a rollback) then do not ask
+	// the feed servers twice, and a server that limits the request rate
+	// does not refuse the second request. Zero always downloads.
+	FreshFor time.Duration
+	web      *client
 }
 
 func (f *Fetcher) now() time.Time {
@@ -213,6 +219,27 @@ func (f *Fetcher) now() time.Time {
 		return f.Now()
 	}
 	return time.Now()
+}
+
+// freshCopy gives the last good copy of feed when FreshFor allows it: the
+// copy has the stamp of feed, it parses to at least one entry (readCache),
+// and its age is from zero to less than FreshFor. A copy with a time in
+// the future (the clock went back) is not fresh. The copy is not written
+// again, so its age grows: a series of runs cannot keep a copy for more
+// than FreshFor. On a miss, the caller downloads as usual.
+func (f *Fetcher) freshCopy(outDir string, feed Feed) (items []string, note string, when time.Time, ok bool) {
+	if f.FreshFor <= 0 {
+		return nil, "", time.Time{}, false
+	}
+	items, when, ok = readCache(outDir, feed)
+	if !ok {
+		return nil, "", time.Time{}, false
+	}
+	age := f.now().Sub(when)
+	if age < 0 || age >= f.FreshFor {
+		return nil, "", time.Time{}, false
+	}
+	return items, " (last good " + Ago(age) + ": younger than " + f.FreshFor.String() + ", not downloaded again)", when, true
 }
 
 func Defaults(policyDir, outDir string) *Fetcher {
@@ -793,7 +820,11 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 		if feed.Kind == "ips" {
 			limit = maxIPs
 		}
-		items, stale, cut, ok := f.feedItems(outDir, ua, timeout, feed, limit+1, &report)
+		items, fresh, _, ok := f.freshCopy(outDir, feed)
+		stale, cut := "", false
+		if !ok {
+			items, stale, cut, ok = f.feedItems(outDir, ua, timeout, feed, limit+1, &report)
+		}
 		if !ok {
 			continue
 		}
@@ -815,7 +846,7 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 		if cut {
 			note = fmt.Sprintf(" (more than the cap of %d; the rest not read)", limit)
 		}
-		report = append(report, fmt.Sprintf("%s %s: %d %s%s%s", verb, feed.ID, len(kept), label, note, stale))
+		report = append(report, fmt.Sprintf("%s %s: %d %s%s%s%s", verb, feed.ID, len(kept), label, note, stale, fresh))
 		switch {
 		case toHouse && feed.Role == "vpn":
 			houseVPN = append(houseVPN, kept)

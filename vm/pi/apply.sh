@@ -21,9 +21,10 @@ apply_usage() {
   cat <<'EOF'
 usage: pf apply [--local | --refresh | --render-nft]
 
-  (no flag)     fetch feeds, compile policy, load nft + dnsmasq, restart the fence
+  (no flag)     fetch feeds, compile policy, load nft + dnsmasq, restart the fence;
+                a feed downloaded less than 30 minutes ago uses that copy
   --local       compile and reload nft + dnsmasq only; no feed fetch
-  --refresh     --local plus the feed download; the unattended timer path
+  --refresh     --local plus the feed download of all feeds; the unattended timer path
   --render-nft  print the ruleset that would be loaded and exit, changing nothing
 EOF
 }
@@ -436,7 +437,17 @@ else
   rm -f /usr/local/sbin/pi-fortress-{apply,status,observe,alert,enroll,www,console}
 
   if [[ "${LOCAL_ONLY}" -eq 0 || "${REFRESH}" -eq 1 ]]; then
-    if ! "${PF}" fetch --policy "${POLICY}" --out "${POLICY}/generated"; then
+    # A full apply uses the last good copy of a feed that is less than 30
+    # minutes old. A ship, its rollback and a dead-man revert each run a
+    # full apply in a few minutes, and a feed server that limits the
+    # request rate refuses the repeated download. --refresh (the timer)
+    # always downloads. A copy that is missing, old or does not parse
+    # gets the usual download.
+    _fresh=30m
+    if [[ "${REFRESH}" -eq 1 ]]; then
+      _fresh=0
+    fi
+    if ! "${PF}" fetch --policy "${POLICY}" --out "${POLICY}/generated" --fresh "${_fresh}"; then
       echo "pi-fortress: feed fetch failed; compiling from the last generated lists" >&2
       if [[ ! -s "${POLICY}/generated/blacklist.domains" ]]; then
         echo "pi-fortress: ${POLICY}/generated/blacklist.domains missing or empty; nothing to fall back on" >&2
