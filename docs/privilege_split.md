@@ -192,10 +192,15 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
     interface (`SO_BINDTODEVICE`) before the bind, and Linux 5.7 and
     later allow that with no capability.
   - `pf-dhcp-<name>`: each DHCP dnsmasq, in the group `nogroup`. Its
-    capabilities are `CAP_NET_BIND_SERVICE` (port 67) and `CAP_NET_ADMIN`
-    (the ARP entry for the reply to a client that has no address yet). It
-    has no `CAP_NET_RAW`: its conf has `no-ping`, so dnsmasq sends no ICMP
-    echo to an address before it offers that address. The pin of the DHCP
+    capability is `CAP_NET_BIND_SERVICE` (port 67). It has no
+    `CAP_NET_ADMIN`: its conf has `dhcp-broadcast`, so dnsmasq sends the
+    reply to a client that has no address yet as broadcast, and writes
+    no ARP entry for it. On dnsmasq older than 2.91, for example Debian
+    12, dnsmasq keeps `CAP_NET_ADMIN`: before 2.91, dnsmasq does not start
+    its DHCP server without it. On such a box, apply gives it back with
+    the drop-in `net-admin.conf` of each DHCP unit. It has no
+    `CAP_NET_RAW`: its conf has `no-ping`, so dnsmasq sends no ICMP echo
+    to an address before it offers that address. The pin of the DHCP
     socket to its interface needs no capability (Linux 5.7 and later).
   - www has a dynamic user (`DynamicUser=yes`).
 - There are five groups:

@@ -18,6 +18,8 @@ From v1, the releases are at <https://github.com/praneos/pi-fortress/releases>. 
 
 `install.sh` refuses all other targets. `pf install` refuses them again (`internal/install/target.go`). Each prints the detected arch/OS. It does not guess.
 
+The DHCP dnsmasq units (`pi-fortress-dns-house`, `pi-fortress-dhcp@`) have no `CAP_NET_ADMIN`. On dnsmasq older than 2.91, for example Debian 12 and Pi OS bookworm, dnsmasq keeps `CAP_NET_ADMIN`: before 2.91, dnsmasq does not start its DHCP server without it. On such a box, apply adds the drop-in `net-admin.conf` to each of the two units (`privilege_split.md`).
+
 ## Install
 
 ```

@@ -2080,6 +2080,14 @@ if [[ -n "${HOUSE_IF}" ]]; then
   # (DHCPDECLINE) if a different device answers. dnsmasq then offers a
   # different address. Keep the static addresses of the house out of
   # the DHCP range, or reserve them in house.hosts.
+  #
+  # dhcp-broadcast (no tag): offers and acks to a client with no address
+  # go as broadcast. Without it, dnsmasq writes an ARP entry for the
+  # client before a unicast reply, and that needs CAP_NET_ADMIN. Thus the
+  # unit does not have that capability on dnsmasq 2.91 or newer
+  # (dhcp_cap_dropin, lib/dhcp.sh). On Wi-Fi a broadcast frame goes at the
+  # lowest rate with no retry, so a client on a weak link can need one
+  # more DISCOVER before it gets a lease.
   cat >"${WORKDIR}/dns-house.conf" <<EOF
 interface=${HOUSE_IF}
 except-interface=lo
@@ -2088,6 +2096,7 @@ port=0
 dhcp-range=${HOUSE_DHCP_START},${HOUSE_DHCP_END},12h
 dhcp-authoritative
 no-ping
+dhcp-broadcast
 dhcp-option=option:router,${HOUSE_IP}
 dhcp-option=option:dns-server,${HOUSE_IP}
 dhcp-option=option:ntp-server,${HOUSE_IP}
@@ -2103,6 +2112,7 @@ EOF
   fi
   install -m 0644 "${WORKDIR}/dns-house.conf" /etc/pi-fortress/dns-house.conf
   install -m 0644 "${PI_LIB}/dns-house.service" /etc/systemd/system/pi-fortress-dns-house.service
+  dhcp_cap_dropin /etc/systemd/system/pi-fortress-dns-house.service.d
   systemctl daemon-reload
   systemctl enable pi-fortress-dns-house.service >/dev/null 2>&1 || true
   systemctl restart pi-fortress-dns-house.service

@@ -32,8 +32,8 @@ source "${_pf_lib}/guard.sh" && pf_guard_target lib/dhcp.sh || return 1 2>/dev/n
 # names: bound to its one interface, port=0 so it never answers DNS (pf dns
 # holds 53 on IP), the Pi as router, resolver and NTP server (chrony,
 # apply.sh chrony_conf), its own leases and log, no ping before an offer
-# (apply.sh gives the reason at dns-house.conf). It sends no other
-# option: no domain, no search list, no WPAD. HOSTS is
+# and replies as broadcast (apply.sh gives the reasons at dns-house.conf).
+# It sends no other option: no domain, no search list, no WPAD. HOSTS is
 # the SEG_DHCP_HOSTS of the segment: the reservations from dhcp.<name>.hosts
 # that render checked. Each MAC,IP[,name] becomes a dhcp-host line. The
 # house reads its house.hosts as a dhcp-hostsfile instead. The TUI edits that
@@ -49,6 +49,7 @@ port=0
 dhcp-range=${start},${end},12h
 dhcp-authoritative
 no-ping
+dhcp-broadcast
 dhcp-option=option:router,${ip}
 dhcp-option=option:dns-server,${ip}
 dhcp-option=option:ntp-server,${ip}
@@ -59,6 +60,50 @@ EOF
   for h in ${hosts}; do
     printf 'dhcp-host=%s\n' "${h}"
   done
+}
+
+# dhcp_dnsmasq_old: exit 0 when the dnsmasq of this box is older than 2.91,
+# or when its version is not known (no dnsmasq, or a first line of
+# dnsmasq --version that is not "Dnsmasq version X.Y"). dnsmasq before 2.91
+# does not start its DHCP server without CAP_NET_ADMIN. From 2.91, dnsmasq
+# needs it only to write an ARP entry before a unicast reply to a client
+# with no address, and the dhcp-broadcast line of each conf stops those
+# replies. An unknown version keeps the capability: a DHCP server that
+# starts is more important than one capability less.
+dhcp_dnsmasq_old() {
+  local out
+  out="$(dnsmasq --version 2>/dev/null)" || true
+  [[ "${out%%$'\n'*}" =~ ^Dnsmasq\ version\ ([0-9]{1,4})\.([0-9]{1,4}) ]] || return 0
+  ((10#${BASH_REMATCH[1]} < 2 || (10#${BASH_REMATCH[1]} == 2 && 10#${BASH_REMATCH[2]} < 91)))
+}
+
+# dhcp_cap_dropin DIR: DIR is the drop-in directory of a DHCP dnsmasq unit
+# (<unit>.service.d). The units have no CAP_NET_ADMIN. When
+# dhcp_dnsmasq_old is true, DIR/net-admin.conf gives it back: systemd adds
+# the capabilities of a drop-in to those of the unit. Otherwise the file
+# is removed, and DIR too when it is empty. The file is written only when
+# its content changes. The caller runs systemctl daemon-reload.
+dhcp_cap_dropin() {
+  local dir="$1" f="$1/net-admin.conf" new="${WORKDIR}/${1##*/}-net-admin.conf"
+  if dhcp_dnsmasq_old; then
+    cat >"${new}" <<'EOF'
+# pi-fortress apply writes this file when the dnsmasq of this box is older
+# than 2.91, or when apply cannot read its version. dnsmasq before 2.91
+# does not start its DHCP server without CAP_NET_ADMIN. apply removes
+# this file when dnsmasq is 2.91 or newer.
+[Service]
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+EOF
+    if ! cmp -s "${new}" "${f}"; then
+      install -d -m 0755 "${dir}"
+      install -m 0644 "${new}" "${f}"
+      echo "pi-fortress: dnsmasq is older than 2.91, or its version is not known; ${dir##*/} gives CAP_NET_ADMIN to dnsmasq" >&2
+    fi
+  elif [[ -e "${f}" ]]; then
+    rm -f "${f}"
+    rmdir "${dir}" 2>/dev/null || true
+  fi
 }
 
 # dhcp_account NAME: make the system account pf-dhcp-NAME if it is not
@@ -101,11 +146,11 @@ seg_dhcp_names() {
 # SEG_DHCP=on, and nothing for all other segments. If the DHCP of a segment
 # is off, or its file was removed, this stops and disables the instance and
 # deletes its conf and leases. Its log stays, as the house log does, until
-# logrotate removes it. If no DHCP segment is left, the template unit is
-# removed too. Returns 1 only when a conf fails dnsmasq --test, before it
-# installs a file of that segment.
+# logrotate removes it. If no DHCP segment is left, the template unit and
+# its drop-in (dhcp_cap_dropin) are removed too. Returns 1 only when a conf
+# fails dnsmasq --test, before it installs a file of that segment.
 seg_dhcp_sync() {
-  local i n want=" " changed=0 out
+  local i n want=" " changed=0 out tdir="${DHCP_UNITS}/pi-fortress-dhcp@.service.d"
   for i in "${!SEG_NAME[@]}"; do
     [[ "${SEG_DHCP[${i}]:-off}" == on ]] && want+="${SEG_NAME[${i}]} "
   done
@@ -118,8 +163,9 @@ seg_dhcp_sync() {
     changed=1
   done < <(seg_dhcp_names)
   if [[ "${want}" == " " ]]; then
-    if [[ -f "${DHCP_UNITS}/pi-fortress-dhcp@.service" ]]; then
-      rm -f "${DHCP_UNITS}/pi-fortress-dhcp@.service"
+    if [[ -f "${DHCP_UNITS}/pi-fortress-dhcp@.service" || -e "${tdir}/net-admin.conf" ]]; then
+      rm -f "${DHCP_UNITS}/pi-fortress-dhcp@.service" "${tdir}/net-admin.conf"
+      rmdir "${tdir}" 2>/dev/null || true
       changed=1
     fi
     if [[ "${changed}" -eq 1 ]]; then
@@ -132,6 +178,7 @@ seg_dhcp_sync() {
     return 1
   fi
   install -m 0644 "${PI_LIB}/dhcp@.service" "${DHCP_UNITS}/pi-fortress-dhcp@.service"
+  dhcp_cap_dropin "${tdir}"
   systemctl daemon-reload
   for i in "${!SEG_NAME[@]}"; do
     [[ "${SEG_DHCP[${i}]:-off}" == on ]] || continue

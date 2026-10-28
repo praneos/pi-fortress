@@ -153,13 +153,15 @@ func houseTests(t *testing.T) {
 	// from any device that the house connects. It was the last
 	// long-running daemon with no seccomp filter. It also no longer drops
 	// its own privilege: systemd starts it as its own account,
-	// pf-dhcp-house. That lets the unit deny @privileged and give it two
-	// capabilities, not seven. No other DHCP instance runs as that account.
-	// Thus no other instance can write its lease file or its log.
+	// pf-dhcp-house. That lets the unit deny @privileged and give it one
+	// capability, not seven. dhcp-broadcast removes the ARP write that
+	// needed CAP_NET_ADMIN. A dnsmasq older than 2.91 does not start its
+	// DHCP server without it, so there a drop-in gives it back (dhcpCaps).
+	// No other DHCP instance runs as that account. Thus no other instance
+	// can write its lease file or its log.
 	t.Run("the DHCP daemon runs boxed in", func(t *testing.T) {
 		since := piClock(t)
-		pid, filter := unitSandbox(t, "pi-fortress-dns-house", "pf-dhcp-house",
-			capNetBindService|capNetAdmin)
+		pid, filter := unitSandbox(t, "pi-fortress-dns-house", "pf-dhcp-house", dhcpCaps(t))
 		// The one @privileged call that is added again: dnsmasq fchowns its
 		// log to the --user account at each start, root or not. If the
 		// filter denies it, the daemon dies before it reads a packet.
@@ -181,8 +183,9 @@ func houseTests(t *testing.T) {
 			return
 		}
 		// The three things that reach this daemon in normal use, in the
-		// order that a box sees them. A lease is the packet path (and with
-		// it the ARP-cache ioctl, with no ping before the offer). HUP is
+		// order that a box sees them. A lease is the packet path (a
+		// broadcast reply, with no ARP write and no ping before the
+		// offer). HUP is
 		// pf apply and systemctl reload. USR2 is the hourly rotation.
 		// Through sudo: dhclient is in /sbin, which is on the secure_path
 		// of root, not of the client account.
@@ -210,6 +213,11 @@ func houseTests(t *testing.T) {
 				}
 				return "no DHCPACK for " + admin + " at the end of the DHCP log after the renew:\n" + out
 			})
+			// dhcp-broadcast: the reply went as broadcast, with no ARP
+			// write. Without NET_ADMIN, a unicast reply logs this line.
+			if n := strings.TrimSpace(pi(t, "sudo grep -c 'ARP-cache injection failed' /var/log/pi-fortress/dnsmasq-house-dhcp.log || true")); n != "0" {
+				t.Errorf("the DHCP log has %s failed ARP writes; dnsmasq replied as unicast, not as broadcast", n)
+			}
 		}
 		pi(t, "sudo systemctl reload pi-fortress-dns-house.service")
 		pi(t, "sudo logrotate -f --state /var/lib/pi-fortress/logrotate.state /etc/pi-fortress/logrotate.conf")

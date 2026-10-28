@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -318,11 +319,41 @@ func reboot(t *testing.T, host string) {
 
 // Capability bits, for the bounding sets the sandboxed daemons keep.
 // CapBnd in /proc/<pid>/status is that mask in hex, so the two net
-// capabilities that a DHCP server keeps read 0x1400.
+// capabilities of pf dns read 0x1400.
 const (
 	capNetBindService = 1 << 10
 	capNetAdmin       = 1 << 12
 )
+
+var reDnsmasqVersion = regexp.MustCompile(`^Dnsmasq version ([0-9]{1,4})\.([0-9]{1,4})`)
+
+// dnsmasqKeepsNetAdmin is the rule of dhcp_dnsmasq_old (vm/pi/lib/dhcp.sh)
+// for the output of dnsmasq --version. It is true when the first line
+// gives a version older than 2.91, or no version. dnsmasq before 2.91 does
+// not start its DHCP server without CAP_NET_ADMIN, so apply gives it back
+// with a drop-in.
+func dnsmasqKeepsNetAdmin(version string) bool {
+	line, _, _ := strings.Cut(version, "\n")
+	m := reDnsmasqVersion.FindStringSubmatch(line)
+	if m == nil {
+		return true
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor, _ := strconv.Atoi(m[2])
+	return major < 2 || major == 2 && minor < 91
+}
+
+// dhcpCaps is the capability mask of a DHCP dnsmasq on the Pi:
+// CAP_NET_BIND_SERVICE (0x400), and CAP_NET_ADMIN too (0x1400) when the
+// dnsmasq of the Pi is older than 2.91.
+func dhcpCaps(t *testing.T) uint64 {
+	t.Helper()
+	out, _ := ssh(t, 15*time.Second, "pi", "/usr/sbin/dnsmasq --version")
+	if dnsmasqKeepsNetAdmin(out) {
+		return capNetBindService | capNetAdmin
+	}
+	return capNetBindService
+}
 
 // mainPID is the MainPID of the unit on the Pi, "0" when it is not running.
 func mainPID(t *testing.T, unit string) string {
