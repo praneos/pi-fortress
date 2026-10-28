@@ -31,7 +31,7 @@ var aliases = map[string]string{
 
 func Commands() []Command {
 	cmds := []Command{
-		{"apply", "fetch feeds, compile policy, load nft + dnsmasq, restart fence (--local: nft + dnsmasq only)", runApply},
+		{"apply", "refresh feeds (pf feeds run), compile policy, load nft + dnsmasq, restart fence (--local: nft + dnsmasq only)", runApply},
 		{"backup", "policy lists + env files as a tar.gz on stdout; no secrets, no CA", runBackup},
 		{"restore", "read a backup: a diff by default, -apply to write it", runRestore},
 		{"ship", "bundle (desktop) | install|confirm|deadman (Pi, root): signed tree ship without sudo", runShip},
@@ -41,7 +41,7 @@ func Commands() []Command {
 		{"dns", "forwarding resolver for one segment: sinkhole, nft set, query log (-check validates)", runDNS},
 		{"doctor", "walk each segment: link, address, resolver, leases, DNS", runDoctor},
 		{"status", "addresses, routes, nft sets, services", runStatus},
-		{"fetch", "download blocklist feeds into policy/generated", runFetch},
+		{"fetch", "download blocklist feeds (not as root; pi-fortress-feeds.service runs it as pf-feeds)", runFetch},
 		{"feeds", "run|import (root): the feed download as pf-feeds, then the checked import of its lists", runFeeds},
 		{"compile", "merge local + generated - never_block into nft/dnsmasq files", runCompile},
 		{"render", "house.env + segments.d + DoT keys -> nftables.conf, apply.env", runRender},

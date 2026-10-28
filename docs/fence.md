@@ -726,8 +726,11 @@ time for each name and ASN while the broker runs. The next rows for that
 pair go only to the log. Thus a second home server does not hide behind the
 first one.
 
-The table: `pf fetch` builds `generated/eyeball.table` from the `eyeball`
-section of `sources.json`. `pf apply` installs it as
+The table: `pf fetch` builds the table from the `eyeball` section of
+`sources.json`, in `pi-fortress-feeds.service` as `pf-feeds`. Root (`pf
+feeds run`) reads it with the strict parser of the broker, and writes it
+again as `generated/eyeball.table`. A table that does not parse stops the
+import of all lists. `pf apply` installs it as
 `/etc/pi-fortress/eyeball.table`. The copy goes to a temp file in the same
 directory, then to the disk, then into place with one rename. Thus the
 broker reads the old table or the full new table, never no table or a part

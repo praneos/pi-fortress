@@ -140,7 +140,7 @@ flowchart LR
         LOCAL["vm/policy/*<br/>blacklist · never_block · doh<br/>core.hosts · key_prefixes.rules"]
         ENV["vm/pi/net.env · house.env<br/>segments.d/*.env"]
     end
-    FETCH["pf fetch<br/>internal/fetch<br/>→ generated/feeds/<id>.list<br/>unreachable feed → STALE from cache"]
+    FETCH["pf fetch as pf-feeds<br/>pi-fortress-feeds.service<br/>unreachable feed → STALE from cache<br/>pf feeds run (root) checks each line → generated/"]
     COMP["pf compile<br/>internal/policycompile<br/>local + generated − never_block"]
     REND["pf render<br/>internal/render<br/>refuses overlap · detects WAN_IF"]
     APPL["pf apply → vm/pi/apply.sh<br/>apply lock · restarts only what changed"]
