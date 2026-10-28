@@ -769,7 +769,8 @@ func canonicalQuery(q dnsmessage.Question, id uint16) []byte {
 // them. A compression pointer in a later record still points where the
 // name was before. Every resolver puts OPT last. If one does not, its
 // answer passes through and is not cached. That costs a lookup and
-// nothing else.
+// nothing else. It also refuses a message with bytes after its last
+// record.
 func stripOPT(msg []byte) ([]byte, bool) {
 	if len(msg) < 12 {
 		return msg, false
@@ -821,6 +822,14 @@ func stripOPT(msg []byte) ([]byte, bool) {
 			return msg, false
 		}
 		return out, true
+	}
+	// A message with no OPT must also end at its last record. withCallerOPT
+	// appends the OPT at the end of the message. After other bytes, a client
+	// reads those bytes and the OPT as one record that the upstream and this
+	// resolver did not write. Refuse such a message, as when the OPT is not
+	// last.
+	if i != len(msg) {
+		return msg, false
 	}
 	return msg, true
 }

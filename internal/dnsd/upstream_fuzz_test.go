@@ -29,6 +29,7 @@ import (
 //     or a byte other than by ASCII letter case;
 //   - stripOPT accepts a message that dnsmessage parses, and dnsmessage
 //     cannot parse the result, or the result still has an OPT;
+//   - stripOPT accepts a message with bytes after its last record;
 //   - withCallerOPT changes a message for a caller without EDNS, or makes
 //     a whole message that dnsmessage cannot parse.
 func FuzzUpstreamReply(f *testing.F) {
@@ -139,6 +140,11 @@ func FuzzUpstreamReply(f *testing.F) {
 				t.Fatal("stripOPT: ARCOUNT is not one less")
 			}
 		}
+		if bareOK {
+			if end, ok := walkEnd(bare); !ok || end != len(bare) {
+				t.Fatalf("stripOPT accepted bytes after the last record: %x", bare)
+			}
+		}
 		if bareOK && readable(reply) {
 			if !readable(bare) {
 				t.Fatalf("stripOPT made a message that does not parse:\n in %x\nout %x", reply, bare)
@@ -160,7 +166,10 @@ func FuzzUpstreamReply(f *testing.F) {
 		if len(bare) <= maxMsg && len(withOPT) > maxMsg {
 			t.Fatalf("withCallerOPT: %d bytes, more than a TCP frame holds", len(withOPT))
 		}
-		if end, ok := walkEnd(bare); ok && end == len(bare) && readable(bare) && !hasOPT(bare) && len(withOPT) > len(bare) {
+		// The forwarder adds an OPT only to a message that stripOPT accepted
+		// (the reply and the cache entry). Bytes after the last record are in
+		// the scope of the check: the OPT goes after them.
+		if bareOK && readable(bare) && !hasOPT(bare) && len(withOPT) > len(bare) {
 			if !readable(withOPT) || !hasOPT(withOPT) {
 				t.Fatalf("withCallerOPT made a message that does not parse: %x", withOPT)
 			}

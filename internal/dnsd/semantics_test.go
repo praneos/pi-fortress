@@ -174,3 +174,28 @@ func TestARecordsRefusesAnRDLengthOtherThan4(t *testing.T) {
 		t.Fatalf("two good A records: %v %v", addrs, ok)
 	}
 }
+
+// A reply with no OPT and bytes after its last record is refused.
+// withCallerOPT would put the OPT after those bytes. A client then reads
+// the bytes and the OPT as one record, or as a record and an OPT that no
+// one wrote. The forwarder answers such a reply as it is and does not
+// cache it.
+func TestStripOPTRefusesBytesAfterTheLastRecord(t *testing.T) {
+	answer := []byte{0, 7, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0,
+		7, 'e', 'x', 'a', 'm', 'p', 'l', 'e', 3, 'c', 'o', 'm', 0, 0, 1, 0, 1,
+		0xC0, 12, 0, 1, 0, 1, 0, 0, 1, 0x2C, 0, 4, 93, 184, 216, 34}
+	if _, ok := stripOPT(answer); !ok {
+		t.Fatal("a whole reply with no OPT was refused")
+	}
+	for name, tail := range map[string][]byte{
+		"one zero byte":            {0},
+		"a record start":           {0xC0, 12, 0, 1, 0, 1},
+		"an OPT type in the bytes": {0, 0, 0x29},
+	} {
+		msg := append(append([]byte(nil), answer...), tail...)
+		out, ok := stripOPT(msg)
+		if ok {
+			t.Errorf("%s: accepted, and the OPT then goes after the bytes: %x", name, withCallerOPT(out, ednsOPT{present: true, size: 1232}))
+		}
+	}
+}
