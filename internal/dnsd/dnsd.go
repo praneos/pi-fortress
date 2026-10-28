@@ -31,6 +31,7 @@ import (
 	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/dnslog"
 	"pi-fortress/internal/gateset"
+	"pi-fortress/internal/netgate"
 )
 
 const (
@@ -232,7 +233,8 @@ type Config struct {
 	// limit applies only to lines, never to answers.
 	LogRate  float64
 	LogBurst int
-	// NFT writes set elements. Nil uses the nft command.
+	// NFT writes set elements. Nil asks pf netgate (netgate.GateClient):
+	// pf dns holds no CAP_NET_ADMIN, and netgate does the write.
 	NFT NFTWriter
 	// Now is time.Now except in tests.
 	Now func() time.Time
@@ -301,7 +303,7 @@ func New(cfg Config) (*Server, error) {
 		linkEvents:   routeEvents,
 	}
 	if s.nft == nil {
-		s.nft = &gateset.Cmd{Table: cfg.NFTTable}
+		s.nft = netgate.NewGateClient(netgate.DNSSocket)
 	}
 	seen := map[string]bool{}
 	names := map[string]bool{}

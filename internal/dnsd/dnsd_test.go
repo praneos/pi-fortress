@@ -20,6 +20,7 @@ import (
 
 	"pi-fortress/internal/dnslog"
 	"pi-fortress/internal/gateset"
+	"pi-fortress/internal/netgate"
 )
 
 // fakeNFT records the writes, and a test can make it fail. This is how
@@ -427,6 +428,32 @@ func TestASetWriteThatFailedCostsTheAnswer(t *testing.T) {
 	}
 	if got := firstA(t, answers); got != "" {
 		t.Fatalf("handed out %q with the set write failed", got)
+	}
+}
+
+// The daemon writes the gate sets through pf netgate. When netgate is not
+// there, the write fails, and so does the answer: fail closed.
+func TestNoNetgateCostsTheAnswer(t *testing.T) {
+	h := newHarness(t, nil, map[string][4]byte{"example.com": {1, 2, 3, 4}}, 300)
+	h.srv.nft = netgate.NewGateClient(filepath.Join(t.TempDir(), "dns.sock"))
+	hdr, answers := h.ask(t, "example.com", dnsmessage.TypeA)
+	if hdr.RCode != dnsmessage.RCodeServerFailure {
+		t.Fatalf("rcode %v, want SERVFAIL", hdr.RCode)
+	}
+	if got := firstA(t, answers); got != "" {
+		t.Fatalf("handed out %q with no netgate", got)
+	}
+	// A config with no writer of its own gets the netgate client, and that
+	// client can restart a timeout (gate.go).
+	srv, err := New(Config{NFTTable: "inet fortress", Segments: []Segment{{Iface: "lo", IP: netip.MustParseAddr("127.0.0.1"), Upstream: "127.0.0.1:53"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := srv.nft.(*netgate.GateClient); !ok {
+		t.Fatalf("the default writer is %T, want the netgate client", srv.nft)
+	}
+	if _, ok := srv.nft.(Refresher); !ok {
+		t.Fatal("the netgate client cannot refresh")
 	}
 }
 

@@ -5,7 +5,10 @@ import "net/netip"
 // NFTWriter puts resolved addresses into an nftables set. It is an
 // interface because the write is on the answer path. The gate drops a
 // connection to an address that is not yet in the set. Thus tests must
-// have a way to see the order without root.
+// have a way to see the order without root. The writer of the daemon is
+// netgate.GateClient: pf netgate holds CAP_NET_ADMIN and runs the nft
+// text of gateset.Cmd. A refusal or a failure of netgate is an error
+// here, and the answer is SERVFAIL.
 type NFTWriter interface {
 	Add(set string, addrs []netip.Addr) error
 }
