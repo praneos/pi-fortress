@@ -271,6 +271,11 @@ if [[ "${UPLINK_WATCH}" != "0" && "${UPLINK_WATCH}" != "1" ]]; then
   echo "pi-fortress: UPLINK_WATCH='${UPLINK_WATCH}' is not 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
   exit 1
 fi
+MODULE_LOCK="${MODULE_LOCK:-1}"
+if [[ "${MODULE_LOCK}" != "0" && "${MODULE_LOCK}" != "1" ]]; then
+  echo "pi-fortress: MODULE_LOCK='${MODULE_LOCK}' is not 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
+  exit 1
+fi
 EYEBALL="${EYEBALL:-audit}"
 if [[ "${EYEBALL}" != off && "${EYEBALL}" != audit && "${EYEBALL}" != refuse ]]; then
   echo "pi-fortress: EYEBALL='${EYEBALL}' is not off, audit or refuse (net.env or ${NET_ENV_LOCAL})" >&2
@@ -356,6 +361,19 @@ HARDEN_SSHD_D=/etc/ssh/sshd_config.d
 HARDEN_HOME=/home
 HARDEN_SYSTEM_CONF_D=/etc/systemd/system.conf.d
 HARDEN_WATCHDOG_SYS=/sys/class/watchdog
+HARDEN_REBOOT_FLAG=/var/run/reboot-required
+# kernel.modules_disabled: 1 after pi-fortress-modlock.service ran in this
+# boot (MODULE_LOCK). PF_MODULES_DISABLED is the stand-in of apply_test.sh.
+MODULES_DISABLED="${PF_MODULES_DISABLED:-/proc/sys/kernel/modules_disabled}"
+
+# modlock_hint tells the operator why a ruleset that needs a module that
+# is not loaded fails: after the lock, the kernel refuses each module load
+# until the next boot, also a load that the kernel asks for itself.
+modlock_hint() {
+  if [[ "$(cat "${MODULES_DISABLED}" 2>/dev/null || true)" == 1 ]]; then
+    echo "pi-fortress: kernel modules are locked (pi-fortress-modlock); a reboot loads the new ones, or set MODULE_LOCK=0 in ${NET_ENV_LOCAL} and reboot" >&2
+  fi
+}
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "${WORKDIR}"' EXIT
@@ -768,7 +786,13 @@ if nft -t list table inet fortress >/dev/null 2>&1; then
     echo "pi-fortress: could not read the resolved-address sets; they come back empty and a client that answers from its own DNS cache waits out that cache before the gate lets it through again" >&2
 fi
 
-nft -c -f "${WORKDIR}/nftables.conf"
+# The check sends the ruleset to the kernel, which loads each module that
+# a new expression needs, and then drops the ruleset. Thus a module that
+# the kernel cannot load fails here, before the box changes.
+if ! nft -c -f "${WORKDIR}/nftables.conf"; then
+  modlock_hint
+  exit 1
+fi
 install -m 0644 "${WORKDIR}/nftables.conf" /etc/nftables.conf
 nft -f /etc/nftables.conf
 
@@ -1685,6 +1709,58 @@ echo nf_conntrack >/etc/modules-load.d/pi-fortress-conntrack.conf
 modprobe nf_conntrack >/dev/null 2>&1 || true
 sysctl -p /etc/sysctl.d/97-pi-fortress-conntrack.conf >/dev/null 2>&1 ||
   echo "pi-fortress: the conntrack sysctls did not apply; the table keeps the kernel's size (sysctl -p /etc/sysctl.d/97-pi-fortress-conntrack.conf)" >&2
+
+# The kernel modules that pf can need (MODULE_LOCK, modlock.timer). After
+# the lock, the kernel refuses each module load until the next boot, also
+# a load that the kernel asks for itself when a new rule needs a module.
+# Thus systemd-modules-load loads all of them at boot, before the lock, and
+# apply loads them now when the lock is not on yet. The list:
+# - nf_tables, and the nft expressions that pf render can emit and that
+#   are not in nf_tables itself: ct state, mark, direction and notrack
+#   (nft_ct), ct count (nft_connlimit), limit (nft_limit), log (nft_log
+#   and its backend nf_log_syslog), reject (nft_reject_inet), dnat
+#   (nft_nat), masquerade (nft_masq), redirect (nft_redir), the nat
+#   chains (nft_chain_nat), queue (nft_queue) and fib (nft_fib_inet).
+#   Sets, maps, meters, counters, payload, meta, rt and tcp option are in
+#   nf_tables.
+# - nfnetlink_queue: the queue of the house SNI check, which netgate binds
+#   for pf dns.
+# - nf_conntrack_netlink: the conntrack dump of netgate and of apply.
+# - wireguard when the house uses a tunnel (WG_IF), and 8021q when an
+#   interface of the box is a VLAN.
+# No hardware driver: udev loads those at boot. A module that is not
+# loaded when the lock is on loads at the next boot. apply says which.
+MODLOCK_LIST=(nf_tables nft_ct nft_connlimit nft_limit nft_log nf_log_syslog nft_reject_inet
+  nft_nat nft_masq nft_redir nft_chain_nat nft_queue nft_fib_inet nfnetlink_queue nf_conntrack_netlink)
+if [[ -n "${HOUSE_IF}" && -n "${WG_IF:-}" ]]; then
+  MODLOCK_LIST+=(wireguard)
+fi
+for _if in "${INT_IF}" "${WAN_IF}" "${HOUSE_IF}" "${SEG_IF[@]+"${SEG_IF[@]}"}"; do
+  if [[ "${_if}" == *.* ]]; then
+    MODLOCK_LIST+=(8021q)
+    break
+  fi
+done
+printf '%s\n' '# Written by pi-fortress apply.sh: the kernel modules that pf can need, loaded at boot before pi-fortress-modlock.timer.' \
+  "${MODLOCK_LIST[@]}" >"${WORKDIR}/pi-fortress-modlock.conf"
+cmp -s "${WORKDIR}/pi-fortress-modlock.conf" /etc/modules-load.d/pi-fortress-modlock.conf ||
+  install -m 0644 "${WORKDIR}/pi-fortress-modlock.conf" /etc/modules-load.d/pi-fortress-modlock.conf
+if [[ "$(cat "${MODULES_DISABLED}" 2>/dev/null || true)" == 1 ]]; then
+  # A loaded module has its directory in /sys/module. A module in the
+  # kernel image is in modules.builtin.
+  _modlock_out=""
+  _modlock_rel="$(cat /proc/sys/kernel/osrelease 2>/dev/null || true)"
+  for _m in "${MODLOCK_LIST[@]}"; do
+    if [[ ! -d "/sys/module/${_m}" ]] && ! grep -qs "/${_m}\.ko" "/lib/modules/${_modlock_rel}/modules.builtin"; then
+      _modlock_out+=" ${_m}"
+    fi
+  done
+  if [[ -n "${_modlock_out}" ]]; then
+    echo "pi-fortress: kernel modules are locked (pi-fortress-modlock), and these are not loaded:${_modlock_out}; a reboot loads them" >&2
+  fi
+else
+  modprobe -a "${MODLOCK_LIST[@]}" >/dev/null 2>&1 || true
+fi
 
 # The journal. The Debian default is 10% of the filesystem, with a maximum
 # of 4 GiB. Each nft drop line, the stderr of each daemon and each unit restart
@@ -2616,6 +2692,30 @@ harden_sysctl_load
 harden_apt
 harden_ssh
 harden_watchdog
+harden_rawio
+
+# The kernel module lock (MODULE_LOCK in net.env, docs/user_guide/pi_setup.md
+# "Kernel locks"). The timer starts pi-fortress-modlock.service 10 minutes
+# after boot, one time, and the kernel then refuses each module load
+# until the next boot. On a box that is up for more than 10 minutes, the
+# lock comes when this line enables the timer. Thus it is the last step
+# of the apply, after each step that can load a module, and after the
+# module list above. MODULE_LOCK=0 keeps it off across each apply. A
+# systemctl disable alone lasts until the next full apply.
+if [[ -f "${PI_LIB}/modlock.service" && -f "${PI_LIB}/modlock.timer" ]]; then
+  install -m 0644 "${PI_LIB}/modlock.service" /etc/systemd/system/pi-fortress-modlock.service
+  install -m 0644 "${PI_LIB}/modlock.timer" /etc/systemd/system/pi-fortress-modlock.timer
+  systemctl daemon-reload
+  if [[ "${MODULE_LOCK}" == "1" ]]; then
+    systemctl enable --now pi-fortress-modlock.timer >/dev/null 2>&1 \
+      || echo "pi-fortress: pi-fortress-modlock.timer did not start; kernel module loads stay open (journalctl -u pi-fortress-modlock.timer)" >&2
+  else
+    systemctl disable --now pi-fortress-modlock.timer >/dev/null 2>&1 || true
+    if [[ "$(cat "${MODULES_DISABLED}" 2>/dev/null || true)" == 1 ]]; then
+      echo "pi-fortress: MODULE_LOCK=0, but kernel module loads stay locked until the next boot"
+    fi
+  fi
+fi
 
 # pf apply gets to this script through syscall.Exec, which replaces the
 # Go process. internal/admin records that an apply was requested, and can

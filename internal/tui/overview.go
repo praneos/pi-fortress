@@ -51,7 +51,7 @@ func (a *App) buildOverview() []row {
 		}
 	}
 	if st.RebootRequired {
-		problems = append(problems, "reboot required: updates installed, kernel or libc still old (System > Actions)")
+		problems = append(problems, "reboot required: an installed update or a pi-fortress setting waits for it (System > Actions)")
 	}
 	if wg := house["WG_IF"]; wg != "" {
 		if l := wgLine(wg, ifaces); !strings.HasPrefix(l, wg+"  up  ") {

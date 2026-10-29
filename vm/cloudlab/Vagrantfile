@@ -82,6 +82,9 @@ Vagrant.configure("2") do |config|
     gw.vm.provision "lab-net", type: "shell", path: File.join(__dir__, "guest", "gw.sh"),
                                env: LAB
     gw.vm.provision "bootstrap", type: "shell", path: File.join(ROOT, "vm/pi/provision.sh"), env: { "PF_LAB" => "1" }
+    # The modules of the lab tests, before apply enables the module lock.
+    # lab.sh sync runs it too.
+    gw.vm.provision "lab-modules", type: "shell", path: File.join(__dir__, "guest", "gw-modules.sh"), run: "always"
     gw.vm.provision "apply", type: "shell", path: File.join(ROOT, "vm/pi/apply.sh"), run: "always"
   end
 

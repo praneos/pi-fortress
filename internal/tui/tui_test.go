@@ -548,6 +548,26 @@ func TestStatusShowsRebootRequired(t *testing.T) {
 	}
 }
 
+// System > Health shows the two kernel locks, and "?" when it cannot read
+// them.
+func TestStatusShowsKernelLocks(t *testing.T) {
+	c, _ := testConfig(t)
+	if f := run(t, c, NewFake(120, 60).Type(keys(netSystem, secHealth))); !strings.Contains(f.Last(), "kernel     PID 1 has CAP_SYS_RAWIO ?  modules locked ?") {
+		t.Fatal(f.Last())
+	}
+	dir := t.TempDir()
+	c.PID1Status, c.ModulesDisabled = filepath.Join(dir, "status"), filepath.Join(dir, "modules_disabled")
+	if err := os.WriteFile(c.PID1Status, []byte("CapBnd:\t000001fffffdffff\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(c.ModulesDisabled, []byte("1\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if f := run(t, c, NewFake(120, 60).Type(keys(netSystem, secHealth))); !strings.Contains(f.Last(), "kernel     PID 1 has CAP_SYS_RAWIO no  modules locked yes") {
+		t.Fatal(f.Last())
+	}
+}
+
 // A verb that answers with the wrong shape must set the message. It must
 // not panic the seat out of raw mode while the terminal of the operator
 // is in it.

@@ -335,7 +335,9 @@ cmd_sync() {
   cmd_build
   vagrant rsync gw
   race_units
-  vagrant provision gw --provision-with apply
+  # lab-modules first: apply enables the module lock, and on a gw that is up
+  # for more than 10 minutes the lock comes at once.
+  vagrant provision gw --provision-with lab-modules,apply
   race_banner
 }
 

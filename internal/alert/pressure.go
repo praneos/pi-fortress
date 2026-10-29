@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"pi-fortress/internal/tailer"
 )
 
 // Pressure watches memory and CPU pressure on the Pi. It posts before a
@@ -41,11 +43,13 @@ type Pressure struct {
 	// Calm is how long all conditions must be off before "recovered".
 	Calm time.Duration
 	// StatePath keeps the last sample and a clean-stop mark across a hard
-	// stop of the Pi. Empty is no state file.
+	// stop of the Pi. Empty is no state file, and then no BOOT post.
 	StatePath string
 	Stdout    io.Writer
 	Stderr    io.Writer
 	Now       func() time.Time
+	// Host names the box in the BOOT post. Empty is os.Hostname.
+	Host string
 	// newWaiter is the wait of the loop. Tests give a script.
 	newWaiter func(ctx context.Context, r *procReader) waiter
 }
@@ -452,7 +456,11 @@ func (p *Pressure) Run(ctx context.Context, post func(string)) {
 	var states *stateWriter
 	if p.StatePath != "" {
 		if prev, ok := readState(p.StatePath); ok {
-			if msg := uncleanRestart(prev, bootID); msg != "" {
+			bootAt, ok := r.bootTime()
+			if !ok {
+				bootAt = p.clock()
+			}
+			if msg := bootLine(prev, bootID, p.host(), bootAt); msg != "" {
 				post(msg)
 			}
 		}
@@ -518,6 +526,49 @@ func (d *detector) state(bootID string, s *sample, now time.Time) pressureState 
 	return st
 }
 
+// bootLine is the post for the first start of the watch in a new boot, or
+// "". It names the host, the time of the boot, and how the boot before
+// ended. Each boot posts, a clean reboot also: a boot opens kernel module
+// loads again for 10 minutes (pi-fortress-modlock), so the operator gets
+// to know of each one. The boot ID must differ: a restart of this unit
+// alone is not a boot. The end of the boot before is the time of its last
+// state write: the stop of the unit for a clean end, else at most
+// stateEvery before the end. A boot that did not end clean also gets the
+// detail of uncleanRestart. The post waits in the sender until the uplink
+// works.
+func bootLine(prev pressureState, bootID, host string, bootAt time.Time) string {
+	if prev.BootID == "" || bootID == "" || prev.BootID == bootID {
+		return ""
+	}
+	how := "clean"
+	if !prev.Clean {
+		how = "not clean"
+	}
+	msg := "BOOT " + host + ": booted at " + bootAt.UTC().Format(stampUTC) + "; the boot before ended " + how
+	if !prev.At.IsZero() {
+		msg += " at " + prev.At.UTC().Format(stampUTC)
+	}
+	msg += "."
+	if r := uncleanRestart(prev, bootID); r != "" {
+		msg += " " + r
+	}
+	return msg
+}
+
+// stampUTC is the time format of the BOOT and RESTART posts.
+const stampUTC = "2006-01-02 15:04:05 UTC"
+
+func (p *Pressure) host() string {
+	h := p.Host
+	if h == "" {
+		h, _ = os.Hostname()
+	}
+	if h = tailer.Printable(strings.TrimSpace(h)); h == "" {
+		return "?"
+	}
+	return h
+}
+
 // uncleanRestart is the post for a boot that did not shut down, or "".
 // The boot ID must differ: a crash of this unit alone is not a restart of
 // the Pi.
@@ -528,7 +579,7 @@ func uncleanRestart(prev pressureState, bootID string) string {
 	msg := "RESTART: the Pi started again without a clean shutdown (a power cut, a hang that the hardware watchdog reset, or a kernel crash)."
 	when := "Last pressure"
 	if !prev.At.IsZero() {
-		when += " at " + prev.At.UTC().Format("2006-01-02 15:04:05 UTC")
+		when += " at " + prev.At.UTC().Format(stampUTC)
 	}
 	msg += " " + when + ": " + prev.Snapshot + "."
 	if prev.High != "" {

@@ -242,6 +242,7 @@ PF_E2E_REBOOT=1 vm/cloudlab/lab.sh test -v -run 'TestLab/ops'
 | `uplink-watch` | gateway | The uplink watchdog timer is on. Its unit has the root sandbox with no capability and only `AF_UNIX`. apply recorded the uplink connection, or none when NetworkManager does not manage the uplink. A check runs clean. Lab only: a NetworkManager dummy connection that is down stands in for the uplink. The second check brings it up, the third writes the event row, and the alert sidecar logs `UPLINK BACK`. The real uplink stays up: in both labs it carries the ssh session of the test. |
 | `tui` | gateway | `sudo pf tui` on a real pty paints the menu and each view. Lab only. |
 | `ops` | gateway, agent | feeds fail safely, log rotation, no extra network listener, reboot |
+| `kernel-lock` | gateway | In a boot after the drop-in of PID 1, PID 1 has no `CAP_SYS_RAWIO`, and root gets EPERM for `/dev/mem` and `/proc/kcore` (it skips when a reboot waits). The module lock timer is on, and the boot loaded the module list of apply. Lab only: the test starts the lock unit at once, a `modprobe` of a module that is not loaded fails, and a full `pf apply` passes with the lock on. Run it after `ops` with `PF_E2E_REBOOT=1`. |
 | `lifecycle` | gateway | Ships a bundle N-1, then N. The post-upgrade doctor passes. `pf rollback` returns to N-1. The `/etc/pi-fortress` state stays intact, and a list edit made after N stays. A bundle rigged to break DNS reverts on its own. An unconfirmed upgrade reverts after the dead-man deadline. `pf ship confirm` clears the pending state. |
 
 Tests that reboot a VM run only with `PF_E2E_REBOOT=1`. Run `ops` last, because its reboot test restarts `gw`. `lifecycle` runs only with `PF_E2E_LIFECYCLE=1`. It ships bundles and rolls the gateway back. Thus, it is a release gate, not part of a normal run:
@@ -414,6 +415,7 @@ In addition to the lab-only groups (`strip`, `secrets`, `setup`, `enroll`, `seg-
 | `lab.sh ssh agent` hangs | The gateway is down, or its last apply failed. Run `lab.sh ssh pi sudo pf doctor`. |
 | Vagrant cannot reach a client | Run `lab.sh uncut`, wait a minute, retry, then `lab.sh cut`. |
 | Wrong network interface selected, or the house VM never gets its address | The guest setup selects interfaces by MAC address. Compare with `ip -br link` inside the VM. |
+| A test that makes a link or a capture on `gw` fails with "Operation not permitted" or "Unknown device type", or `lab.sh sync` prints `gw-modules: kernel module loads are locked` | `gw` locks kernel module loads 10 minutes after boot. `vm/cloudlab/guest/gw-modules.sh` loads the modules of the tests at each boot and in each `lab.sh sync`, before the lock. A module that it did not load before the lock loads after a reboot of `gw`. |
 
 ## Teardown
 

@@ -207,6 +207,29 @@ the import of all lists. Thus a hostile feed server or uplink can change
 which names and addresses the lists block, within the size caps,
 `never_block` and `core.hosts`. It cannot add a firewall rule.
 
+## 2.3 Root on the gateway
+
+Root on the gateway controls the fence. The two kernel locks
+(`user_guide/pi_setup.md`, Kernel locks) stop root from a change to the
+running kernel itself:
+
+- From the next boot after a full apply, PID 1 has no `CAP_SYS_RAWIO`.
+  No process, root also, can open `/dev/mem`, `/dev/port` or
+  `/proc/kcore`. Thus root cannot write the memory of the kernel through
+  them.
+- 10 minutes after each boot, `pi-fortress-modlock` sets
+  `kernel.modules_disabled=1`. Until the next boot, the kernel refuses
+  each module load, also a load that the kernel asks for itself.
+
+What they do not cover:
+
+- Root can reboot the gateway. For 10 minutes after each boot, root can
+  load a module. The `BOOT` alert tells the operator of each boot.
+- Root can change the files that the next boot reads: the drop-in of
+  PID 1, `net.env.local` (`MODULE_LOCK=0`), the units, the kernel and its
+  modules on the disk. The locks protect the running kernel, not the disk.
+- Root keeps all other capabilities. For example, it can change the
+  ruleset and stop units.
 
 ## 7. Non-goals
 
