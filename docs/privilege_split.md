@@ -233,7 +233,9 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   cannot reach a segment gateway address of the Pi (the engine, www, the
   resolvers, sshd), a client, or a host on the LAN of the uplink. A public
   address of the Pi itself on the uplink goes through `lo`, and stays
-  open to it. Of
+  open to it. When `/etc/resolv.conf` names a resolver that is not
+  loopback (the router of the uplink, from DHCP), the drop-in opens that
+  one address, so that the feed names resolve. Of
   `/var/lib/pi-fortress`, it sees only `feeds-in`: the copies of
   `sources.json` and the `never_block` lists that root puts there. It
   writes only `/var/lib/pi-fortress-feeds` (`0700`): the lists of the run

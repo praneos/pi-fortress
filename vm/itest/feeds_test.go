@@ -3,6 +3,7 @@
 package itest
 
 import (
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -65,6 +66,27 @@ func feedsFence(t *testing.T) string {
 	return ""
 }
 
+// feedsResolvers is the nameservers of resolv.conf on the box that are not
+// loopback, as systemd shows them in IPAddressAllow (a /32 or /128 each).
+// apply opens them in the uplink drop-in: the resolver of a box can be the
+// router of the uplink, in a private range that the unit denies.
+func feedsResolvers(t *testing.T) []string {
+	t.Helper()
+	var out []string
+	for line := range strings.SplitSeq(pi(t, "cat /etc/resolv.conf"), "\n") {
+		f := strings.Fields(line)
+		if len(f) < 2 || f[0] != "nameserver" {
+			continue
+		}
+		a, err := netip.ParseAddr(f[1])
+		if err != nil || a.IsLoopback() || a.Zone() != "" {
+			continue
+		}
+		out = append(out, netip.PrefixFrom(a, a.BitLen()).String())
+	}
+	return out
+}
+
 // L1, static half: what systemd merged from the unit and its drop-in.
 func feedsUnitTests(t *testing.T) {
 	p := showProps(t, feedsUnit, "User", "CapabilityBoundingSet", "AmbientCapabilities", "NoNewPrivileges",
@@ -98,11 +120,16 @@ func feedsUnitTests(t *testing.T) {
 		}
 	}
 	// systemd shows the lists as prefixes: localhost is 127.0.0.0/8 and
-	// ::1/128, link-local and multicast are their prefixes.
+	// ::1/128, link-local and multicast are their prefixes. The drop-in
+	// adds the resolvers of resolv.conf that are not loopback, and nothing
+	// else.
 	allow := strings.Fields(p["IPAddressAllow"])
 	slices.Sort(allow)
-	if got := strings.Join(allow, " "); got != "127.0.0.0/8 ::1/128" {
-		t.Errorf("%s IPAddressAllow=%q, want loopback only", feedsUnit, p["IPAddressAllow"])
+	want := append([]string{"127.0.0.0/8", "::1/128"}, feedsResolvers(t)...)
+	slices.Sort(want)
+	want = slices.Compact(want)
+	if got := strings.Join(allow, " "); got != strings.Join(want, " ") {
+		t.Errorf("%s IPAddressAllow=%q, want %q (loopback and the resolvers of resolv.conf)", feedsUnit, p["IPAddressAllow"], strings.Join(want, " "))
 	}
 	for _, pfx := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7", "169.254.0.0/16", "224.0.0.0/4"} {
 		if !slices.Contains(strings.Fields(p["IPAddressDeny"]), pfx) {

@@ -68,7 +68,9 @@ RestrictAddressFamilies=AF_INET AF_INET6
 # each segment, sshd), no client and no host on the LAN of the uplink
 # (the router of the ISP). When an address is in both lists, the allow
 # list wins, so loopback stays open. A public address of the Pi itself on
-# the uplink goes through lo, and stays open.
+# the uplink goes through lo, and stays open. When resolv.conf names a
+# resolver that is not loopback (the router of the uplink, from DHCP), the
+# drop-in of apply opens that address, and only it.
 IPAddressAllow=localhost
 IPAddressDeny=link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7
 # RestrictNetworkInterfaces=lo <WAN_IF> is in the drop-in

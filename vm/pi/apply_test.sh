@@ -3899,8 +3899,9 @@ for _c in groupadd useradd systemctl; do
   printf '#!/bin/sh\necho "%s $*" >>"%s/calls"\nexit 0\n' "${_c}" "${_fr}" >"${_fr}/bin/${_c}"
 done
 chmod 0755 "${_fr}"/bin/*
+printf 'nameserver 127.0.0.1\noptions timeout:2\n' >"${_fr}/resolv.conf"
 _fp() {
-  PATH="${_fr}/bin:${PATH}" FEEDS_UNITS="${_fr}/units" FEEDS_IN="${_fr}/feeds-in" \
+  PATH="${_fr}/bin:${PATH}" FEEDS_UNITS="${_fr}/units" FEEDS_IN="${_fr}/feeds-in" FEEDS_RESOLV="${_fr}/resolv.conf" \
     bash -c 'set -euo pipefail; source "$1"; shift; feeds_prepare "$@"' _ "${here}/lib/feeds.sh" "${_fu}" "$@"
 }
 _drop="${_fr}/units/pi-fortress-feeds.service.d/uplink.conf"
@@ -3924,6 +3925,19 @@ for _bad in 'eth0 lo2' 'eth0;x' '' 'a-very-long-ifname0'; do
   _fp "${_bad}" >/dev/null 2>&1 && fail "feeds_prepare took the uplink '${_bad}'"
 done
 [[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth1' ]] || fail "a refused value changed the drop-in"
+# A resolver of resolv.conf that is not loopback (the router of the uplink,
+# from DHCP) is opened by its address. Loopback, a zone, a comment and
+# other text are not. The last line has no newline. When the resolver goes
+# back to loopback, the line goes.
+printf 'nameserver 192.168.124.1\nnameserver 127.0.0.53\nnameserver ::1\nnameserver fe80::1%%eth0\n# nameserver 10.0.0.9\nnameserver 1.2.3.4;x\nsearch lan\nnameserver 2001:db8::53' >"${_fr}/resolv.conf"
+: >"${_fr}/calls"
+_fp eth1 >/dev/null 2>&1 || fail "feeds_prepare with a LAN resolver failed"
+[[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth1\nIPAddressAllow=192.168.124.1 2001:db8::53' ]] ||
+  fail "feeds_prepare wrote the resolver drop-in $(printf '%q' "$(cat "${_drop}")")"
+[[ "$(grep -c '^systemctl daemon-reload$' "${_fr}/calls")" == 1 ]] || fail "a new resolver did not reload systemd"
+printf 'nameserver 127.0.0.1\n' >"${_fr}/resolv.conf"
+_fp eth1 >/dev/null 2>&1 || fail "feeds_prepare back to loopback failed"
+[[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth1' ]] || fail "feeds_prepare kept a resolver that is gone"
 # feeds_uplink takes the IPv4 default route with the lowest metric, as
 # pf render does for an empty WAN_IF. No default route gives nothing.
 printf '#!/bin/sh\nprintf "%%s\\n" "default via 10.0.0.1 dev wlan0 proto dhcp metric 600" "default via 192.168.1.1 dev eth0 proto dhcp src 192.168.1.5 metric 100" "default dev wg0 scope link metric 900"\n' >"${_fr}/bin/ip"
