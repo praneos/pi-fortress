@@ -214,6 +214,15 @@ func TestReadLimits(t *testing.T) {
 	if _, err := ReadLimits(dir); err == nil {
 		t.Fatal("a negative cap was accepted")
 	}
+	// A cap above the ceiling gives the ceiling.
+	write(`{"max_ips":1000001,"max_domains":9000000000}`)
+	if l, err := ReadLimits(dir); err != nil || l.MaxIPs != MaxCap || l.MaxDomains != MaxCap {
+		t.Fatalf("caps over the ceiling: %+v %v", l, err)
+	}
+	write(`{"max_ips":1000000}`)
+	if l, err := ReadLimits(dir); err != nil || l.MaxIPs != 1000000 {
+		t.Fatalf("a cap at the ceiling: %+v %v", l, err)
+	}
 }
 
 func TestInputFilesNameThePolicyFiles(t *testing.T) {

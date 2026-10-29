@@ -49,12 +49,26 @@ const (
 	Account = "pf-feeds"
 )
 
-// The default caps of the lists, when sources.json does not set them.
-// internal/fetch uses the same values.
+// The default caps of the lists, when sources.json does not set them, and
+// the ceiling of a cap that sources.json sets: a larger value gives the
+// ceiling. internal/fetch uses the same values.
 const (
 	DefaultMaxIPs     = 20000
 	DefaultMaxDomains = 50000
+	MaxCap            = 1_000_000
 )
+
+// Cap gives the cap of a list from the value in sources.json: the default
+// for 0, MaxCap for a value above MaxCap.
+func Cap(v, def int) int {
+	switch {
+	case v == 0:
+		return def
+	case v > MaxCap:
+		return MaxCap
+	}
+	return v
+}
 
 // The names of the staged files. Each list has the name that pf compile
 // reads in generated/.
@@ -167,7 +181,7 @@ type Limits struct {
 }
 
 // ReadLimits reads sources.json in policyDir. A cap of 0 or no cap gives
-// the default, as in pf fetch.
+// the default, and a cap above MaxCap gives MaxCap, as in pf fetch.
 func ReadLimits(policyDir string) (Limits, error) {
 	raw, err := os.ReadFile(filepath.Join(policyDir, "sources.json"))
 	if err != nil {
@@ -186,12 +200,10 @@ func ReadLimits(policyDir string) (Limits, error) {
 	if spec.MaxIPs < 0 || spec.MaxDomains < 0 {
 		return Limits{}, errors.New("sources.json: a negative cap")
 	}
-	l := Limits{MaxIPs: spec.MaxIPs, MaxDomains: spec.MaxDomains, FeedIDs: map[string]bool{}}
-	if l.MaxIPs == 0 {
-		l.MaxIPs = DefaultMaxIPs
-	}
-	if l.MaxDomains == 0 {
-		l.MaxDomains = DefaultMaxDomains
+	l := Limits{
+		MaxIPs:     Cap(spec.MaxIPs, DefaultMaxIPs),
+		MaxDomains: Cap(spec.MaxDomains, DefaultMaxDomains),
+		FeedIDs:    map[string]bool{},
 	}
 	for _, f := range spec.Feeds {
 		if ValidFeedID(f.ID) {

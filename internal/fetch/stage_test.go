@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -217,6 +218,28 @@ func TestStageRunReusesTheCacheCopy(t *testing.T) {
 	}
 	if got := testsupport.ReadFile(t, filepath.Join(d.stage, "blacklist.ips")); !strings.Contains(got, "1.2.3.0/24\n") {
 		t.Fatalf("ips %q", got)
+	}
+}
+
+// A cap above the ceiling in sources.json gives the ceiling, with a WARN
+// line. The import of root takes the same cap, so the set passes.
+func TestStageRunCapsAtTheCeiling(t *testing.T) {
+	d := newStageDirs(t)
+	spec := `{"max_ips":2000000,` + stageSpec[1:]
+	if err := os.WriteFile(filepath.Join(d.policy, "sources.json"), []byte(spec), 0644); err != nil {
+		t.Fatal(err)
+	}
+	run := strings.Repeat("cc", 16)
+	report, _, _, err := d.fetcher(run).Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "WARN sources.json: max_ips=2000000 is above the ceiling; the cap is 1000000"
+	if !slices.Contains(report, want) {
+		t.Fatalf("no %q in:\n%s", want, strings.Join(report, "\n"))
+	}
+	if _, err := feedstage.Import(d.importCfg(t, run)); err != nil {
+		t.Fatalf("import: %v", err)
 	}
 }
 
