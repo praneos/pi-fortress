@@ -41,12 +41,17 @@ const (
 
 // Units is the list for a box with no DoT stubs. The list that the code
 // queries comes from Config.units, because the stubs that exist depend on
-// what apply wrote.
+// what apply wrote. The uplink watchdog is a timer: "active" means that
+// it runs its checks, "inactive" that the operator paused it.
 var Units = []string{
 	"nftables", "pi-fortress-netgate", AgentDNSUnit, HouseDNSUnit,
 	"pi-fortress-engine", "pi-fortress-broker", "pi-fortress-www",
 	"pi-fortress-observe", "pi-fortress-monitor", "pi-fortress-alert",
+	UplinkWatchTimer,
 }
+
+// UplinkWatchTimer runs pf uplink watch (internal/uplink).
+const UplinkWatchTimer = "pi-fortress-uplink-watch.timer"
 
 // etcDir is the directory where apply puts the per-instance stub config
 // files. It comes from house.env and is not hard-coded. Thus a test, or a

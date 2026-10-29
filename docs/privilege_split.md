@@ -257,6 +257,19 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   `dhcp@.service`) can write only its own lease file under
   `/var/lib/pi-fortress` and `/var/log/pi-fortress`. apply makes each of
   these files before it starts the unit.
+- `uplink-watch.service` (`pf uplink watch`, each 30 s from its timer)
+  runs as root with no capability, as `usb-nic-switch.service` does.
+  NetworkManager lets root activate a connection with no polkit agent. A
+  `User=` would need a polkit rule that lets that user change all
+  connections, which is wider. It has only `AF_UNIX`: nmcli talks to
+  NetworkManager over the system bus. Thus it cannot post an alert itself.
+  pf alert tails its `events.jsonl` and posts the row. `ProtectSystem=strict`
+  makes the file system read-only for it, except its `StateDirectory`
+  `/var/lib/pi-fortress/uplink` (the state of the checks and
+  `events.jsonl`). The record that apply writes,
+  `/var/lib/pi-fortress/uplink.json`, is outside that directory. Thus the
+  unit cannot change which connection it controls. Its system-call filter
+  also removes `@privileged`.
 - `update-check.service` (`pf alert updates`) runs as `pf-sidecar`, the
   one user other than root that can read `alert.url`, with no capability.
   `ReadWritePaths` has only `/var/lib/pi-fortress/updates.last`. It does

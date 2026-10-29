@@ -30,6 +30,7 @@ func TestLab(t *testing.T) {
 	// Opt-in: PF_E2E_FUZZ_NTP=1, a lab gateway only.
 	runGroup(t, "ntp-fuzz", ntpFuzzOptIn(ntpFuzzTests))
 	runGroup(t, "uplink", uplinkTests)
+	runGroup(t, "uplink-watch", uplinkWatchTests)
 	runGroup(t, "feeds", feedsTests)
 	// Last: with PF_E2E_REBOOT=1 it reboots the Pi.
 	runGroup(t, "tui", labOnly(tuiTests))

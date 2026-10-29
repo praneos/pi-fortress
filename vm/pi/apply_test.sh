@@ -1924,6 +1924,65 @@ grep -qE '^(PrivateDevices|ProtectKernelTunables)=yes' "${here}/usb-nic-switch.s
 grep -qF '/authorized' "${here}/usb-nic-switch.sh" ||
   fail "usb-nic-switch.sh no longer writes /sys; check ProtectKernelTunables of usb-nic-switch.service again"
 
+# The uplink watchdog stays root, as usb-nic-switch does, with no
+# capability: NetworkManager lets root activate a connection with no
+# polkit agent. It talks only D-Bus (AF_UNIX), so it cannot post: pf alert
+# tails its events.jsonl. It writes only its StateDirectory. The record
+# of apply is outside it, so the unit cannot change it.
+_uw="${here}/uplink-watch.service"
+_go_uplink="${here}/../../internal/uplink/uplink.go"
+for _l in Type=oneshot 'ExecStart=/usr/local/sbin/pf uplink watch' NoNewPrivileges=yes 'CapabilityBoundingSet=' \
+  'AmbientCapabilities=' 'RestrictAddressFamilies=AF_UNIX' ProtectSystem=strict ProtectHome=yes PrivateTmp=yes \
+  PrivateDevices=yes ProtectKernelTunables=yes ProtectKernelModules=yes ProtectKernelLogs=yes ProtectControlGroups=yes \
+  ProtectClock=yes ProtectHostname=yes ProtectProc=invisible RestrictNamespaces=yes RestrictRealtime=yes \
+  RestrictSUIDSGID=yes LockPersonality=yes MemoryDenyWriteExecute=yes SystemCallArchitectures=native \
+  SystemCallFilter=@system-service SystemCallFilter=~@privileged SystemCallErrorNumber=EPERM \
+  'StateDirectory=pi-fortress/uplink' \
+  'InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www'; do
+  grep -qxF "${_l}" "${_uw}" || fail "uplink-watch.service has no '${_l}'"
+done
+grep -qE '^(CapabilityBoundingSet|AmbientCapabilities)=.' "${_uw}" &&
+  fail "uplink-watch.service gives a capability; the D-Bus call to NetworkManager needs none"
+grep -qE '^(User|DynamicUser|ReadWritePaths|RuntimeDirectory)=' "${_uw}" &&
+  fail "uplink-watch.service runs as another user or writes outside its StateDirectory"
+grep -q '^ProcSubset=pid' "${_uw}" && fail "uplink-watch.service hides the boot ID that starts its state again"
+for _d in MemoryMax TasksMax; do
+  grep -qE "^${_d}=[0-9]" "${_uw}" || fail "uplink-watch.service has no ${_d}"
+done
+# The unit gives nmcli more time than its --wait.
+_wait="$(sed -n 's/^\tUpWait = \([0-9]*\) \* time\.Second$/\1/p' "${_go_uplink}")"
+_tmo="$(sed -n 's/^TimeoutStartSec=\([0-9]*\)$/\1/p' "${_uw}")"
+[[ -n "${_wait}" && -n "${_tmo}" && "${_tmo}" -gt "${_wait}" ]] ||
+  fail "uplink-watch.service TimeoutStartSec='${_tmo}' is not above the nmcli wait of '${_wait}' s"
+# A check each 30 s, after the first minute of a boot.
+for _l in OnBootSec=1min OnUnitActiveSec=30s 'WantedBy=timers.target'; do
+  grep -qxF "${_l}" "${here}/uplink-watch.timer" || fail "uplink-watch.timer has no '${_l}'"
+done
+# pf, the unit and apply use the same paths.
+grep -qxF '	DefaultRecord = "/var/lib/pi-fortress/uplink.json"' "${_go_uplink}" &&
+  grep -qxF '	DefaultDir = "/var/lib/pi-fortress/uplink"' "${_go_uplink}" ||
+  fail "pf uplink does not use the record and the StateDirectory of uplink-watch.service"
+grep -qF 'UplinkLog:        "/var/lib/pi-fortress/uplink/events.jsonl",' "${here}/../../internal/alert/alert.go" ||
+  fail "pf alert does not tail the events.jsonl of the uplink watchdog"
+# apply: on a full apply only. It gives each path to pf, so that a fake-root
+# apply moves it. It makes events.jsonl, root-owned, before the alert
+# sidecar restarts: the sidecar cannot make it. It records the uplink before
+# it enables the timer. UPLINK_WATCH=0 disables the timer.
+_uw_local="$(grep -n '^if \[\[ "${LOCAL_ONLY}" -eq 1 \]\]; then$' "${apply}" | tail -1 | cut -d: -f1)"
+_uw_rec="$(grep -nxF '  "${PF}" uplink record -dev "${WAN_IF}" -record /var/lib/pi-fortress/uplink.json ||' "${apply}" | head -1 | cut -d: -f1 || true)"
+_uw_ev="$(grep -nxF '  chown root:root /var/lib/pi-fortress/uplink/events.jsonl' "${apply}" | head -1 | cut -d: -f1 || true)"
+_uw_on="$(grep -nF 'systemctl enable --now pi-fortress-uplink-watch.timer' "${apply}" | head -1 | cut -d: -f1 || true)"
+_uw_alert="$(grep -nxF '  systemctl restart pi-fortress-alert.service || true' "${apply}" | tail -1 | cut -d: -f1 || true)"
+[[ -n "${_uw_rec}" && "${_uw_rec}" -gt "${_uw_local}" ]] || fail "apply.sh does not record the uplink connection on a full apply"
+[[ -n "${_uw_on}" && "${_uw_rec}" -lt "${_uw_on}" ]] || fail "apply.sh does not record the uplink before it enables the watchdog"
+[[ -n "${_uw_ev}" && -n "${_uw_alert}" && "${_uw_ev}" -lt "${_uw_alert}" ]] ||
+  fail "apply.sh does not make the uplink events.jsonl before the alert sidecar restarts"
+grep -qxF 'UPLINK_WATCH=1' "${here}/net.env" || fail "net.env does not document UPLINK_WATCH"
+grep -qF "UPLINK_WATCH='\${UPLINK_WATCH}' is not 0 or 1" "${apply}" || fail "apply.sh does not check UPLINK_WATCH"
+grep -qF 'systemctl disable --now pi-fortress-uplink-watch.timer' "${apply}" || fail "UPLINK_WATCH=0 does not disable the watchdog"
+grep -qF '"pi-fortress-uplink-watch.timer"' "${here}/../../internal/admin/admin.go" || fail "the TUI unit list does not show the uplink watchdog"
+grep -qF 'pi-fortress-uplink-watch.timer' "${here}/status.sh" || fail "status.sh does not show the uplink watchdog"
+
 # git_push.allow (docs/git_push.md): the Pi owns it. apply installs or
 # removes it. A change restarts the fence. The broker points at it.
 grep -qE '^PI_OWNED = .*\bgit_push\.allow\b' "${here}/../../Makefile" || fail "git_push.allow is not in PI_OWNED"

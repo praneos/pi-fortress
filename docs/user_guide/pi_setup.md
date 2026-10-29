@@ -109,6 +109,36 @@ Make sure that the default route goes through `wlan0`. Then move the Ethernet ca
 !!! note
     If you do not control the Wi-Fi network (for example, in a cafe or hotel), read [public_wifi.md](public_wifi.md) before you continue.
 
+### When the uplink drops
+
+NetworkManager can stop its retries for the uplink connection. For example, a Wi-Fi handshake fails one time. NetworkManager then asks for a new key, and no program answers. NetworkManager marks the connection as failed and does not try it again. The stored key is still correct. But the Pi and all its networks stay without internet until a person acts.
+
+The uplink watchdog acts for you. `pi-fortress-uplink-watch.timer` runs `pf uplink watch` each 30 seconds:
+
+- Each full `pf apply` records the NetworkManager connection of the uplink (`WAN_IF`), by its UUID, in `/var/lib/pi-fortress/uplink.json`. It never records a connection that `pf` made (`agent-net`, `house-net`, `seg-*`, `trunk-*`, `pf-parked-*`). When the uplink is down during the apply, the last record stays.
+- When that connection is not active for two checks in a row, the watchdog runs `nmcli connection up`. While NetworkManager connects, the watchdog waits.
+- After three failed tries, it tries one time each 5 minutes. It does not stop.
+- When the uplink is back after a down period of two checks or more, `pf alert` sends one message to your webhook, for example `UPLINK BACK wlan0 (home) after 12m30s down; the uplink watchdog ran nmcli connection up 2 times`. The message goes out when the uplink works again.
+- When a different connection holds the uplink device, the watchdog does nothing. To record the new connection, run `sudo pf apply`.
+
+On a box where NetworkManager does not manage the uplink (ifupdown, systemd-networkd), the watchdog does nothing.
+
+To see what it does:
+
+**Pi:**
+```
+pf uplink show
+journalctl -u pi-fortress-uplink-watch
+```
+
+To pause it:
+
+- `sudo systemctl stop pi-fortress-uplink-watch.timer` pauses it until the next boot or the next full `pf apply`. `sudo systemctl start pi-fortress-uplink-watch.timer` starts it again.
+- `sudo systemctl disable --now pi-fortress-uplink-watch.timer` also keeps it off after a reboot, until the next full `pf apply`.
+- To keep it off, add `UPLINK_WATCH=0` to `/etc/pi-fortress/net.env.local`. Then run `sudo pf apply`.
+
+Pause it before you take the uplink down on purpose (for example with `nmcli connection down`). If you do not, the watchdog brings the uplink up again after about one minute.
+
 ## 4. Agent network values
 
 These are the network defaults. Each software update writes them again. To keep a value across updates, put it in `/etc/pi-fortress/net.env.local` on the Pi. Put only the keys that you want to override in this file. `sudo pf tui`, **System → Settings**, writes this file for you for these keys:

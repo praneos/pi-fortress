@@ -266,6 +266,11 @@ if [[ "${FEED_REFRESH}" != "0" && "${FEED_REFRESH}" != "1" ]]; then
   echo "pi-fortress: FEED_REFRESH='${FEED_REFRESH}' is not 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
   exit 1
 fi
+UPLINK_WATCH="${UPLINK_WATCH:-1}"
+if [[ "${UPLINK_WATCH}" != "0" && "${UPLINK_WATCH}" != "1" ]]; then
+  echo "pi-fortress: UPLINK_WATCH='${UPLINK_WATCH}' is not 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
+  exit 1
+fi
 EYEBALL="${EYEBALL:-audit}"
 if [[ "${EYEBALL}" != off && "${EYEBALL}" != audit && "${EYEBALL}" != refuse ]]; then
   echo "pi-fortress: EYEBALL='${EYEBALL}' is not off, audit or refuse (net.env or ${NET_ENV_LOCAL})" >&2
@@ -2339,6 +2344,39 @@ if [[ -f "${PI_LIB}/update-check.service" && -f "${PI_LIB}/update-check.timer" ]
   systemctl daemon-reload
   systemctl enable --now pi-fortress-update-check.timer >/dev/null 2>&1 \
     || echo "pi-fortress: pi-fortress-update-check.timer did not start; no post tells a reboot or update that waits (journalctl -u pi-fortress-update-check.timer)" >&2
+fi
+
+# The uplink watchdog (pf uplink, docs/user_guide/pi_setup.md "When the
+# uplink drops"). NetworkManager can stop its retries for the uplink
+# connection and wait for a person, for example after one failed Wi-Fi
+# handshake. pi-fortress-uplink-watch.timer then brings that connection up
+# again. apply records here which connection that is: the NetworkManager
+# connection on WAN_IF, by UUID, and never a connection that pf made. When
+# the uplink is down now, the last record stays. When NetworkManager does
+# not manage WAN_IF, the record goes, and the watchdog does nothing. Each
+# path is in the command, so that a test in a fake root moves it.
+# The watchdog writes events.jsonl, and the alert sidecar tails it. The
+# sidecar cannot make a file there, so apply makes it before the sidecar
+# restarts below. The watchdog runs as root with no capability. Thus root
+# must own the file, or the watchdog cannot write it.
+if [[ -f "${PI_LIB}/uplink-watch.service" && -f "${PI_LIB}/uplink-watch.timer" ]]; then
+  install -d -m 0755 /var/lib/pi-fortress/uplink
+  [[ -f /var/lib/pi-fortress/uplink/events.jsonl ]] || : >/var/lib/pi-fortress/uplink/events.jsonl
+  chown root:root /var/lib/pi-fortress/uplink/events.jsonl
+  chmod 0644 /var/lib/pi-fortress/uplink/events.jsonl
+  "${PF}" uplink record -dev "${WAN_IF}" -record /var/lib/pi-fortress/uplink.json ||
+    echo "pi-fortress: the uplink connection was not recorded; the uplink watchdog keeps the last record (pf uplink show)" >&2
+  install -m 0644 "${PI_LIB}/uplink-watch.service" /etc/systemd/system/pi-fortress-uplink-watch.service
+  install -m 0644 "${PI_LIB}/uplink-watch.timer" /etc/systemd/system/pi-fortress-uplink-watch.timer
+  systemctl daemon-reload
+  # UPLINK_WATCH=0 keeps it off across each apply. A systemctl disable
+  # alone lasts until the next full apply.
+  if [[ "${UPLINK_WATCH}" == "1" ]]; then
+    systemctl enable --now pi-fortress-uplink-watch.timer >/dev/null 2>&1 \
+      || echo "pi-fortress: pi-fortress-uplink-watch.timer did not start; nothing brings the uplink back when NetworkManager stops its retries (journalctl -u pi-fortress-uplink-watch.timer)" >&2
+  else
+    systemctl disable --now pi-fortress-uplink-watch.timer >/dev/null 2>&1 || true
+  fi
 fi
 
 install -d -m 0755 /usr/local/lib/pi-fortress

@@ -75,6 +75,13 @@ type Alerter struct {
 	// own checkpoint. When it is empty, alert does not tail it.
 	NoticeLog        string
 	NoticeOffsetPath string
+	// UplinkLog is the event file of the uplink watchdog (internal/uplink):
+	// one row when the uplink connection is active again after a down
+	// period. Alert tails it beside the other logs, with its own
+	// checkpoint. The row is written only when the uplink works, so the
+	// post can go out. When it is empty, alert does not tail it.
+	UplinkLog        string
+	UplinkOffsetPath string
 	LastPath         string
 	PolicyDirs       []string
 	Client           *http.Client
@@ -305,6 +312,10 @@ func Defaults() *Alerter {
 		OffsetPath:       "/var/lib/pi-fortress/alert.offset",
 		NoticeLog:        "/var/log/pi-fortress/notice.jsonl",
 		NoticeOffsetPath: "/var/lib/pi-fortress/alert-notice.offset",
+		// uplink.DefaultDir + uplink.EventsFile. The checkpoint is in the
+		// StateDirectory of alert.service, which the sidecar can write.
+		UplinkLog:        "/var/lib/pi-fortress/uplink/events.jsonl",
+		UplinkOffsetPath: "/var/lib/pi-fortress/alert/uplink.offset",
 		LastPath:         "/var/lib/pi-fortress/alert.last",
 		PolicyDirs:       []string{"/vagrant/vm/policy", "/etc/pi-fortress"},
 	}
@@ -346,8 +357,26 @@ func Summarize(event map[string]any) string {
 		return expiryLine(event)
 	case "volume", "dns_tunnel", "dns_key":
 		return noticeLine(event)
+	case jsonl.UplinkThreat:
+		return uplinkLine(event)
 	}
 	return summarize(event)
+}
+
+// uplinkLine is the report of the uplink watchdog (internal/uplink): the
+// uplink connection is active again, after how long, and who brought it
+// back. The watchdog writes the row only when the uplink works again.
+// While it was down, no post could go out.
+func uplinkLine(event map[string]any) string {
+	down := "?"
+	if s, ok := event["down_s"].(float64); ok && s >= 0 {
+		down = (time.Duration(int64(s)) * time.Second).String()
+	}
+	how := "NetworkManager brought it back"
+	if n, ok := event["tries"].(float64); ok && n >= 1 {
+		how = "the uplink watchdog ran nmcli connection up " + strconv.FormatInt(int64(n), 10) + " time" + plural(int(n))
+	}
+	return "UPLINK BACK " + field(event, "where", "?") + " (" + field(event, "host", "?") + ") after " + down + " down; " + how
 }
 
 // stripSuppressedLine is the strip log writer report that it dropped the
@@ -954,6 +983,15 @@ func (a *Alerter) noticeTail() *tailer.Tail {
 	return t
 }
 
+// uplinkTail is the third log, the event file of the uplink watchdog. Its
+// rows go through handle and the queue, as the rows of the other logs do:
+// the same debounce, hourly cap and retry.
+func (a *Alerter) uplinkTail() *tailer.Tail {
+	t := a.tailOf(false)
+	t.Path, t.OffsetPath, t.ShowPath = a.UplinkLog, a.UplinkOffsetPath, a.UplinkLog
+	return t
+}
+
 // digestTick closes the digest window when its time is up, and queues its
 // post. The post goes through the queue, so a failed post gets the same
 // retry as the others. It does not use the hourly cap: the digest is a
@@ -987,14 +1025,25 @@ func (a *Alerter) Run(ctx context.Context) error {
 		go func() { defer wg.Done(); s.run(ctx) }()
 		go func() { defer wg.Done(); p.Run(ctx, s.put) }()
 	}
-	if a.NoticeLog == "" {
+	var more []*tailer.Tail
+	if a.NoticeLog != "" {
+		more = append(more, a.noticeTail())
+	}
+	if a.UplinkLog != "" {
+		more = append(more, a.uplinkTail())
+	}
+	if len(more) == 0 {
 		return a.tail().Run(ctx)
 	}
-	done := make(chan error, 1)
-	go func() { done <- a.noticeTail().Run(ctx) }()
+	done := make(chan error, len(more))
+	for _, t := range more {
+		go func() { done <- t.Run(ctx) }()
+	}
 	err := a.tail().Run(ctx)
-	if nerr := <-done; err == nil {
-		err = nerr
+	for range more {
+		if nerr := <-done; err == nil {
+			err = nerr
+		}
 	}
 	return err
 }
