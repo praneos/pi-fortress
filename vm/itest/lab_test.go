@@ -35,6 +35,9 @@ func TestLab(t *testing.T) {
 	// Last: with PF_E2E_REBOOT=1 it reboots the Pi.
 	runGroup(t, "tui", labOnly(tuiTests))
 	runGroup(t, "ops", opsTests)
+	// After the reboot of ops: PID 1 reads its drop-in only at boot. It
+	// locks kernel module loads for the rest of the boot.
+	runGroup(t, "kernel-lock", kernelLockTests)
 	// Very last: it ships bundles and does a rollback of the gateway,
 	// PF_E2E_LIFECYCLE=1 only (docs/signed_ship.md).
 	runGroup(t, "lifecycle", lifecycleOptIn(lifecycleTests))
