@@ -1,0 +1,11 @@
+[Unit]
+Description=pi-fortress: uplink check every 30 seconds
+
+[Timer]
+# Give NetworkManager the first minute of a boot to connect.
+OnBootSec=1min
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

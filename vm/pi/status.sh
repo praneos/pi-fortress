@@ -11,6 +11,14 @@ echo
 echo "== routes =="
 ip route
 echo
+# pf uplink watch: the uplink connection that apply recorded, and the last
+# check. "inactive" means that the operator paused the timer.
+echo "== uplink watchdog =="
+echo "timer: $(systemctl is-active pi-fortress-uplink-watch.timer 2>/dev/null || true)"
+if [[ -x /usr/local/sbin/pf ]]; then
+  /usr/local/sbin/pf uplink show 2>&1 || true
+fi
+echo
 # Lines of a manual list (ssh_allow.ips, direct_ip.allow) that pf compile skipped
 # in the last apply. The output of that apply shows the lines themselves.
 _cw="$(tr -cd '0-9' </var/lib/pi-fortress/compile-warnings 2>/dev/null || true)"

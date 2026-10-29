@@ -50,6 +50,7 @@ func Commands() []Command {
 		{"observe", "once|run|show|reset: DNS + conntrack first-seen", runObserve},
 		{"monitor", "once|run|show|avg: cpu, memory, temp, Wi-Fi, per-process CPU/RSS", runMonitor},
 		{"alert", "once|run|show|watch: strip.jsonl -> webhook; wg: handshake age", runAlert},
+		{"uplink", "record|watch|show: bring the uplink connection back when NetworkManager gave up on it", runUplink},
 		{"enroll", "mint|list|peek|migrate|delete|seal|unseal|state slotted secrets", runEnroll},
 		{"unlock", "enter the passphrase that opens the sealed credential store (-state, -lock)", runUnlock},
 		{"claim", "issue a one-time claim code for a slot, without the TUI (-slot)", runClaim},
