@@ -1,0 +1,72 @@
+[Unit]
+Description=pi-fortress: bring the uplink connection back when NetworkManager stops its retries
+Documentation=file:///opt/pi-fortress/docs/user_guide/pi_setup.md
+# NetworkManager can stop its retries for a connection and wait for a
+# person: for example after one failed Wi-Fi handshake, when it asks for a
+# new key and no agent answers. The stored key is still correct, but all
+# networks of the gateway stay without internet until a person acts. This
+# check acts in place of that person. It does nothing on a box where
+# NetworkManager does not manage the uplink.
+After=NetworkManager.service
+
+[Service]
+Type=oneshot
+# One check (internal/uplink): it reads the record that apply wrote
+# (/var/lib/pi-fortress/uplink.json, the UUID of the uplink connection).
+# When that connection is not active, and not activating, for two checks
+# in a row, it runs `nmcli connection up`. After three failed tries, one
+# try each 5 minutes. When the uplink is back, it writes one row to
+# events.jsonl, and pf alert posts it. Each action is a journal line:
+# journalctl -u pi-fortress-uplink-watch.
+ExecStart=/usr/local/sbin/pf uplink watch
+# nmcli waits at most 45 s for the activation (UpWait).
+TimeoutStartSec=90
+# Small caps: pf and one nmcli at a time.
+MemoryHigh=48M
+MemoryMax=64M
+Environment=GOMEMLIMIT=32MiB
+TasksMax=32
+# Root, with no capability. NetworkManager lets root activate a
+# connection without a polkit agent. With a User= here, a polkit rule
+# would have to let that user change all connections, which is wider.
+# The D-Bus call needs no capability. nmcli talks only over the system
+# bus socket (AF_UNIX). The unit has no AF_INET, so it cannot post an
+# alert itself: pf alert posts the row of events.jsonl.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# No ProcSubset=pid: the check reads the boot ID
+# (/proc/sys/kernel/random/boot_id), so that a down period before a reboot
+# does not go into the alert after it. ProtectKernelTunables keeps it
+# read-only.
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# pf and nmcli change no user, group or capability.
+SystemCallFilter=~@privileged
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
+# A call outside the set fails with EPERM, as in the other root units.
+SystemCallErrorNumber=EPERM
+# The only writable path: the state of the checks and events.jsonl. systemd
+# makes it, root-owned. The record above it stays read-only, so the check
+# cannot change which connection it controls.
+StateDirectory=pi-fortress/uplink
+StateDirectoryMode=0755
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www

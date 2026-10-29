@@ -31,7 +31,7 @@ var aliases = map[string]string{
 
 func Commands() []Command {
 	cmds := []Command{
-		{"apply", "fetch feeds, compile policy, load nft + dnsmasq, restart fence (--local: nft + dnsmasq only)", runApply},
+		{"apply", "refresh feeds (pf feeds run), compile policy, load nft + dnsmasq, restart fence (--local: nft + dnsmasq only)", runApply},
 		{"backup", "policy lists + env files as a tar.gz on stdout; no secrets, no CA", runBackup},
 		{"restore", "read a backup: a diff by default, -apply to write it", runRestore},
 		{"ship", "bundle (desktop) | install|confirm|deadman (Pi, root): signed tree ship without sudo", runShip},
@@ -41,13 +41,16 @@ func Commands() []Command {
 		{"dns", "forwarding resolver for one segment: sinkhole, nft set, query log (-check validates)", runDNS},
 		{"doctor", "walk each segment: link, address, resolver, leases, DNS", runDoctor},
 		{"status", "addresses, routes, nft sets, services", runStatus},
-		{"fetch", "download blocklist feeds into policy/generated", runFetch},
+		{"fetch", "download blocklist feeds (not as root; pi-fortress-feeds.service runs it as pf-feeds)", runFetch},
+		{"feeds", "run|import (root): the feed download as pf-feeds, then the checked import of its lists", runFeeds},
 		{"compile", "merge local + generated - never_block into nft/dnsmasq files", runCompile},
 		{"render", "house.env + segments.d + DoT keys -> nftables.conf, apply.env", runRender},
 		{"nftsets", "save|restore|policy: carry the resolved-address sets across a ruleset reload", runNFTSets},
+		{"netgate", "run|ping: the one daemon with CAP_NET_ADMIN for pf dns and pf observe (gate set writes)", runNetgate},
 		{"observe", "once|run|show|reset: DNS + conntrack first-seen", runObserve},
 		{"monitor", "once|run|show|avg: cpu, memory, temp, Wi-Fi, per-process CPU/RSS", runMonitor},
 		{"alert", "once|run|show|watch: strip.jsonl -> webhook; wg: handshake age", runAlert},
+		{"uplink", "record|watch|show: bring the uplink connection back when NetworkManager gave up on it", runUplink},
 		{"enroll", "mint|list|peek|migrate|delete|seal|unseal|state slotted secrets", runEnroll},
 		{"unlock", "enter the passphrase that opens the sealed credential store (-state, -lock)", runUnlock},
 		{"claim", "issue a one-time claim code for a slot, without the TUI (-slot)", runClaim},

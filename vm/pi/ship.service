@@ -40,8 +40,8 @@ MemoryDenyWriteExecute=yes
 # Not RestrictSUIDSGID: apply makes setgid directories (the claims
 # directories and the fake-IP journal directory).
 # AF_NETLINK is for nft, ip, conntrack and ss. AF_INET and AF_INET6 are
-# for the feed download, the post-upgrade doctor and the alert. AF_UNIX
-# is for systemctl and nmcli.
+# for the post-upgrade doctor and the alert. The feed download runs in
+# pi-fortress-feeds.service. AF_UNIX is for systemctl and nmcli.
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 SystemCallArchitectures=native
 SystemCallFilter=@system-service

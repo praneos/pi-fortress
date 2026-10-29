@@ -266,6 +266,16 @@ if [[ "${FEED_REFRESH}" != "0" && "${FEED_REFRESH}" != "1" ]]; then
   echo "pi-fortress: FEED_REFRESH='${FEED_REFRESH}' is not 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
   exit 1
 fi
+UPLINK_WATCH="${UPLINK_WATCH:-1}"
+if [[ "${UPLINK_WATCH}" != "0" && "${UPLINK_WATCH}" != "1" ]]; then
+  echo "pi-fortress: UPLINK_WATCH='${UPLINK_WATCH}' is not 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
+  exit 1
+fi
+MODULE_LOCK="${MODULE_LOCK:-1}"
+if [[ "${MODULE_LOCK}" != "0" && "${MODULE_LOCK}" != "1" ]]; then
+  echo "pi-fortress: MODULE_LOCK='${MODULE_LOCK}' is not 0 or 1 (net.env or ${NET_ENV_LOCAL})" >&2
+  exit 1
+fi
 EYEBALL="${EYEBALL:-audit}"
 if [[ "${EYEBALL}" != off && "${EYEBALL}" != audit && "${EYEBALL}" != refuse ]]; then
   echo "pi-fortress: EYEBALL='${EYEBALL}' is not off, audit or refuse (net.env or ${NET_ENV_LOCAL})" >&2
@@ -330,7 +340,13 @@ if [[ "${RENDER}" -eq 0 ]]; then
   source "${LIB_DIR}/dhcp.sh"
   # shellcheck source=lib/harden.sh
   source "${LIB_DIR}/harden.sh"
+  # shellcheck source=lib/feeds.sh
+  source "${LIB_DIR}/feeds.sh"
 fi
+# The unit directory and the input directory of the feed download
+# (lib/feeds.sh).
+FEEDS_UNITS=/etc/systemd/system
+FEEDS_IN=/var/lib/pi-fortress/feeds-in
 # The location where seg_dhcp_sync (lib/dhcp.sh) keeps the dnsmasq conf,
 # leases, log and unit of each segment. They are here, not in the lib, so
 # that this file names all that apply writes.
@@ -345,6 +361,19 @@ HARDEN_SSHD_D=/etc/ssh/sshd_config.d
 HARDEN_HOME=/home
 HARDEN_SYSTEM_CONF_D=/etc/systemd/system.conf.d
 HARDEN_WATCHDOG_SYS=/sys/class/watchdog
+HARDEN_REBOOT_FLAG=/var/run/reboot-required
+# kernel.modules_disabled: 1 after pi-fortress-modlock.service ran in this
+# boot (MODULE_LOCK). PF_MODULES_DISABLED is the stand-in of apply_test.sh.
+MODULES_DISABLED="${PF_MODULES_DISABLED:-/proc/sys/kernel/modules_disabled}"
+
+# modlock_hint tells the operator why a ruleset that needs a module that
+# is not loaded fails: after the lock, the kernel refuses each module load
+# until the next boot, also a load that the kernel asks for itself.
+modlock_hint() {
+  if [[ "$(cat "${MODULES_DISABLED}" 2>/dev/null || true)" == 1 ]]; then
+    echo "pi-fortress: kernel modules are locked (pi-fortress-modlock); a reboot loads the new ones, or set MODULE_LOCK=0 in ${NET_ENV_LOCAL} and reboot" >&2
+  fi
+}
 
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "${WORKDIR}"' EXIT
@@ -447,7 +476,16 @@ else
     if [[ "${REFRESH}" -eq 1 ]]; then
       _fresh=0
     fi
-    if ! "${PF}" fetch --policy "${POLICY}" --out "${POLICY}/generated" --fresh "${_fresh}"; then
+    # The download runs in pi-fortress-feeds.service as pf-feeds, with no
+    # capability (lib/feeds.sh). pf feeds run starts it, waits for it, and
+    # imports its lists into generated/ through a strict check of each
+    # line. This script does not download or parse a feed. The unit may
+    # use only lo, the uplink and WireGuard. Render finds WAN_IF later, so
+    # an empty WAN_IF takes the default route here, as render does.
+    _uplink="${WAN_IF:-${PF_WAN_IF:-}}"
+    [[ -n "${_uplink}" ]] || _uplink="$(feeds_uplink)"
+    if ! feeds_prepare "${PI_LIB}/feeds.service" "${_uplink}" ||
+      ! "${PF}" feeds run --policy "${POLICY}" --fresh "${_fresh}"; then
       echo "pi-fortress: feed fetch failed; compiling from the last generated lists" >&2
       if [[ ! -s "${POLICY}/generated/blacklist.domains" ]]; then
         echo "pi-fortress: ${POLICY}/generated/blacklist.domains missing or empty; nothing to fall back on" >&2
@@ -504,6 +542,18 @@ else
   # are in it. Not pf-fence, because the engine is in it. The journal has
   # each name that the agent resolved, and the broker is its only reader.
   getent group pf-fakeip >/dev/null || groupadd --system pf-fakeip
+  # pf-dnsgate: the primary group of the agent resolver (Group= in
+  # dns-agent-go.service), and of no account. The DoT stubs run as pf-dns
+  # with the group pf-fortress. netgate opens its socket for pf dns only to
+  # this group, and checks the gid of each peer. Thus a stub cannot write a
+  # gate set. No usermod: an account in it would give the group to each
+  # unit of that account.
+  getent group pf-dnsgate >/dev/null || groupadd --system pf-dnsgate
+  # pf-netgate: pf netgate, the one daemon with CAP_NET_ADMIN for pf dns.
+  # It is in no group of the other daemons. It reads no log and no state.
+  if ! id -u pf-netgate >/dev/null 2>&1; then
+    useradd --system --no-create-home --gid nogroup --home /nonexistent --shell /usr/sbin/nologin pf-netgate
+  fi
   usermod -aG pf-fakeip pf-broker
   usermod -aG pf-fence pf-broker
   usermod -aG pf-fence pf-engine
@@ -518,6 +568,10 @@ else
   # client, and the other daemons do not read them.
   getent group pf-leases >/dev/null || groupadd --system pf-leases
   usermod -aG pf-leases pf-observe
+  # pf-ctgate: the group of the socket on which pf netgate gives observe
+  # the conntrack table. Only observe.service has it (SupplementaryGroups),
+  # and netgate.service, to give it to the socket. No account is in it.
+  getent group pf-ctgate >/dev/null || groupadd --system pf-ctgate
   # pf-sidecar (the group): the alert sidecar only, through
   # SupplementaryGroups in alert.service. It is the group of alert.url, the
   # webhook URL, whose path is its bearer token. No account is a member.
@@ -732,7 +786,13 @@ if nft -t list table inet fortress >/dev/null 2>&1; then
     echo "pi-fortress: could not read the resolved-address sets; they come back empty and a client that answers from its own DNS cache waits out that cache before the gate lets it through again" >&2
 fi
 
-nft -c -f "${WORKDIR}/nftables.conf"
+# The check sends the ruleset to the kernel, which loads each module that
+# a new expression needs, and then drops the ruleset. Thus a module that
+# the kernel cannot load fails here, before the box changes.
+if ! nft -c -f "${WORKDIR}/nftables.conf"; then
+  modlock_hint
+  exit 1
+fi
 install -m 0644 "${WORKDIR}/nftables.conf" /etc/nftables.conf
 nft -f /etc/nftables.conf
 
@@ -1650,6 +1710,58 @@ modprobe nf_conntrack >/dev/null 2>&1 || true
 sysctl -p /etc/sysctl.d/97-pi-fortress-conntrack.conf >/dev/null 2>&1 ||
   echo "pi-fortress: the conntrack sysctls did not apply; the table keeps the kernel's size (sysctl -p /etc/sysctl.d/97-pi-fortress-conntrack.conf)" >&2
 
+# The kernel modules that pf can need (MODULE_LOCK, modlock.timer). After
+# the lock, the kernel refuses each module load until the next boot, also
+# a load that the kernel asks for itself when a new rule needs a module.
+# Thus systemd-modules-load loads all of them at boot, before the lock, and
+# apply loads them now when the lock is not on yet. The list:
+# - nf_tables, and the nft expressions that pf render can emit and that
+#   are not in nf_tables itself: ct state, mark, direction and notrack
+#   (nft_ct), ct count (nft_connlimit), limit (nft_limit), log (nft_log
+#   and its backend nf_log_syslog), reject (nft_reject_inet), dnat
+#   (nft_nat), masquerade (nft_masq), redirect (nft_redir), the nat
+#   chains (nft_chain_nat), queue (nft_queue) and fib (nft_fib_inet).
+#   Sets, maps, meters, counters, payload, meta, rt and tcp option are in
+#   nf_tables.
+# - nfnetlink_queue: the queue of the house SNI check, which netgate binds
+#   for pf dns.
+# - nf_conntrack_netlink: the conntrack dump of netgate and of apply.
+# - wireguard when the house uses a tunnel (WG_IF), and 8021q when an
+#   interface of the box is a VLAN.
+# No hardware driver: udev loads those at boot. A module that is not
+# loaded when the lock is on loads at the next boot. apply says which.
+MODLOCK_LIST=(nf_tables nft_ct nft_connlimit nft_limit nft_log nf_log_syslog nft_reject_inet
+  nft_nat nft_masq nft_redir nft_chain_nat nft_queue nft_fib_inet nfnetlink_queue nf_conntrack_netlink)
+if [[ -n "${HOUSE_IF}" && -n "${WG_IF:-}" ]]; then
+  MODLOCK_LIST+=(wireguard)
+fi
+for _if in "${INT_IF}" "${WAN_IF}" "${HOUSE_IF}" "${SEG_IF[@]+"${SEG_IF[@]}"}"; do
+  if [[ "${_if}" == *.* ]]; then
+    MODLOCK_LIST+=(8021q)
+    break
+  fi
+done
+printf '%s\n' '# Written by pi-fortress apply.sh: the kernel modules that pf can need, loaded at boot before pi-fortress-modlock.timer.' \
+  "${MODLOCK_LIST[@]}" >"${WORKDIR}/pi-fortress-modlock.conf"
+cmp -s "${WORKDIR}/pi-fortress-modlock.conf" /etc/modules-load.d/pi-fortress-modlock.conf ||
+  install -m 0644 "${WORKDIR}/pi-fortress-modlock.conf" /etc/modules-load.d/pi-fortress-modlock.conf
+if [[ "$(cat "${MODULES_DISABLED}" 2>/dev/null || true)" == 1 ]]; then
+  # A loaded module has its directory in /sys/module. A module in the
+  # kernel image is in modules.builtin.
+  _modlock_out=""
+  _modlock_rel="$(cat /proc/sys/kernel/osrelease 2>/dev/null || true)"
+  for _m in "${MODLOCK_LIST[@]}"; do
+    if [[ ! -d "/sys/module/${_m}" ]] && ! grep -qs "/${_m}\.ko" "/lib/modules/${_modlock_rel}/modules.builtin"; then
+      _modlock_out+=" ${_m}"
+    fi
+  done
+  if [[ -n "${_modlock_out}" ]]; then
+    echo "pi-fortress: kernel modules are locked (pi-fortress-modlock), and these are not loaded:${_modlock_out}; a reboot loads them" >&2
+  fi
+else
+  modprobe -a "${MODLOCK_LIST[@]}" >/dev/null 2>&1 || true
+fi
+
 # The journal. The Debian default is 10% of the filesystem, with a maximum
 # of 4 GiB. Each nft drop line, the stderr of each daemon and each unit restart
 # goes into it. A hostile device can cause each of these again and again,
@@ -1889,10 +2001,12 @@ fi
 rm -rf /etc/systemd/system/dnsmasq.service.d
 systemctl disable --now dnsmasq.service >/dev/null 2>&1 || true
 systemctl mask dnsmasq.service >/dev/null 2>&1 || true
-if [[ ! -f "${PI_LIB}/dns-agent-go.service" ]]; then
-  echo "pi-fortress: ${PI_LIB}/dns-agent-go.service missing" >&2
-  exit 1
-fi
+for _u in dns-agent-go netgate; do
+  if [[ ! -f "${PI_LIB}/${_u}.service" ]]; then
+    echo "pi-fortress: ${PI_LIB}/${_u}.service missing" >&2
+    exit 1
+  fi
+done
 # systemd drops the privilege that this daemon does not drop itself. Thus
 # the daemon owns the log that it appends to. apply creates the account with
 # the other system users, well before the DoT stub needs it.
@@ -1913,6 +2027,9 @@ for _i in "${!SEG_NAME[@]}"; do
   chmod 0640 "${_slog}"
 done
 install -m 0644 "${PI_LIB}/dns-agent-go.service" /etc/systemd/system/pi-fortress-dns-agent-go.service
+# netgate writes the gate sets for pf dns (netgate.service). It reads the
+# sets from dns.json, so it restarts below with pf dns, before it.
+install -m 0644 "${PI_LIB}/netgate.service" /etc/systemd/system/pi-fortress-netgate.service
 # A box that upgrades from the dnsmasq resolver still has that unit, and it
 # wants the same address and port that pf dns will take. apply does not
 # generate it now, so this is the one-time removal.
@@ -1928,6 +2045,7 @@ if [[ -n "${HOUSE_IF}" ]]; then
   systemctl stop pi-fortress-dns-house.service >/dev/null 2>&1 || true
 fi
 systemctl daemon-reload
+systemctl enable pi-fortress-netgate.service >/dev/null 2>&1 || true
 systemctl enable pi-fortress-dns-agent-go.service >/dev/null 2>&1 || true
 # An element of a resolved set does not name the DNS name that gave it.
 # Thus, when the DNS policy of the operator changes (an operator block
@@ -1946,6 +2064,11 @@ RESOLVED_POLICY_STATE=/var/lib/pi-fortress/resolved-policy.state
 systemctl stop pi-fortress-dns-agent-go.service >/dev/null 2>&1 || true
 "${PF}" nftsets policy --table "inet fortress" --config /etc/pi-fortress/dns.json --policy "${POLICY}" --state "${RESOLVED_POLICY_STATE}" ||
   echo "pi-fortress: could not compare the DNS policy of the resolved-address sets; a name that this apply blocks can keep its addresses in the set until they expire (2h)" >&2
+# netgate reads the gate sets from dns.json at its start. Thus it restarts
+# here, after apply wrote dns.json and while pf dns is stopped, and before
+# pf dns. A pf dns that comes up first answers SERVFAIL until netgate is
+# there.
+systemctl restart pi-fortress-netgate.service
 systemctl restart pi-fortress-dns-agent-go.service
 
 # House WireGuard egress. Nested on HOUSE_IF so that
@@ -2299,6 +2422,39 @@ if [[ -f "${PI_LIB}/update-check.service" && -f "${PI_LIB}/update-check.timer" ]
     || echo "pi-fortress: pi-fortress-update-check.timer did not start; no post tells a reboot or update that waits (journalctl -u pi-fortress-update-check.timer)" >&2
 fi
 
+# The uplink watchdog (pf uplink, docs/user_guide/pi_setup.md "When the
+# uplink drops"). NetworkManager can stop its retries for the uplink
+# connection and wait for a person, for example after one failed Wi-Fi
+# handshake. pi-fortress-uplink-watch.timer then brings that connection up
+# again. apply records here which connection that is: the NetworkManager
+# connection on WAN_IF, by UUID, and never a connection that pf made. When
+# the uplink is down now, the last record stays. When NetworkManager does
+# not manage WAN_IF, the record goes, and the watchdog does nothing. Each
+# path is in the command, so that a test in a fake root moves it.
+# The watchdog writes events.jsonl, and the alert sidecar tails it. The
+# sidecar cannot make a file there, so apply makes it before the sidecar
+# restarts below. The watchdog runs as root with no capability. Thus root
+# must own the file, or the watchdog cannot write it.
+if [[ -f "${PI_LIB}/uplink-watch.service" && -f "${PI_LIB}/uplink-watch.timer" ]]; then
+  install -d -m 0755 /var/lib/pi-fortress/uplink
+  [[ -f /var/lib/pi-fortress/uplink/events.jsonl ]] || : >/var/lib/pi-fortress/uplink/events.jsonl
+  chown root:root /var/lib/pi-fortress/uplink/events.jsonl
+  chmod 0644 /var/lib/pi-fortress/uplink/events.jsonl
+  "${PF}" uplink record -dev "${WAN_IF}" -record /var/lib/pi-fortress/uplink.json ||
+    echo "pi-fortress: the uplink connection was not recorded; the uplink watchdog keeps the last record (pf uplink show)" >&2
+  install -m 0644 "${PI_LIB}/uplink-watch.service" /etc/systemd/system/pi-fortress-uplink-watch.service
+  install -m 0644 "${PI_LIB}/uplink-watch.timer" /etc/systemd/system/pi-fortress-uplink-watch.timer
+  systemctl daemon-reload
+  # UPLINK_WATCH=0 keeps it off across each apply. A systemctl disable
+  # alone lasts until the next full apply.
+  if [[ "${UPLINK_WATCH}" == "1" ]]; then
+    systemctl enable --now pi-fortress-uplink-watch.timer >/dev/null 2>&1 \
+      || echo "pi-fortress: pi-fortress-uplink-watch.timer did not start; nothing brings the uplink back when NetworkManager stops its retries (journalctl -u pi-fortress-uplink-watch.timer)" >&2
+  else
+    systemctl disable --now pi-fortress-uplink-watch.timer >/dev/null 2>&1 || true
+  fi
+fi
+
 install -d -m 0755 /usr/local/lib/pi-fortress
 rm -f /usr/local/lib/pi-fortress/{alert,doh,core_policy,secrets_store,substitute,enroll,compile_policy,observe,fetch_blocklists,console,dump_streams}.py
 # alert.url is a webhook URL whose path is its bearer token. Its readers
@@ -2536,6 +2692,30 @@ harden_sysctl_load
 harden_apt
 harden_ssh
 harden_watchdog
+harden_rawio
+
+# The kernel module lock (MODULE_LOCK in net.env, docs/user_guide/pi_setup.md
+# "Kernel locks"). The timer starts pi-fortress-modlock.service 10 minutes
+# after boot, one time, and the kernel then refuses each module load
+# until the next boot. On a box that is up for more than 10 minutes, the
+# lock comes when this line enables the timer. Thus it is the last step
+# of the apply, after each step that can load a module, and after the
+# module list above. MODULE_LOCK=0 keeps it off across each apply. A
+# systemctl disable alone lasts until the next full apply.
+if [[ -f "${PI_LIB}/modlock.service" && -f "${PI_LIB}/modlock.timer" ]]; then
+  install -m 0644 "${PI_LIB}/modlock.service" /etc/systemd/system/pi-fortress-modlock.service
+  install -m 0644 "${PI_LIB}/modlock.timer" /etc/systemd/system/pi-fortress-modlock.timer
+  systemctl daemon-reload
+  if [[ "${MODULE_LOCK}" == "1" ]]; then
+    systemctl enable --now pi-fortress-modlock.timer >/dev/null 2>&1 \
+      || echo "pi-fortress: pi-fortress-modlock.timer did not start; kernel module loads stay open (journalctl -u pi-fortress-modlock.timer)" >&2
+  else
+    systemctl disable --now pi-fortress-modlock.timer >/dev/null 2>&1 || true
+    if [[ "$(cat "${MODULES_DISABLED}" 2>/dev/null || true)" == 1 ]]; then
+      echo "pi-fortress: MODULE_LOCK=0, but kernel module loads stay locked until the next boot"
+    fi
+  fi
+fi
 
 # pf apply gets to this script through syscall.Exec, which replaces the
 # Go process. internal/admin records that an apply was requested, and can
@@ -2614,6 +2794,7 @@ audit_apply "${_settled}"
 install -d -m 0755 /var/lib/pi-fortress
 printf '%s\n' \
   nftables.service \
+  pi-fortress-netgate.service \
   pi-fortress-dns-agent-go.service \
   pi-fortress-broker.service \
   pi-fortress-engine.service \

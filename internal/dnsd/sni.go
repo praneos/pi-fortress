@@ -16,6 +16,7 @@ import (
 	"golang.org/x/net/dns/dnsmessage"
 
 	"pi-fortress/internal/base"
+	"pi-fortress/internal/netgate"
 	"pi-fortress/internal/nfq"
 	"pi-fortress/internal/tlssni"
 )
@@ -34,10 +35,14 @@ import (
 // The mark values come from render (sniOK, sniBad). A verdict repeats the
 // packet into forward with one of them. forward copies it to the flow, so
 // an answered flow never goes into the queue again.
+//
+// pf dns holds no CAP_NET_ADMIN. pf netgate binds the queue and relays
+// each packet to this code (netgate.SNIConn). It sets only the SNI bits
+// of the mark that the kernel gave the packet.
 const (
-	sniBits = 0x00f00000
-	sniOK   = 0x00200000
-	sniBad  = 0x00300000
+	sniBits = netgate.SNIBits
+	sniOK   = netgate.SNIOK
+	sniBad  = netgate.SNIBad
 	// sniWait is how long a flow can take to send its full ClientHello. A
 	// client sends it immediately after the handshake. A slower flow is not a
 	// browser that opens a page.
@@ -50,8 +55,8 @@ const (
 	sniMaxHeld  = 32
 	sniMaxBytes = 64 << 10
 	// sniMaxJudges bounds the name lookups in progress. Each one goes to the
-	// upstream and can start an nft process. The query slots of the
-	// listeners do not cover these. When all are in use, a new flow is
+	// upstream and can ask netgate for a gate set write. The query slots of
+	// the listeners do not cover these. When all are in use, a new flow is
 	// refused.
 	sniMaxJudges = 256
 	// sniDone keeps a verdict for packets of the flow that were already in
@@ -67,7 +72,8 @@ const (
 	sniSweep   = time.Second
 )
 
-// sniQueue is nfq.Queue, narrowed so the tests can drive the check.
+// sniQueue is the queue as the check sees it: netgate.SNIConn in the
+// daemon, a fake in the tests.
 type sniQueue interface {
 	Recv() (nfq.Packet, error)
 	Verdict(id uint32, verdict uint32, mark *uint32) error
@@ -143,10 +149,10 @@ func newSNICheck(q sniQueue, resolve func(context.Context, netip.Addr, string) (
 }
 
 // sniLoop runs the check of a segment until ctx ends. If the queue cannot
-// open, sniLoop retries it. This is not fatal: the rest of the resolver
-// must continue to serve. Until the queue is bound, the kernel drops the
-// packets that the queue would hold. Thus the house is not more open than
-// with the old gate.
+// open (netgate is down, or refuses), sniLoop retries it. This is not
+// fatal: the rest of the resolver must continue to serve. Until the queue
+// is bound, the kernel drops the packets that the queue would hold. Thus
+// the house is not more open than with the old gate.
 func (s *Server) sniLoop(ctx context.Context, seg *Segment) {
 	ech, err := loadECH(seg.SNIECHFile)
 	if err != nil {
@@ -157,13 +163,13 @@ func (s *Server) sniLoop(ctx context.Context, seg *Segment) {
 		log.Printf("pf dns: segment %s: %v; non-TLS flows will be refused", seg.Name, err)
 	}
 	for ctx.Err() == nil {
-		q, err := nfq.Open(seg.SNIQueue)
+		q, err := s.openSNI(seg.SNIQueue)
 		if err != nil {
 			log.Printf("pf dns: segment %s: SNI queue %d: %v; its pending 443 flows are dropped until it opens", seg.Name, seg.SNIQueue, err)
 			select {
 			case <-ctx.Done():
 				return
-			case <-time.After(5 * time.Second):
+			case <-time.After(s.sniRetry):
 			}
 			continue
 		}
@@ -375,10 +381,19 @@ func (c *sniCheck) packet(ctx context.Context, p nfq.Packet) {
 // /24 as one that it resolves to now. A CDN gives a set that rotates, and
 // the device asked a short time ago through the same profile and exit, not
 // now. A device can also use an expired answer after a long idle, when the
-// CDN has moved the name to a different range. ECH hides the real name behind the public name of
-// the provider. Thus an ECH flow goes through only to the published
-// ranges of that provider: the resolver of the device already filtered
-// its inner name.
+// CDN has moved the name to a different range.
+//
+// ECH hides the real name behind the public name of the provider. Thus an
+// ECH flow also goes through to the published ranges of that provider:
+// the resolver of the device already filtered its inner name. The outer
+// name must still have an address through the house. The ranges only add
+// to the rules above, and the /24 rule comes before them. Chrome
+// and Firefox send a GREASE encrypted_client_hello extension in each hello
+// when the site has no ECH config, and that hello names the real site.
+// Before, such a hello lost the /24 rule. An ECH flow that passes by the
+// /24 gets nothing more than a plain hello with the same outer name to
+// the same address: the outer name still resolves through the house and
+// is not blocked.
 func (c *sniCheck) judge(ctx context.Context, key sniFlowKey, h tlssni.Hello) (uint32, string) {
 	if h.ServerName == "" {
 		return sniBad, "no server name"
@@ -401,16 +416,21 @@ func (c *sniCheck) judge(ctx context.Context, key sniFlowKey, h tlssni.Hello) (u
 	if c.seen != nil && c.seen(h.ServerName, dst) {
 		return sniOK, ""
 	}
-	if h.ECH {
-		if inPrefixes(c.ech, dst) {
-			return sniOK, ""
-		}
-		return sniBad, fmt.Sprintf("ECH to %s (outer name %s) outside the ECH ranges", dst, h.ServerName)
+	// NXDOMAIN, an empty answer or a SERVFAIL reply has no address and no
+	// error. Such a name passes nowhere, also not into the ECH ranges.
+	if len(addrs) == 0 {
+		return sniBad, h.ServerName + " has no address"
 	}
 	for _, a := range addrs {
 		if p, err := a.Prefix(24); err == nil && p.Contains(dst) {
 			return sniOK, ""
 		}
+	}
+	if h.ECH {
+		if inPrefixes(c.ech, dst) {
+			return sniOK, ""
+		}
+		return sniBad, fmt.Sprintf("ECH to %s (outer name %s) outside the /24 of its answers and the ECH ranges", dst, h.ServerName)
 	}
 	return sniBad, fmt.Sprintf("%s does not resolve to %s", h.ServerName, dst)
 }

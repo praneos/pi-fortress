@@ -109,6 +109,36 @@ Make sure that the default route goes through `wlan0`. Then move the Ethernet ca
 !!! note
     If you do not control the Wi-Fi network (for example, in a cafe or hotel), read [public_wifi.md](public_wifi.md) before you continue.
 
+### When the uplink drops
+
+NetworkManager can stop its retries for the uplink connection. For example, a Wi-Fi handshake fails one time. NetworkManager then asks for a new key, and no program answers. NetworkManager marks the connection as failed and does not try it again. The stored key is still correct. But the Pi and all its networks stay without internet until a person acts.
+
+The uplink watchdog acts for you. `pi-fortress-uplink-watch.timer` runs `pf uplink watch` each 30 seconds:
+
+- Each full `pf apply` records the NetworkManager connection of the uplink (`WAN_IF`), by its UUID, in `/var/lib/pi-fortress/uplink.json`. It never records a connection that `pf` made (`agent-net`, `house-net`, `seg-*`, `trunk-*`, `pf-parked-*`). When the uplink is down during the apply, the last record stays.
+- When that connection is not active for two checks in a row, the watchdog runs `nmcli connection up`. While NetworkManager connects, the watchdog waits.
+- After three failed tries, it tries one time each 5 minutes. It does not stop.
+- When the uplink is back after a down period of two checks or more, `pf alert` sends one message to your webhook, for example `UPLINK BACK wlan0 (home) after 12m30s down; the uplink watchdog ran nmcli connection up 2 times`. The message goes out when the uplink works again.
+- When a different connection holds the uplink device, the watchdog does nothing. To record the new connection, run `sudo pf apply`.
+
+On a box where NetworkManager does not manage the uplink (ifupdown, systemd-networkd), the watchdog does nothing.
+
+To see what it does:
+
+**Pi:**
+```
+pf uplink show
+journalctl -u pi-fortress-uplink-watch
+```
+
+To pause it:
+
+- `sudo systemctl stop pi-fortress-uplink-watch.timer` pauses it until the next boot or the next full `pf apply`. `sudo systemctl start pi-fortress-uplink-watch.timer` starts it again.
+- `sudo systemctl disable --now pi-fortress-uplink-watch.timer` also keeps it off after a reboot, until the next full `pf apply`.
+- To keep it off, add `UPLINK_WATCH=0` to `/etc/pi-fortress/net.env.local`. Then run `sudo pf apply`.
+
+Pause it before you take the uplink down on purpose (for example with `nmcli connection down`). If you do not, the watchdog brings the uplink up again after about one minute.
+
 ## 4. Agent network values
 
 These are the network defaults. Each software update writes them again. To keep a value across updates, put it in `/etc/pi-fortress/net.env.local` on the Pi. Put only the keys that you want to override in this file. `sudo pf tui`, **System → Settings**, writes this file for you for these keys:
@@ -147,6 +177,7 @@ The TUI refuses a value that the gateway cannot use.
 | `HOUSE_NEW_TOTAL` | Number of new connections in one second that the full home network can open, for all of its devices or addresses. The format is `RATE/BURST`. Each closed connection keeps its slot in the table for 30 seconds. Thus this limit stops many devices together from filling the table. A household with several phones, laptops, and a TV that load pages at the same time stays below it. `0` disables it. The gateway refuses a value below 100 a second. | `1000/5000` |
 | `SEG_CONN_PER_IP`, `SEG_NEW_PER_IP`, `SEG_CONN_TOTAL` | The same three limits for each plain network that you add in step 8. The total is per network. They are the same as the limits of the agent network, because the agents run on the desktop on the desk network. A desktop browser with hundreds of open tabs can go above 128 connections. If pages start to fail, increase the per-device number for that network. | `128`, `50/200`, `4096` |
 | `HW_WATCHDOG` | The hardware watchdog of the Pi. `auto` enables it when the kernel has a watchdog device. `1` enables it always. `0` disables it. A full `pf apply` applies a change. Refer to [Pressure alerts and the hardware watchdog](#pressure-alerts-and-the-hardware-watchdog). | `auto` |
+| `MODULE_LOCK` | The kernel module lock. `1`: 10 minutes after each boot, the kernel stops all module loads until the next boot. `0` disables it at the next full `pf apply`. A lock that is on stays until the next boot. Refer to [Kernel locks](#kernel-locks). | `1` |
 | `JOURNAL_PERSIST` | Where the system journal stays. `0` keeps the default of the OS: Raspberry Pi OS keeps it in RAM, so a reboot, a crash or a power cut removes the log of what came before it. `1` keeps it on the disk (`Storage=persistent`, 200 MiB at most), and writes more to the SD card. A full `pf apply` applies a change. | `0` |
 | `SEG_NEW_TOTAL` | Number of new connections in one second that each plain network from step 8 can open as a whole, for all of its addresses. The format is `RATE/BURST`. Like `HOUSE_NEW_TOTAL`, it stops one network from filling the table with closed connections. It is the same as the new-connection total of the agent network. That total is fixed at `300/600`. A desk with one or two computers stays below it. The file of a network can set `NEW_TOTAL` to override it. `0` disables it. The gateway refuses a value below 100 a second. | `300/600` |
 
@@ -230,7 +261,8 @@ The messages:
 - `PRESSURE STILL HIGH`: a maximum of one message each 10 minutes while the pressure continues.
 - `PRESSURE RECOVERED`: one message after one minute with no condition.
 - `OOM KILL`: the kernel stopped a process for lack of memory. The message names the unit and the number of stops. You get a maximum of one each 10 minutes.
-- `RESTART`: the Pi started again without a clean shutdown. The cause can be a power cut, a hang that the watchdog reset, or a kernel crash. The message gives the last values before the stop.
+- `BOOT`: one message at each boot, for example `BOOT pi-fortress: booted at 2026-10-29 07:12:40 UTC; the boot before ended clean at 2026-10-29 07:11:58 UTC.` It also tells you of a reboot that you did not start. Each boot opens kernel module loads for 10 minutes ([Kernel locks](#kernel-locks)). The end of the boot before is the last record of the alert service: its stop for a clean end, else a time at most 30 seconds before the end. The message goes out when the uplink works.
+- `RESTART`: in the `BOOT` message, when the boot before did not end clean. The cause can be a power cut, a hang that the watchdog reset, or a kernel crash. The message gives the last values before the stop.
 
 A unit is a service, for example `pi-fortress-broker.service`, or a login session, for example `user-1000.slice`. To see its processes, run `systemctl status <unit>`. These messages have their own limits. They do not use the hourly maximum of the strip alerts.
 
@@ -262,7 +294,33 @@ sudo systemctl restart pi-fortress-alert
 
 The hardware watchdog: systemd sends a signal to the watchdog device of the Pi at regular intervals. If the Pi hangs and the signals stop for 30 seconds, the device resets the Pi. If the device accepts less time than that, the gateway uses the maximum of the device. During a reboot, the time is 2 minutes, with the same limit. `HW_WATCHDOG=auto` enables the watchdog when the kernel has a watchdog device. A lab VM usually has none.
 
-To disable the watchdog, add `HW_WATCHDOG=0` to `/etc/pi-fortress/net.env.local`. Then run `sudo pf apply`. To disable the pressure watch, use `-pressure=false` in `alert.env`.
+To disable the watchdog, add `HW_WATCHDOG=0` to `/etc/pi-fortress/net.env.local`. Then run `sudo pf apply`. To disable the pressure watch, use `-pressure=false` in `alert.env`. This also stops the `BOOT` message.
+
+### Kernel locks
+
+Two locks stop a root process from a change to the running kernel:
+
+- **No raw memory access.** A full `pf apply` writes `/etc/systemd/system.conf.d/50-pi-fortress.conf`. At boot, PID 1 then removes `CAP_SYS_RAWIO` from its capability bounding set. Each process gets this set from its parent, and no process can add to it. Thus no process, root also, can open `/dev/mem`, `/dev/port` or `/proc/kcore`. PID 1 reads the file only at boot. When apply writes or changes the file, it flags a reboot: the `reboot` rung of `pf doctor`, the TUI and the update check (`pf alert updates`) tell you, with `pi-fortress` as the reason.
+- **No module loads after the boot.** `pi-fortress-modlock.timer` starts `pi-fortress-modlock.service` 10 minutes after each boot. The unit sets `kernel.modules_disabled=1`. Then the kernel refuses each module load until the next boot, also a load that the kernel asks for itself. Before the lock, `systemd-modules-load` loads each module that pf can need, and udev loads the drivers of the hardware. Apply writes the module list to `/etc/modules-load.d/pi-fortress-modlock.conf`, and loads it at once while the lock is off. On a box that is up for more than 10 minutes, the first full apply with the timer locks at once.
+
+To see the two locks:
+
+**Pi:**
+```
+sudo pf status | grep -A2 '== kernel locks =='
+```
+
+The TUI shows them in **System → Health**, on the `kernel` line.
+
+What the locks change:
+
+- A device that you connect after the lock gets no driver until the next reboot, when its driver is not loaded yet. For example, a USB network adapter, a USB disk or a USB serial adapter. Connect it, then reboot.
+- When the house gets a WireGuard tunnel (`WG_IF`) or a new VLAN interface after the lock, its kernel module loads only at the next boot. Apply names the modules that are not loaded.
+- When a ruleset needs a module that is not loaded, apply stops before the ruleset changes, and says: `kernel modules are locked (pi-fortress-modlock); a reboot loads the new ones, or set MODULE_LOCK=0 ...`.
+- A tool that needs `CAP_SYS_RAWIO` fails with "Operation not permitted", also with sudo. For example, a direct read of `/dev/mem`, SCSI or ATA commands to a USB SATA disk (`smartctl`, `hdparm`), or `mmc` commands to the SD card.
+- A reboot opens module loads again for 10 minutes. The `BOOT` message tells you of each boot.
+
+To keep module loads open, add `MODULE_LOCK=0` to `/etc/pi-fortress/net.env.local`, run `sudo pf apply`, then reboot. There is no key for the raw memory lock.
 
 ### Block digest
 

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 	"pi-fortress/internal/audit"
 	"pi-fortress/internal/base"
 	"pi-fortress/internal/enroll"
+	"pi-fortress/internal/feedstage"
 	"pi-fortress/internal/fetch"
 	"pi-fortress/internal/observe"
 	"pi-fortress/internal/policycompile"
@@ -81,7 +83,7 @@ func logTool(verb string, args map[string]string, took time.Duration, err error)
 	_ = audit.Default().Append(e)
 }
 
-const fetchUsage = "usage: pf fetch [-policy DIR] [-out DIR] [-fresh DURATION]"
+const fetchUsage = "usage: pf fetch [-policy DIR] [-out DIR] [-fresh DURATION] [-request FILE -cache DIR [-seed DIR]]"
 
 const compileUsage = "usage: pf compile --policy DIR --out-nft FILE --out-dns FILE [--out-doh-nft FILE] [--out-doh-dns FILE] [--out-house-dns FILE] [--out-house-doh-dns FILE] [--out-house-private-dns-nft FILE] [--out-direct-nft FILE] [--out-house-direct-nft FILE] [--out-house-whatsapp-nft FILE] [--out-ssh-nft FILE] [--out-ntp-pass-nft FILE] [--out-domain-map FILE] [--out-ip-map FILE]"
 
@@ -89,11 +91,18 @@ const observeUsage = "usage: pf observe once|run|show|reset"
 
 const alertUsage = "usage: pf alert run|show|once|watch|wg|updates"
 
+// runFetcher is a variable so that a test can give the error of a run
+// as root.
+var runFetcher = (*fetch.Fetcher).Run
+
 func runFetch(args []string, stdout, stderr io.Writer) int {
 	fs := newFlags("fetch", stderr)
 	policy := fs.String("policy", "", "policy directory")
 	out := fs.String("out", "", "generated output directory")
 	fresh := fs.Duration("fresh", 0, "serve a feed from its last good copy when that copy is younger than this; 0 always downloads")
+	request := fs.String("request", "", "stage mode (pi-fortress-feeds.service): the request of root, which sets -fresh and the run id; -out is then the stage")
+	cache := fs.String("cache", "", "directory of the last good copies (default: feeds/ in -out)")
+	seed := fs.String("seed", "", "directory that is read for a last good copy that -cache does not have")
 	if code, ok := parse(fs, args); !ok {
 		return code
 	}
@@ -110,8 +119,24 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 	}
 	f := fetch.Defaults(p, o)
 	f.FreshFor = *fresh
+	f.CacheDir, f.SeedDir = *cache, *seed
+	if *request != "" {
+		req, err := readRequest(*request)
+		if err == nil && (*fresh != 0 || *cache == "" || *out == "") {
+			err = fmt.Errorf("-request takes -out and -cache, and sets -fresh itself")
+		}
+		if err != nil {
+			fmt.Fprintf(stderr, "pf fetch: %v\n", err)
+			return 2
+		}
+		f.FreshFor, f.RunID = req.Fresh, req.Run
+	}
 	start := time.Now()
-	report, nIPs, nDoms, err := f.Run()
+	report, nIPs, nDoms, err := runFetcher(f)
+	if errors.Is(err, fetch.ErrRoot) {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
 	fields := map[string]string{
 		"policy": p, "out": o,
 		"ips": strconv.Itoa(nIPs), "domains": strconv.Itoa(nDoms),
@@ -129,13 +154,35 @@ func runFetch(args []string, stdout, stderr io.Writer) int {
 	if truncated > 0 {
 		fields["truncated"] = strconv.Itoa(truncated)
 	}
-	logTool("fetch", fields, time.Since(start), err)
+	// In stage mode the unit cannot see the audit log. pf feeds run, as
+	// root, writes the entry after it imports the set.
+	if *request == "" {
+		logTool("fetch", fields, time.Since(start), err)
+	}
 	printReport(stdout, report)
 	fmt.Fprintf(stdout, "wrote %d ips, %d domains -> %s\n", nIPs, nDoms, o)
 	if err != nil {
+		if *request != "" {
+			fmt.Fprintf(stderr, "pf fetch: %v\n", err)
+		}
 		return 1
 	}
 	return 0
+}
+
+// readRequest reads the request file of root in stage mode. The file is
+// small: a larger one is not a request.
+func readRequest(path string) (feedstage.Request, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return feedstage.Request{}, err
+	}
+	defer f.Close()
+	b, err := io.ReadAll(io.LimitReader(f, 129))
+	if err != nil {
+		return feedstage.Request{}, err
+	}
+	return feedstage.ParseRequest(b)
 }
 
 // printReport writes the report of a fetch, one line for each entry. A
@@ -240,6 +287,12 @@ func runObserve(args []string, _, stderr io.Writer) int {
 	if *dnsLog != "" {
 		o.DNSLog = *dnsLog
 	}
+	// Only the daemon asks pf netgate for the conntrack table. once, show
+	// and reset come from an operator with sudo, who holds the capability
+	// and runs conntrack directly. netgate refuses any peer but observe.
+	if verb != "run" {
+		o.CTSocket = ""
+	}
 	ctx, stop := signalCtx()
 	defer stop()
 	switch verb {
@@ -285,7 +338,7 @@ func runAlert(args []string, stdout, stderr io.Writer) int {
 	fs.DurationVar(&pr.CPUFor, "pressure-cpu-for", pr.CPUFor, "how long the CPU condition must hold")
 	fs.Float64Var(&pr.LoadPerCPU, "pressure-load", pr.LoadPerCPU, "without PSI: load for each CPU that a busy CPU must also have")
 	fs.DurationVar(&pr.Repeat, "pressure-repeat", pr.Repeat, "minimum time between two posts while pressure stays")
-	fs.StringVar(&pr.StatePath, "pressure-state", pr.StatePath, "state file for the unclean-restart post; empty for none")
+	fs.StringVar(&pr.StatePath, "pressure-state", pr.StatePath, "state file for the BOOT post at each boot and its unclean-restart detail; empty for none")
 	// The block digest of run (docs/user_guide/pi_setup.md "Block
 	// digest"). It is on when alert.url names a webhook.
 	digest := fs.Duration("digest", alert.DefaultDigestEvery, "run: post a digest of blocked requests a maximum of one time in this time; 0 disables it")

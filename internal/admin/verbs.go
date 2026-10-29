@@ -68,6 +68,7 @@ type Status struct {
 	Device         Device
 	ApplyRunning   bool
 	RebootRequired bool
+	Kernel         KernelLock
 }
 
 func ok(err error) (any, error) { return nil, err }
@@ -79,7 +80,7 @@ func exists(path string) bool {
 
 var Verbs = []Verb{
 	{"status", roleAll, false, func(c *Config, _ context.Context, _ Args) (any, error) {
-		return Status{c.Device(), Held(c.LockPath), exists(c.RebootFlag)}, nil
+		return Status{Device: c.Device(), ApplyRunning: Held(c.LockPath), RebootRequired: exists(c.RebootFlag), Kernel: c.KernelLock()}, nil
 	}},
 	{"units", roleAll, false, func(c *Config, _ context.Context, _ Args) (any, error) { return c.UnitsHealth(), nil }},
 	{"ifaces", roleAll, false, func(c *Config, _ context.Context, _ Args) (any, error) { return c.Interfaces(), nil }},

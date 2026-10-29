@@ -10,7 +10,8 @@
 # and writes a file only when its content changes.
 #
 # The paths come from the caller, as HARDEN_SYSCTL_D, HARDEN_APT_D,
-# HARDEN_SSHD_D, HARDEN_HOME and HARDEN_WORK (a scratch directory). Thus
+# HARDEN_SSHD_D, HARDEN_HOME, HARDEN_SYSTEM_CONF_D, HARDEN_REBOOT_FLAG and
+# HARDEN_WORK (a scratch directory). Thus
 # the path rewrite of apply.sh in the appliance test also reaches them.
 # HARDEN_OS_RELEASE is optional (default /etc/os-release); the tests set it.
 # The package installs stay in provision.sh. apply.sh only tells the
@@ -306,6 +307,37 @@ harden_watchdog() {
   if harden_put "${HARDEN_WORK}/pi-fortress-watchdog.conf" "${conf}"; then
     systemctl daemon-reexec || echo "pi-fortress: systemctl daemon-reexec failed; the hardware watchdog starts at the next boot" >&2
     echo "pi-fortress: the hardware watchdog is on: a hang of ${rt} s resets the Pi"
+  fi
+}
+
+# harden_reboot_waits flags a reboot in the same way as a package that
+# asks for one: the flag HARDEN_REBOOT_FLAG, and the name pi-fortress in
+# the .pkgs list next to it. pf doctor (rung reboot), pf alert updates and
+# the TUI read them. /var/run is a tmpfs, so the next boot removes both.
+harden_reboot_waits() {
+  local pkgs="${HARDEN_REBOOT_FLAG}.pkgs"
+  [[ -d "${HARDEN_REBOOT_FLAG%/*}" ]] || mkdir -p "${HARDEN_REBOOT_FLAG%/*}"
+  touch "${HARDEN_REBOOT_FLAG}"
+  grep -qx pi-fortress "${pkgs}" 2>/dev/null || echo pi-fortress >>"${pkgs}"
+}
+
+# PID 1 removes CAP_SYS_RAWIO from its capability bounding set
+# (HARDEN_SYSTEM_CONF_D/50-pi-fortress.conf). Each process gets its
+# bounding set from its parent, and no process can add a capability to
+# it. Thus after the next boot, no process, root also, can open /dev/mem,
+# /dev/port or /proc/kcore, and no process can write the memory of the
+# running kernel through them. No pf unit and no service of the box uses
+# the capability. The GPIO of the Pi 5 is /dev/gpiomem*, not /dev/mem.
+# PID 1 reads this file only when it starts, and a running process keeps
+# its bounding set. Thus a new or changed file flags a reboot
+# (harden_reboot_waits).
+harden_rawio() {
+  local conf="${HARDEN_SYSTEM_CONF_D}/50-pi-fortress.conf"
+  printf '%s\n' '# Written by pi-fortress apply.sh (lib/harden.sh harden_rawio); edits here are replaced on the next apply.' \
+    '[Manager]' 'CapabilityBoundingSet=~CAP_SYS_RAWIO' >"${HARDEN_WORK}/50-pi-fortress.conf"
+  if harden_put "${HARDEN_WORK}/50-pi-fortress.conf" "${conf}"; then
+    harden_reboot_waits
+    echo "pi-fortress: PID 1 drops CAP_SYS_RAWIO at the next boot (${conf}); a reboot waits"
   fi
 }
 

@@ -71,8 +71,10 @@ SystemCallFilter=~@aio @keyring userfaultfd
 # before it starts the unit. A "-" lets the unit start before the first
 # apply. Then the sidecar cannot save its place until apply restarts it.
 ReadWritePaths=-/var/lib/pi-fortress/alert.offset -/var/lib/pi-fortress/alert-notice.offset -/var/lib/pi-fortress/alert.last
-# The pressure state file (pressure.json) and the open window of the block
-# digest (digest.json). systemd makes this directory,
+# The pressure state file (pressure.json), the open window of the block
+# digest (digest.json), and the checkpoint in the events.jsonl of the
+# uplink watchdog (uplink.offset). The sidecar only reads that file, in
+# /var/lib/pi-fortress/uplink. apply makes it. systemd makes this directory,
 # owned by pf-sidecar, and makes it writable. The state is replaced with a
 # rename, and a rename needs a directory that the unit can write.
 StateDirectory=pi-fortress/alert

@@ -1,0 +1,55 @@
+[Unit]
+Description=pi-fortress: lock kernel module loads until the next boot
+Documentation=file:///opt/pi-fortress/docs/user_guide/pi_setup.md
+# After this unit, the kernel refuses each module load (kernel.modules_disabled=1),
+# also a load that the kernel asks for itself, for example for a new nft
+# expression. Only a reboot opens the lock again. pi-fortress-modlock.timer
+# starts this unit 10 minutes after boot (MODULE_LOCK in net.env). Before
+# that, systemd-modules-load loaded each module that pf can need
+# (/etc/modules-load.d/pi-fortress-modlock.conf, which apply writes), and
+# udev loaded the drivers of the hardware. A kernel with no module support
+# has no such file, and the unit does nothing.
+ConditionPathExists=/proc/sys/kernel/modules_disabled
+
+[Service]
+Type=oneshot
+# The kernel accepts only 1. A second write of 1 changes nothing.
+ExecStart=/sbin/sysctl -w kernel.modules_disabled=1
+TimeoutStartSec=30
+MemoryMax=16M
+TasksMax=4
+# Root, with no capability: the kernel lets uid 0 write a sysctl file, and
+# asks for no capability for this key. Only this one file is writable:
+# ProtectKernelTunables makes the rest of /proc/sys read-only.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectKernelTunables=yes
+ReadWritePaths=/proc/sys/kernel/modules_disabled
+# No network: sysctl opens no socket.
+PrivateNetwork=yes
+RestrictAddressFamilies=AF_UNIX
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+# No ProcSubset=pid: it hides /proc/sys.
+ProtectProc=invisible
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+# sysctl changes no user, group or capability.
+SystemCallFilter=~@privileged
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
+SystemCallErrorNumber=EPERM
+InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www

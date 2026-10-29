@@ -816,7 +816,7 @@ done
 # long-running pf unit has a memory ceiling, a task and file ceiling, and
 # an OOM rank. It never stops its restarts. pf dns ranks below the broker,
 # so house DNS outlives the fence in a global OOM.
-for _u in pf-broker pf-engine dns-agent-go dns-stub@ dns-house observe alert monitor www; do
+for _u in pf-broker pf-engine dns-agent-go dns-stub@ dns-house netgate observe alert monitor www; do
   _f="${here}/${_u}.service"
   for _d in MemoryHigh MemoryMax TasksMax LimitNOFILE OOMScoreAdjust; do
     _re="^${_d}=[0-9]"
@@ -824,6 +824,8 @@ for _u in pf-broker pf-engine dns-agent-go dns-stub@ dns-house observe alert mon
     # (alert.service). DNS and DHCP keep the house up, so they go late too.
     [[ "${_u}" == alert && "${_d}" == OOMScoreAdjust ]] && _re='^OOMScoreAdjust=-900$'
     [[ "${_u}" == dns-* && "${_d}" == OOMScoreAdjust ]] && _re='^OOMScoreAdjust=-500$'
+    # netgate writes the gate sets of pf dns. Without it, no new answer.
+    [[ "${_u}" == netgate && "${_d}" == OOMScoreAdjust ]] && _re='^OOMScoreAdjust=-500$'
     grep -qE "${_re}" "${_f}" || fail "${_u}.service has no ${_d}"
   done
   grep -q '^StartLimitIntervalSec=0$' "${_f}" || fail "${_u}.service can give up restarting"
@@ -840,7 +842,7 @@ for _u in pf-broker pf-engine; do
   grep -q '^RestartSteps=[1-9]' "${here}/${_u}.service" || fail "${_u}.service has no growing restart back-off"
   grep -q '^RestartMaxDelaySec=[1-9]' "${here}/${_u}.service" || fail "${_u}.service back-off has no ceiling"
 done
-for _u in dns-agent-go dns-stub@ dns-house; do
+for _u in dns-agent-go dns-stub@ dns-house netgate; do
   grep -q '^RestartSteps=' "${here}/${_u}.service" && fail "${_u}.service backs off; house DNS must restart at once"
 done
 _oom() { sed -n 's/^OOMScoreAdjust=//p' "${here}/$1.service"; }
@@ -849,7 +851,7 @@ _oom() { sed -n 's/^OOMScoreAdjust=//p' "${here}/$1.service"; }
 # Kill order: fetch, broker, the rest of the fence, unranked processes,
 # DNS and DHCP, then alert and sshd.
 (( $(_oom fetch) > $(_oom pf-broker) )) || fail "the feed refresh does not go before the broker for the OOM killer"
-for _u in dns-agent-go dns-house dns-stub@ dhcp@; do
+for _u in dns-agent-go dns-house dns-stub@ dhcp@ netgate; do
   (( $(_oom "${_u}") < 0 && $(_oom "${_u}") > $(_oom alert) )) || fail "${_u}.service does not rank between unranked processes and alert"
 done
 grep -q '^Environment=GOMEMLIMIT=' "${here}/pf-broker.service" || fail "pf-broker.service sets no GOMEMLIMIT"
@@ -1355,7 +1357,7 @@ fi
 _own && exit 4
 exit 3
 EOF
-libs=("${here}/lib/harden.sh" "${here}/lib/dhcp.sh" "${here}/lib/netman.sh")
+libs=("${here}/lib/harden.sh" "${here}/lib/dhcp.sh" "${here}/lib/netman.sh" "${here}/lib/feeds.sh")
 mkdir -p "${tmp}/gr-none" "${tmp}/gr-desk/proc/device-tree" "${tmp}/gr-pi/proc/device-tree" \
   "${tmp}/gr-lab/vagrant/vm/pi" "${tmp}/gr-app/etc/pi-fortress" "${tmp}/gr-gw/etc/pi-fortress"
 printf 'Some Desktop\0' >"${tmp}/gr-desk/proc/device-tree/model"
@@ -1578,10 +1580,17 @@ grep -q 'lab_echo' "${here}/apply.sh" ||
 unit="${here}/dns-agent-go.service"
 [[ -f "${unit}" ]] || fail "vm/pi/dns-agent-go.service is missing"
 grep -q '^User=pf-dns' "${unit}" || fail "dns-agent-go.service does not drop to pf-dns"
-grep -qE '^CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_NET_ADMIN$' "${unit}" ||
-  fail "dns-agent-go.service bounding set is not port 53 and the nft fork"
-grep -qxF 'AmbientCapabilities=CAP_NET_BIND_SERVICE CAP_NET_ADMIN' "${unit}" ||
-  fail "dns-agent-go.service does not give the two capabilities to pf dns and its nft fork"
+# Port 53 only. pf netgate writes the gate sets and binds the SNI queue
+# for pf dns. Thus pf dns has no NET_ADMIN, and code that runs in it
+# cannot change the ruleset, a route, a link or a bridge.
+grep -qxF 'CapabilityBoundingSet=CAP_NET_BIND_SERVICE' "${unit}" ||
+  fail "dns-agent-go.service bounding set is not port 53 only"
+grep -qxF 'AmbientCapabilities=CAP_NET_BIND_SERVICE' "${unit}" ||
+  fail "dns-agent-go.service does not give port 53 to pf dns"
+for _u in dns-agent-go dns-stub@; do
+  grep -vE '^[[:space:]]*#' "${here}/${_u}.service" | grep -q 'CAP_NET_ADMIN' &&
+    fail "${_u}.service has CAP_NET_ADMIN; pf netgate does the netfilter work of pf dns"
+done
 # pf dns pins each socket to its interface before it binds or connects it.
 # Linux 5.7 and later allow that with no capability. Thus neither pf dns
 # unit has NET_RAW.
@@ -1621,6 +1630,67 @@ grep -q 'pf dns -config /etc/pi-fortress/dns.json' "${unit}" ||
   fail "dns-agent-go.service does not start pf dns from the segment list"
 grep -q '^EnvironmentFile=' "${unit}" &&
   fail "dns-agent-go.service still reads the one-variable-per-flag env file"
+
+# pf netgate holds CAP_NET_ADMIN for pf dns. The agent resolver has a
+# primary group of its own, pf-dnsgate. The DoT stubs run as the same
+# account with the group pf-fortress. netgate opens its socket only to
+# pf-dnsgate and checks the gid of each peer.
+grep -qxF 'Group=pf-dnsgate' "${unit}" || fail "dns-agent-go.service does not run with the group pf-dnsgate"
+grep -qxF 'SupplementaryGroups=pf-fortress' "${unit}" || fail "dns-agent-go.service lost pf-fortress, the group of the shared files"
+grep -qxF 'Group=pf-fortress' "${here}/dns-stub@.service" || fail "dns-stub@.service does not run with the group pf-fortress"
+grep -vE '^[[:space:]]*#' "${here}/dns-stub@.service" | grep -q 'pf-dnsgate' &&
+  fail "dns-stub@.service has the group pf-dnsgate of the agent resolver"
+grep -qE '^(After|Wants)=.*pi-fortress-netgate\.service' "${unit}" || fail "dns-agent-go.service does not want netgate"
+[[ "$(grep -cE '^(After|Wants)=.*pi-fortress-netgate\.service' "${unit}")" -eq 2 ]] ||
+  fail "dns-agent-go.service needs both Wants= and After= on netgate"
+grep -qF 'getent group pf-dnsgate >/dev/null || groupadd --system pf-dnsgate' "${apply}" ||
+  fail "apply.sh does not create the pf-dnsgate group"
+grep -qE 'usermod .*pf-dnsgate' "${apply}" &&
+  fail "apply.sh puts an account in pf-dnsgate; each unit of that account would get the group"
+grep -qxF '    useradd --system --no-create-home --gid nogroup --home /nonexistent --shell /usr/sbin/nologin pf-netgate' "${apply}" ||
+  fail "apply.sh does not make the pf-netgate account with no login and no daemon group"
+ng="${here}/netgate.service"
+[[ -f "${ng}" ]] || fail "vm/pi/netgate.service is missing"
+for _l in \
+  'User=pf-netgate' 'Group=nogroup' 'SupplementaryGroups=pf-dnsgate pf-ctgate' 'UMask=0077' \
+  'RuntimeDirectory=pi-fortress-netgate' 'RuntimeDirectoryMode=0755' \
+  'CapabilityBoundingSet=CAP_NET_ADMIN' 'AmbientCapabilities=CAP_NET_ADMIN' \
+  'RestrictAddressFamilies=AF_UNIX AF_NETLINK' \
+  'ExecStart=/usr/local/sbin/pf netgate run -config /etc/pi-fortress/dns.json' \
+  'Restart=always' 'NoNewPrivileges=yes' 'ProtectSystem=strict' 'ProtectHome=yes' 'PrivateTmp=yes' \
+  'PrivateDevices=yes' 'ProtectKernelTunables=yes' 'ProtectKernelModules=yes' 'ProtectKernelLogs=yes' \
+  'ProtectControlGroups=yes' 'ProtectClock=yes' 'ProtectHostname=yes' 'ProtectProc=invisible' \
+  'RestrictNamespaces=yes' 'RestrictRealtime=yes' 'RestrictSUIDSGID=yes' 'LockPersonality=yes' \
+  'MemoryDenyWriteExecute=yes' 'SystemCallArchitectures=native' 'SystemCallFilter=@system-service' \
+  'SystemCallFilter=~@privileged' 'SystemCallFilter=@chown' 'ReadWritePaths=' \
+  'Before=pi-fortress-dns-agent-go.service pi-fortress-observe.service'; do
+  grep -qxF "${_l}" "${ng}" || fail "netgate.service has no '${_l}'"
+done
+# The one daemon with NET_ADMIN for pf dns reads no log, no state, no claim
+# code, no webhook URL and no house reservation.
+for _p in /etc/pi-fortress/broker /var/lib/pi-fortress/engine /var/lib/pi-fortress/www /var/log/pi-fortress \
+  /var/lib/pi-fortress/observe /etc/pi-fortress/alert.url /etc/pi-fortress/house.hosts; do
+  grep -qE "^InaccessiblePaths=(.* )?-${_p}( |\$)" "${ng}" || fail "netgate.service does not hide ${_p}"
+done
+grep -vE '^[[:space:]]*#' "${ng}" | grep -qE 'CAP_(SYS|DAC|CHOWN|SETUID|SETGID|NET_RAW|NET_BIND)' &&
+  fail "netgate.service has a capability other than NET_ADMIN"
+grep -vE '^[[:space:]]*#' "${ng}" | grep -q 'pf-fortress' &&
+  fail "netgate.service is in pf-fortress, the group of the shared logs and state"
+# apply installs and enables netgate, and restarts it after the pf dns
+# stop and before the pf dns restart: it reads the gate sets from the
+# dns.json that this apply wrote.
+grep -qxF 'install -m 0644 "${PI_LIB}/netgate.service" /etc/systemd/system/pi-fortress-netgate.service' "${apply}" ||
+  fail "apply.sh does not install netgate.service"
+grep -qxF 'systemctl enable pi-fortress-netgate.service >/dev/null 2>&1 || true' "${apply}" ||
+  fail "apply.sh does not enable netgate"
+_ngr="$(grep -nxF 'systemctl restart pi-fortress-netgate.service' "${apply}" | head -1 | cut -d: -f1 || true)"
+_dsr="$(grep -nxF 'systemctl restart pi-fortress-dns-agent-go.service' "${apply}" | head -1 | cut -d: -f1 || true)"
+_dss="$(grep -nxF 'systemctl stop pi-fortress-dns-agent-go.service >/dev/null 2>&1 || true' "${apply}" | tail -1 | cut -d: -f1 || true)"
+_djs="$(grep -nxF 'install -m 0644 "${WORKDIR}/dns.json" /etc/pi-fortress/dns.json' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_ngr}" && -n "${_dsr}" && -n "${_dss}" && -n "${_djs}" &&
+  "${_djs}" -lt "${_dss}" && "${_dss}" -lt "${_ngr}" && "${_ngr}" -lt "${_dsr}" ]] ||
+  fail "apply.sh does not restart netgate after dns.json and the pf dns stop, and before the pf dns restart (lines ${_djs:-?} ${_dss:-?} ${_ngr:-?} ${_dsr:-?})"
+grep -qxF "  pi-fortress-netgate.service \\" "${apply}" || fail "netgate is not in units.required"
 
 # The house dnsmasq parses DHCP off the wire from all devices that the
 # house connects. It was the last long-running daemon with no seccomp
@@ -1853,6 +1923,161 @@ grep -qE '^(PrivateDevices|ProtectKernelTunables)=yes' "${here}/usb-nic-switch.s
   fail "usb-nic-switch.service blocks /dev/bus/usb or the writes to /sys"
 grep -qF '/authorized' "${here}/usb-nic-switch.sh" ||
   fail "usb-nic-switch.sh no longer writes /sys; check ProtectKernelTunables of usb-nic-switch.service again"
+
+# The uplink watchdog stays root, as usb-nic-switch does, with no
+# capability: NetworkManager lets root activate a connection with no
+# polkit agent. It talks only D-Bus (AF_UNIX), so it cannot post: pf alert
+# tails its events.jsonl. It writes only its StateDirectory. The record
+# of apply is outside it, so the unit cannot change it.
+_uw="${here}/uplink-watch.service"
+_go_uplink="${here}/../../internal/uplink/uplink.go"
+for _l in Type=oneshot 'ExecStart=/usr/local/sbin/pf uplink watch' NoNewPrivileges=yes 'CapabilityBoundingSet=' \
+  'AmbientCapabilities=' 'RestrictAddressFamilies=AF_UNIX' ProtectSystem=strict ProtectHome=yes PrivateTmp=yes \
+  PrivateDevices=yes ProtectKernelTunables=yes ProtectKernelModules=yes ProtectKernelLogs=yes ProtectControlGroups=yes \
+  ProtectClock=yes ProtectHostname=yes ProtectProc=invisible RestrictNamespaces=yes RestrictRealtime=yes \
+  RestrictSUIDSGID=yes LockPersonality=yes MemoryDenyWriteExecute=yes SystemCallArchitectures=native \
+  SystemCallFilter=@system-service SystemCallFilter=~@privileged SystemCallErrorNumber=EPERM \
+  'StateDirectory=pi-fortress/uplink' \
+  'InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www'; do
+  grep -qxF "${_l}" "${_uw}" || fail "uplink-watch.service has no '${_l}'"
+done
+grep -qE '^(CapabilityBoundingSet|AmbientCapabilities)=.' "${_uw}" &&
+  fail "uplink-watch.service gives a capability; the D-Bus call to NetworkManager needs none"
+grep -qE '^(User|DynamicUser|ReadWritePaths|RuntimeDirectory)=' "${_uw}" &&
+  fail "uplink-watch.service runs as another user or writes outside its StateDirectory"
+grep -q '^ProcSubset=pid' "${_uw}" && fail "uplink-watch.service hides the boot ID that starts its state again"
+for _d in MemoryMax TasksMax; do
+  grep -qE "^${_d}=[0-9]" "${_uw}" || fail "uplink-watch.service has no ${_d}"
+done
+# The unit gives nmcli more time than its --wait.
+_wait="$(sed -n 's/^\tUpWait = \([0-9]*\) \* time\.Second$/\1/p' "${_go_uplink}")"
+_tmo="$(sed -n 's/^TimeoutStartSec=\([0-9]*\)$/\1/p' "${_uw}")"
+[[ -n "${_wait}" && -n "${_tmo}" && "${_tmo}" -gt "${_wait}" ]] ||
+  fail "uplink-watch.service TimeoutStartSec='${_tmo}' is not above the nmcli wait of '${_wait}' s"
+# A check each 30 s, after the first minute of a boot.
+for _l in OnBootSec=1min OnUnitActiveSec=30s 'WantedBy=timers.target'; do
+  grep -qxF "${_l}" "${here}/uplink-watch.timer" || fail "uplink-watch.timer has no '${_l}'"
+done
+# pf, the unit and apply use the same paths.
+grep -qxF '	DefaultRecord = "/var/lib/pi-fortress/uplink.json"' "${_go_uplink}" &&
+  grep -qxF '	DefaultDir = "/var/lib/pi-fortress/uplink"' "${_go_uplink}" ||
+  fail "pf uplink does not use the record and the StateDirectory of uplink-watch.service"
+grep -qF 'UplinkLog:        "/var/lib/pi-fortress/uplink/events.jsonl",' "${here}/../../internal/alert/alert.go" ||
+  fail "pf alert does not tail the events.jsonl of the uplink watchdog"
+# apply: on a full apply only. It gives each path to pf, so that a fake-root
+# apply moves it. It makes events.jsonl, root-owned, before the alert
+# sidecar restarts: the sidecar cannot make it. It records the uplink before
+# it enables the timer. UPLINK_WATCH=0 disables the timer.
+_uw_local="$(grep -n '^if \[\[ "${LOCAL_ONLY}" -eq 1 \]\]; then$' "${apply}" | tail -1 | cut -d: -f1)"
+_uw_rec="$(grep -nxF '  "${PF}" uplink record -dev "${WAN_IF}" -record /var/lib/pi-fortress/uplink.json ||' "${apply}" | head -1 | cut -d: -f1 || true)"
+_uw_ev="$(grep -nxF '  chown root:root /var/lib/pi-fortress/uplink/events.jsonl' "${apply}" | head -1 | cut -d: -f1 || true)"
+_uw_on="$(grep -nF 'systemctl enable --now pi-fortress-uplink-watch.timer' "${apply}" | head -1 | cut -d: -f1 || true)"
+_uw_alert="$(grep -nxF '  systemctl restart pi-fortress-alert.service || true' "${apply}" | tail -1 | cut -d: -f1 || true)"
+[[ -n "${_uw_rec}" && "${_uw_rec}" -gt "${_uw_local}" ]] || fail "apply.sh does not record the uplink connection on a full apply"
+[[ -n "${_uw_on}" && "${_uw_rec}" -lt "${_uw_on}" ]] || fail "apply.sh does not record the uplink before it enables the watchdog"
+[[ -n "${_uw_ev}" && -n "${_uw_alert}" && "${_uw_ev}" -lt "${_uw_alert}" ]] ||
+  fail "apply.sh does not make the uplink events.jsonl before the alert sidecar restarts"
+grep -qxF 'UPLINK_WATCH=1' "${here}/net.env" || fail "net.env does not document UPLINK_WATCH"
+grep -qF "UPLINK_WATCH='\${UPLINK_WATCH}' is not 0 or 1" "${apply}" || fail "apply.sh does not check UPLINK_WATCH"
+grep -qF 'systemctl disable --now pi-fortress-uplink-watch.timer' "${apply}" || fail "UPLINK_WATCH=0 does not disable the watchdog"
+grep -qF '"pi-fortress-uplink-watch.timer"' "${here}/../../internal/admin/admin.go" || fail "the TUI unit list does not show the uplink watchdog"
+grep -qF 'pi-fortress-uplink-watch.timer' "${here}/status.sh" || fail "status.sh does not show the uplink watchdog"
+
+# The kernel module lock. The unit stays root with no capability: the
+# kernel lets uid 0 write the sysctl file. It writes only that file, and
+# has no network.
+_ml="${here}/modlock.service"
+for _l in Type=oneshot 'ExecStart=/sbin/sysctl -w kernel.modules_disabled=1' \
+  'ConditionPathExists=/proc/sys/kernel/modules_disabled' NoNewPrivileges=yes 'CapabilityBoundingSet=' \
+  'AmbientCapabilities=' ProtectKernelTunables=yes 'ReadWritePaths=/proc/sys/kernel/modules_disabled' \
+  PrivateNetwork=yes 'RestrictAddressFamilies=AF_UNIX' ProtectSystem=strict ProtectHome=yes PrivateTmp=yes \
+  PrivateDevices=yes ProtectKernelModules=yes ProtectKernelLogs=yes ProtectControlGroups=yes ProtectClock=yes \
+  ProtectHostname=yes ProtectProc=invisible RestrictNamespaces=yes RestrictRealtime=yes RestrictSUIDSGID=yes \
+  LockPersonality=yes MemoryDenyWriteExecute=yes SystemCallArchitectures=native SystemCallFilter=@system-service \
+  SystemCallFilter=~@privileged SystemCallErrorNumber=EPERM \
+  'InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www'; do
+  grep -qxF "${_l}" "${_ml}" || fail "modlock.service has no '${_l}'"
+done
+grep -qE '^(CapabilityBoundingSet|AmbientCapabilities)=.' "${_ml}" &&
+  fail "modlock.service gives a capability; the sysctl write of uid 0 needs none"
+grep -qE '^(User|DynamicUser|StateDirectory|RuntimeDirectory|ProcSubset)=' "${_ml}" &&
+  fail "modlock.service runs as another user, writes a directory, or hides /proc/sys"
+[[ "$(grep -c '^ReadWritePaths=' "${_ml}")" == 1 ]] || fail "modlock.service writes more than modules_disabled"
+for _d in MemoryMax TasksMax; do
+  grep -qE "^${_d}=[0-9]" "${_ml}" || fail "modlock.service has no ${_d}"
+done
+# One time in each boot, 10 minutes after it.
+for _l in OnBootSec=10min 'WantedBy=timers.target'; do
+  grep -qxF "${_l}" "${here}/modlock.timer" || fail "modlock.timer has no '${_l}'"
+done
+grep -qE '^(OnUnitActiveSec|OnUnitInactiveSec|OnCalendar|OnActiveSec|OnStartupSec)=' "${here}/modlock.timer" &&
+  fail "modlock.timer fires more than one time in a boot"
+# apply: on a full apply only, as its last unit step: on a box that is up
+# for more than 10 minutes, the lock comes when apply enables the timer.
+# MODULE_LOCK=0 disables the timer.
+_ml_on="$(grep -nF 'systemctl enable --now pi-fortress-modlock.timer' "${apply}" | head -1 | cut -d: -f1 || true)"
+_ml_list="$(grep -nF 'install -m 0644 "${WORKDIR}/pi-fortress-modlock.conf" /etc/modules-load.d/pi-fortress-modlock.conf' "${apply}" | head -1 | cut -d: -f1 || true)"
+_ml_last="$(grep -nE 'systemctl (enable|restart|start)' "${apply}" | tail -1 | cut -d: -f1 || true)"
+[[ -n "${_ml_on}" && "${_ml_on}" -gt "${_uw_local}" ]] || fail "apply.sh does not enable the module lock timer on a full apply"
+[[ -n "${_ml_list}" && "${_ml_list}" -lt "${_ml_on}" ]] || fail "apply.sh does not write the module list before it enables the lock"
+[[ "${_ml_on}" == "${_ml_last}" ]] || fail "apply.sh enables or restarts a unit after the module lock timer (line ${_ml_last})"
+grep -qxF 'MODULE_LOCK=1' "${here}/net.env" || fail "net.env does not document MODULE_LOCK"
+grep -qF "MODULE_LOCK='\${MODULE_LOCK}' is not 0 or 1" "${apply}" || fail "apply.sh does not check MODULE_LOCK"
+grep -qF 'systemctl disable --now pi-fortress-modlock.timer' "${apply}" || fail "MODULE_LOCK=0 does not disable the module lock"
+grep -qF 'pi-fortress-modlock.timer' "${here}/status.sh" && grep -qF 'modules locked: ' "${here}/status.sh" ||
+  fail "status.sh does not show the module lock"
+grep -qF 'PID 1 has CAP_SYS_RAWIO: ' "${here}/status.sh" || fail "status.sh does not show CAP_SYS_RAWIO of PID 1"
+grep -qF 'ModulesDisabledPath = "/proc/sys/kernel/modules_disabled"' "${here}/../../internal/admin/kernel.go" ||
+  fail "the TUI does not read the module lock"
+
+# The module list (MODLOCK_LIST in apply.sh). After the lock, a rule that
+# needs a module that is not loaded cannot load. Thus each expression with
+# its own module that render emits in the rulesets above must have that
+# module in the list. An expression with a module that the list does not
+# know fails here, so that a new one gets its module too.
+eval "$(sed -n '/^MODLOCK_LIST=(/,/)$/p' "${apply}")"
+[[ "${#MODLOCK_LIST[@]}" -gt 10 ]] || fail "apply.sh has no MODLOCK_LIST"
+grep -hv '^[[:space:]]*#' "${tmp}"/*.nft >"${tmp}/all-renders.nft"
+grep -qF 'masquerade' "${tmp}/all-renders.nft" && grep -qF 'ct count' "${tmp}/all-renders.nft" ||
+  fail "the renders above are gone; the module list check would prove nothing"
+_W='(^|[^A-Za-z0-9_@."-])'
+_seen=0
+while IFS=% read -r _re _mods; do
+  grep -qE "${_re}" "${tmp}/all-renders.nft" || continue
+  _seen=$((_seen + 1))
+  for _m in ${_mods}; do
+    [[ " ${MODLOCK_LIST[*]} " == *" ${_m} "* ]] || fail "render emits '${_re}', but MODLOCK_LIST in apply.sh has no ${_m}"
+  done
+done <<EOF
+${_W}(ct (state|status|mark|direction|zone|helper|original|reply|expiration|label|event)|notrack)( |\$)%nft_ct
+${_W}ct count( |\$)%nft_connlimit
+${_W}limit rate( |\$)%nft_limit
+${_W}log( |\$)%nft_log nf_log_syslog
+${_W}reject( |\$)%nft_reject_inet
+${_W}(dnat|snat)( |\$)%nft_nat
+${_W}masquerade( |\$)%nft_masq
+${_W}redirect( |\$)%nft_redir
+${_W}type nat hook%nft_chain_nat
+${_W}queue( |\$)%nft_queue
+${_W}fib( |\$)%nft_fib_inet
+EOF
+[[ "${_seen}" -ge 10 ]] || fail "only ${_seen} of the expressions with a module are in the renders above; the module list check proves little"
+if _new="$(grep -oE "${_W}(quota|numgen|jhash|symhash|tproxy|synproxy|osf|xfrm|dup to|fwd to|socket (transparent|mark|wildcard|cgroupv2)|ct (timeout|expectation)|flow (add|offload)|tunnel)( |\$)" "${tmp}/all-renders.nft" | sort -u | tr '\n' ' ')" && [[ -n "${_new}" ]]; then
+  fail "render emits an expression with its own kernel module (${_new}); add the module to MODLOCK_LIST in apply.sh and to this check"
+fi
+grep -qF 'MODLOCK_LIST+=(wireguard)' "${apply}" || fail "apply.sh does not load wireguard before the lock on a box with a tunnel"
+grep -qF 'MODLOCK_LIST+=(8021q)' "${apply}" || fail "apply.sh does not load 8021q before the lock on a box with a VLAN"
+# A typo in a name makes systemd-modules-load fail at each boot. When this
+# host has the module index of its kernel, each name must be in it.
+_kmods="/lib/modules/$(uname -r)"
+if [[ -r "${_kmods}/modules.dep" ]]; then
+  for _m in "${MODLOCK_LIST[@]}" wireguard 8021q nf_conntrack; do
+    grep -qE "(^|/)${_m}\.ko(\.[a-z]+)?:" "${_kmods}/modules.dep" || grep -qsE "/${_m}\.ko\$" "${_kmods}/modules.builtin" ||
+      fail "MODLOCK_LIST names ${_m}, which the kernel of this host does not have"
+  done
+else
+  echo "apply_test: no ${_kmods}/modules.dep; the module names are not checked against a kernel" >&2
+fi
 
 # git_push.allow (docs/git_push.md): the Pi owns it. apply installs or
 # removes it. A change restarts the fence. The broker points at it.
@@ -2097,6 +2322,56 @@ rm -f "${croot}/cmdline.txt"
 cl_run >/dev/null || fail "harden_cmdline failed with no cmdline.txt (a lab VM)"
 grep -qF 'HARDEN_CMDLINE=/boot/firmware/cmdline.txt HARDEN_REBOOT_FLAG=/var/run/reboot-required harden_cmdline' "${here}/provision.sh" ||
   fail "provision.sh does not add the memory cgroup and PSI to the kernel command line"
+
+# PID 1 drops CAP_SYS_RAWIO (harden_rawio). The file applies when PID 1
+# starts, so a new or changed file flags a reboot through the flag that
+# pf doctor and pf alert updates read, with pi-fortress in its .pkgs.
+rroot="${tmp}/rawioroot"
+mkdir -p "${rroot}/work" "${rroot}/run" "${rroot}/bin"
+# Only these host tools, and no systemctl: only a boot applies the file.
+for _c in cmp install grep mkdir touch; do
+  ln -s "$(type -P "${_c}")" "${rroot}/bin/${_c}"
+done
+rw_run() {
+  (
+    # shellcheck source=lib/harden.sh
+    source "${here}/lib/harden.sh"
+    HARDEN_SYSTEM_CONF_D="${rroot}/system.conf.d" HARDEN_REBOOT_FLAG="${rroot}/run/reboot-required"
+    HARDEN_WORK="${rroot}/work"
+    PATH="${rroot}/bin"
+    harden_rawio
+  )
+}
+_rconf="${rroot}/system.conf.d/50-pi-fortress.conf"
+printf 'linux-image-rpi-2712\n' >"${rroot}/run/reboot-required.pkgs"
+rw_run >"${rroot}/out" 2>&1 || fail "harden_rawio failed: $(cat "${rroot}/out")"
+[[ "$(grep -v '^#' "${_rconf}")" == $'[Manager]\nCapabilityBoundingSet=~CAP_SYS_RAWIO' ]] ||
+  fail "50-pi-fortress.conf is not [Manager] CapabilityBoundingSet=~CAP_SYS_RAWIO: $(cat "${_rconf}")"
+[[ -e "${rroot}/run/reboot-required" ]] || fail "a new 50-pi-fortress.conf did not flag a reboot"
+[[ "$(cat "${rroot}/run/reboot-required.pkgs")" == $'linux-image-rpi-2712\npi-fortress' ]] ||
+  fail "the reboot flag lost a package or did not name pi-fortress: $(cat "${rroot}/run/reboot-required.pkgs")"
+grep -q 'a reboot waits' "${rroot}/out" || fail "harden_rawio did not say that a reboot waits"
+grep -q 'command not found' "${rroot}/out" && fail "harden_rawio ran a tool that it does not need: $(cat "${rroot}/out")"
+# The same file again: no flag, no line, no second name.
+rm -f "${rroot}/run/reboot-required"
+rw_run >"${rroot}/out" 2>&1
+[[ ! -e "${rroot}/run/reboot-required" && ! -s "${rroot}/out" ]] || fail "an unchanged 50-pi-fortress.conf flagged a reboot again"
+# A changed file (an edit by hand) is written again and flags a reboot, but
+# names pi-fortress only one time. A flag directory that is gone comes back.
+echo 'CapabilityBoundingSet=' >>"${_rconf}"
+rm -rf "${rroot}/run"
+rw_run >/dev/null 2>&1 || fail "harden_rawio failed with no flag directory"
+[[ -e "${rroot}/run/reboot-required" ]] || fail "a changed 50-pi-fortress.conf did not flag a reboot"
+rw_run >/dev/null 2>&1
+echo 'CapabilityBoundingSet=' >>"${_rconf}"
+rw_run >/dev/null 2>&1
+[[ "$(grep -cx pi-fortress "${rroot}/run/reboot-required.pkgs")" == 1 ]] || fail "harden_rawio named pi-fortress more than one time"
+grep -qx 'CapabilityBoundingSet=' "${_rconf}" && fail "harden_rawio kept a line that an operator added"
+_at="$(grep -n '^harden_rawio$' "${apply}" | head -1 | cut -d: -f1)"
+[[ -n "${_at}" && "${_at}" -gt "${_local_exit}" ]] || fail "apply.sh does not run harden_rawio on a full apply"
+grep -qxF 'HARDEN_REBOOT_FLAG=/var/run/reboot-required' "${apply}" || fail "apply.sh does not give harden_rawio the reboot flag of pf doctor"
+grep -qF 'Flag:      "/var/run/reboot-required",' "${here}/../../internal/doctor/reboot.go" ||
+  fail "pf doctor no longer reads /var/run/reboot-required; harden_rawio flags a reboot nobody reads"
 
 # Key-only SSH (harden_ssh). The sshd stub passes -t unless sshd.bad
 # exists, and prints sshd.T for -T. The ssh-keygen stub takes a file
@@ -2913,6 +3188,18 @@ done
 printf '\tEGRESS =\t"strict"\n' >"${tmp}/seg2.env"
 _got="$(eval "${_sv}"; seg_val "${tmp}/seg2.env" EGRESS)"
 [[ "${_got}" == strict ]] || fail "status.sh seg_val EGRESS gives '${_got}' for '<tab>EGRESS =<tab>\"strict\"', not 'strict'"
+# status.sh prints the feed report through a filter that keeps only TAB,
+# newline and printable ASCII. ESC, BEL, CR and bytes above 0x7e go.
+_pf="$(grep -E '^printable_file\(\) \{' "${here}/status.sh" || true)"
+[[ -n "${_pf}" ]] || fail "status.sh has no one-line printable_file"
+printf 'OK a: 1 ips\nFAIL b: x\033]0;t\007y\033[31mz\r\nWARN c:\tk\303\251\n' >"${tmp}/feed.report"
+_got="$(eval "${_pf}"; printable_file "${tmp}/feed.report")"
+[[ "${_got}" == $'OK a: 1 ips\nFAIL b: x]0;ty[31mz\nWARN c:\tk' ]] ||
+  fail "status.sh printable_file gives $(printf '%q' "${_got}")"
+grep -qF 'printable_file "${P}/generated/fetch.report"' "${here}/status.sh" ||
+  fail "status.sh prints the feed report without printable_file"
+grep -qE '^ *cat "\$\{P\}/generated/' "${here}/status.sh" &&
+  fail "status.sh prints a generated file with a plain cat"
 grep -qF 'pi-fortress-dns-stub@house.service' "${apply}" \
   || fail "apply.sh never manages the house stub instance"
 
@@ -3118,11 +3405,17 @@ else
   # it. nft answers the two listings that the carry reads with one live element.
   # NFT_FAIL names a call that must fail: the run that proves that a refused
   # carry never fails the apply uses it.
+  # NFT_FAIL_CHECK makes the kernel check (-c) fail as it does when a rule
+  # needs a module that the kernel cannot load.
   cat >"${lstub}/nft" <<'EOF'
 #!/bin/sh
 printf 'argv: %s\n' "$*" >>"${NFT_LOG}"
 if [ -n "${NFT_FAIL:-}" ] && [ "$*" = "${NFT_FAIL}" ]; then
   echo "nft: refused on purpose" >&2
+  exit 1
+fi
+if [ -n "${NFT_FAIL_CHECK:-}" ] && [ "$1" = -c ]; then
+  echo "Error: Could not process rule: No such file or directory" >&2
   exit 1
 fi
 case "$*" in
@@ -3137,6 +3430,8 @@ esac
 exit 0
 EOF
   printf '#!/bin/sh\necho "2: lo    inet 10.77.0.1/24"\n' >"${lstub}/ip"
+  # modprobe records each call in MODPROBE_LOG, when the run names one.
+  printf '#!/bin/sh\n[ -z "${MODPROBE_LOG:-}" ] || printf "%%s\\n" "$*" >>"${MODPROBE_LOG}"\nexit 0\n' >"${lstub}/modprobe"
   # The stub records each unit action. Thus the test can ask what apply
   # decided to restart, and need not infer it. is-active answers yes: the
   # restart predicate is for a box whose fence is already up.
@@ -3226,6 +3521,12 @@ EOF
   _dstart="$(grep -n '^restart pi-fortress-dns-agent-go.service$' "${lab2}.systemctl" | head -1 | cut -d: -f1 || true)"
   [[ -n "${_dstop}" && -n "${_dstart}" && "${_dstop}" -lt "${_dstart}" ]] ||
     fail "apply does not stop pf dns before the policy flush and start it after"
+  # netgate restarts in that gap: it reads the gate sets of the new
+  # dns.json before pf dns asks it for a write.
+  _ngstart="$(grep -n '^restart pi-fortress-netgate.service$' "${lab2}.systemctl" | head -1 | cut -d: -f1 || true)"
+  [[ -n "${_ngstart}" && "${_dstop}" -lt "${_ngstart}" && "${_ngstart}" -lt "${_dstart}" ]] ||
+    fail "apply does not restart netgate between the pf dns stop and its start: $(grep -n 'netgate\|dns-agent-go' "${lab2}.systemctl" | tr '\n' ' ')"
+  [[ -f "${lab2}/etc/systemd/system/pi-fortress-netgate.service" ]] || fail "apply --local did not install netgate.service"
   local_apply "${lab2}" "${lab2}/vagrant/vm/pi/apply.sh"
   grep -q '^stdin: flush set' "${lab2}.nft" &&
     fail "an apply with the same DNS policy flushed a resolved set: $(grep '^stdin: flush' "${lab2}.nft")"
@@ -3373,6 +3674,47 @@ EOF
   grep -q 'could not put the resolved addresses back' "${app2}.log" ||
     fail "a refused carry passed in silence: $(tail -5 "${app2}.log")"
 
+  # The module list of the lock. A box with no house and no VLAN gets the
+  # base list, and apply loads it now while the lock is off.
+  _mlconf="${app2}/etc/modules-load.d/pi-fortress-modlock.conf"
+  grep -v '^#' "${_mlconf}" >"${tmp}/modlock.list" || fail "apply --local wrote no ${_mlconf##*/}"
+  for _m in nf_tables nft_ct nft_connlimit nft_limit nft_log nf_log_syslog nft_reject_inet nft_nat nft_masq \
+    nft_redir nft_chain_nat nft_queue nft_fib_inet nfnetlink_queue nf_conntrack_netlink; do
+    grep -qx "${_m}" "${tmp}/modlock.list" || fail "${_mlconf##*/} has no ${_m}"
+  done
+  grep -qx wireguard "${tmp}/modlock.list" && fail "a box with no tunnel loads wireguard"
+  [[ "${lwan}" == *.* ]] || ! grep -qx 8021q "${tmp}/modlock.list" || fail "a box with no VLAN loads 8021q"
+  # kernel.modules_disabled through PF_MODULES_DISABLED: off, then on.
+  _mlrun() {
+    : >"${app2}.nft"
+    : >"${app2}.modprobe"
+    PATH="${lstub}:${lsafe}" PF_ALLOW_ANY_HOST=1 PF_INT_IF=lo PF_WAN_IF="${lwan}" SYSTEMCTL_LOG="${app2}.systemctl" \
+      NFT_LOG="${app2}.nft" MODPROBE_LOG="${app2}.modprobe" PF_MODULES_DISABLED="${tmp}/modules_disabled" \
+      NFT_FAIL_CHECK="${1}" bash "${app2}/usr/local/lib/pi-fortress/apply.sh" --local >"${app2}.lock.log" 2>&1
+  }
+  echo 0 >"${tmp}/modules_disabled"
+  _mlrun '' || fail "apply --local failed with the lock off: $(tail -5 "${app2}.lock.log")"
+  grep -qxF -e "-a $(grep -v '^#' "${_mlconf}" | tr '\n' ' ' | sed 's/ $//')" "${app2}.modprobe" ||
+    fail "apply did not load the module list while the lock is off: $(cat "${app2}.modprobe")"
+  echo 1 >"${tmp}/modules_disabled"
+  _mlrun '' || fail "apply --local failed with the lock on: $(tail -5 "${app2}.lock.log")"
+  grep -q '^-a ' "${app2}.modprobe" && fail "apply tried to load the module list after the lock"
+  grep -qF 'kernel modules are locked (pi-fortress-modlock); a reboot loads' "${app2}.lock.log" &&
+    fail "a ruleset that passed its check got the lock line"
+  # A check that the kernel refuses: with the lock on, apply says why, and
+  # it never loads the ruleset. With the lock off, it does not blame the lock.
+  if _mlrun 1; then
+    fail "apply --local passed a ruleset that the kernel check refused"
+  fi
+  grep -qF 'kernel modules are locked (pi-fortress-modlock); a reboot loads the new ones, or set MODULE_LOCK=0' "${app2}.lock.log" ||
+    fail "a refused check with the lock on does not name the lock: $(tail -5 "${app2}.lock.log")"
+  grep -qE '^argv: -f /' "${app2}.nft" && fail "apply loaded the ruleset after the kernel check refused it"
+  echo 0 >"${tmp}/modules_disabled"
+  if _mlrun 1; then
+    fail "apply --local passed a ruleset that the kernel check refused (lock off)"
+  fi
+  grep -qF 'kernel modules are locked' "${app2}.lock.log" && fail "a refused check with the lock off names the lock"
+
   # The same-file box: core.hosts.local is next to core.hosts in
   # /etc/pi-fortress, and core.hosts is both the source and the installed
   # copy. The local part is replaced in place, never stacked. It is removed
@@ -3424,9 +3766,11 @@ EOF
   # A refresh that also finds a change to another fence input restarts
   # the fence, as --local does, and records the fence state. If not, the
   # broker stays on the old core.hosts while the ruleset is new.
-  # The pf of this root is a wrapper. Its fetch writes FAKE_FEED as the
-  # feed output and never goes to the network. All other commands go to
-  # the real pf.
+  # The pf of this root is a wrapper. Its feeds run (the download unit and
+  # the import) writes FAKE_FEED as the list, or fails with FAKE_FEED_FAIL,
+  # and never goes to the network. It records each call. A pf fetch call
+  # leaves a mark: apply must not download as root. All other commands go
+  # to the real pf.
   ref="${tmp}/lroot3"
   mkdir -p "${ref}/etc/pi-fortress" "${ref}/usr/local/lib/pi-fortress" "${ref}/usr/local/sbin" \
     "${ref}/etc/systemd/system"
@@ -3437,8 +3781,14 @@ EOF
   cat >"${ref}/usr/local/lib/pi-fortress/pf" <<EOF
 #!/bin/bash
 if [[ "\$1" == fetch ]]; then
-  while [[ \$# -gt 0 && "\$1" != --out ]]; do shift; done
-  printf '%s\n' "\${FAKE_FEED:?}" >"\$2/blacklist.domains"
+  : >"${ref}.rootfetch"
+  exit 1
+fi
+if [[ "\$1" == feeds ]]; then
+  printf '%s\n' "\$*" >>"${ref}.feeds"
+  [[ -z "\${FAKE_FEED_FAIL:-}" ]] || exit 1
+  while [[ \$# -gt 0 && "\$1" != --policy ]]; do shift; done
+  printf '%s\n' "\${FAKE_FEED:?}" >"\$2/generated/blacklist.domains"
   exit 0
 fi
 exec "${tmp}/pf-real" "\$@"
@@ -3450,6 +3800,7 @@ EOF
   export FAKE_FEED='feed-a.example'
   local_apply "${ref}" "${_rapply}"
   _restarted "${ref}" broker || fail "refresh setup: the first --local did not start the fence"
+  [[ ! -s "${ref}.feeds" ]] || fail "apply --local ran the feed download: $(cat "${ref}.feeds")"
   # The list alone changes.
   FAKE_FEED='feed-b.example'
   local_apply "${ref}" "${_rapply}" --refresh
@@ -3460,6 +3811,24 @@ EOF
   fi
   grep -q 'fence keeps the old name list' "${ref}.log" ||
     fail "a list-only --refresh did not say that the fence keeps the old list: $(tail -3 "${ref}.log")"
+  # The refresh gets the lists through pf feeds run, with no copy reuse,
+  # after feeds_prepare put the unit and its uplink drop-in in place.
+  [[ "$(cat "${ref}.feeds")" == "feeds run --policy ${ref}/etc/pi-fortress --fresh 0" ]] ||
+    fail "a --refresh called pf feeds as: $(cat "${ref}.feeds")"
+  cmp -s "${here}/feeds.service" "${ref}/etc/systemd/system/pi-fortress-feeds.service" ||
+    fail "a --refresh did not install pi-fortress-feeds.service"
+  grep -qxF "RestrictNetworkInterfaces=lo ${lwan}" "${ref}/etc/systemd/system/pi-fortress-feeds.service.d/uplink.conf" ||
+    fail "the feed download is not limited to lo and the uplink ${lwan}"
+  [[ -d "${ref}/var/lib/pi-fortress/feeds-in" ]] || fail "a --refresh did not make the input directory of the download"
+  # A failed download keeps the lists: apply compiles from the last ones.
+  export FAKE_FEED_FAIL=1
+  local_apply "${ref}" "${_rapply}" --refresh
+  unset FAKE_FEED_FAIL
+  grep -q 'feed fetch failed; compiling from the last generated lists' "${ref}.log" ||
+    fail "a --refresh with a failed download did not say that it keeps the lists"
+  grep -q 'feed-b.example' "${ref}/etc/pi-fortress/blocked-domains.conf" ||
+    fail "a --refresh with a failed download lost the last list"
+  [[ ! -e "${ref}.rootfetch" ]] || fail "apply ran pf fetch as root"
   # The list and core.hosts.local change.
   FAKE_FEED='feed-c.example'
   printf '%s\n' 'gitlab.com GITLAB_TOKEN:PRIVATE-TOKEN' >"${ref}/etc/pi-fortress/core.hosts.local"
@@ -3559,7 +3928,8 @@ grep -qE '^InaccessiblePaths=(.* )?-/var/lib/pi-fortress/www( |$)' "${here}/pf-e
 for _u in "${here}"/*.service; do
   [[ "$(basename "${_u}")" == www.service ]] && continue
   grep -qE '^(User=|DynamicUser=yes)' "${_u}" || continue
-  grep -qE '^InaccessiblePaths=(.* )?-/var/lib/pi-fortress/www( |$)' "${_u}" ||
+  # An empty tmpfs over all of /var/lib/pi-fortress also hides it.
+  grep -qE '^(InaccessiblePaths=(.* )?-/var/lib/pi-fortress/www( |$)|TemporaryFileSystem=/var/lib/pi-fortress(:ro)?$)' "${_u}" ||
     fail "$(basename "${_u}") can read the claim codes in /var/lib/pi-fortress/www"
 done
 # The engine and www read no log, no observe state, no webhook URL and no
@@ -3605,15 +3975,33 @@ _start="$(grep -nE 'systemctl (restart|start|enable --now) ' "${apply}" | head -
   fail "observe.service must write only its state directory and the logs"
 [[ "$(grep '^ReadWritePaths=' "${here}/alert.service")" == "ReadWritePaths=-/var/lib/pi-fortress/alert.offset -/var/lib/pi-fortress/alert-notice.offset -/var/lib/pi-fortress/alert.last" ]] ||
   fail "alert.service must write only its three state files"
-# observe runs as its own account, with NET_ADMIN only (the conntrack
-# dump). It reads the leases through pf-leases, not through a DAC
-# capability.
-for _l in User=pf-observe Group=pf-fortress 'SupplementaryGroups=systemd-journal pf-leases' \
-  CapabilityBoundingSet=CAP_NET_ADMIN AmbientCapabilities=CAP_NET_ADMIN; do
+# observe runs as its own account, with no capability. pf netgate runs
+# the conntrack dump for it, on a socket of the group pf-ctgate, which
+# only observe has. It reads the leases through pf-leases, not through a
+# DAC capability.
+for _l in User=pf-observe Group=pf-fortress 'SupplementaryGroups=systemd-journal pf-leases pf-ctgate' \
+  CapabilityBoundingSet= AmbientCapabilities=; do
   grep -qxF "${_l}" "${here}/observe.service" || fail "observe.service has no '${_l}'"
 done
 grep -q '^\(CapabilityBoundingSet\|AmbientCapabilities\)=.*DAC_' "${here}/observe.service" &&
   fail "observe.service has a DAC capability"
+grep -vE '^[[:space:]]*#' "${here}/observe.service" | grep -q 'CAP_NET_ADMIN' &&
+  fail "observe.service has CAP_NET_ADMIN; pf netgate runs the conntrack dump for it"
+[[ "$(grep -cE '^(After|Wants)=.*pi-fortress-netgate\.service' "${here}/observe.service")" -eq 2 ]] ||
+  fail "observe.service needs both Wants= and After= on netgate"
+grep -qxF '  getent group pf-ctgate >/dev/null || groupadd --system pf-ctgate' "${apply}" ||
+  fail "apply.sh does not make the pf-ctgate group"
+grep -qE 'usermod .*pf-ctgate' "${apply}" && fail "apply.sh puts an account in pf-ctgate"
+# Each group of a netgate socket is in its client unit and in netgate,
+# and in no other unit.
+for _u in "${here}"/*.service; do
+  _n="$(basename "${_u}")"
+  _body="$(grep -vE '^[[:space:]]*#' "${_u}")"
+  [[ "${_n}" != dns-agent-go.service && "${_n}" != netgate.service ]] && grep -q 'pf-dnsgate' <<<"${_body}" &&
+    fail "${_n} has pf-dnsgate, the group of the netgate socket of the agent resolver"
+  [[ "${_n}" != observe.service && "${_n}" != netgate.service ]] && grep -q 'pf-ctgate' <<<"${_body}" &&
+    fail "${_n} has pf-ctgate, the group of the netgate socket of observe"
+done
 grep -qxF '    useradd --system --no-create-home --gid pf-fortress --home /nonexistent --shell /usr/sbin/nologin pf-observe' "${apply}" ||
   fail "apply.sh does not make the pf-observe account"
 grep -qxF '  getent group pf-leases >/dev/null || groupadd --system pf-leases' "${apply}" ||
@@ -3724,13 +4112,111 @@ _start="$(grep -nF 'systemctl restart pi-fortress-observe' "${here}/provision.sh
   fi
 )
 
+# The feed download (feeds.service): pf fetch as pf-feeds with no
+# capability. Its view has its state directory, the inputs of root and the
+# system files of DNS and TLS. No policy tree, no log, no other part of
+# /var/lib/pi-fortress. It uses only IP sockets.
+_fu="${here}/feeds.service"
+for _l in Type=oneshot User=pf-feeds Group=pf-feeds CapabilityBoundingSet= NoNewPrivileges=yes \
+  ProtectProc=invisible ProcSubset=pid 'RestrictAddressFamilies=AF_INET AF_INET6' ProtectSystem=strict \
+  ProtectHome=yes PrivateTmp=yes PrivateDevices=yes RestrictSUIDSGID=yes ProtectKernelTunables=yes \
+  StateDirectory=pi-fortress-feeds StateDirectoryMode=0700 UMask=0077 \
+  TemporaryFileSystem=/var/lib/pi-fortress:ro BindReadOnlyPaths=/var/lib/pi-fortress/feeds-in \
+  'IPAddressDeny=link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7' \
+  'InaccessiblePaths=-/etc/pi-fortress -/var/log/pi-fortress -/opt/pi-fortress -/vagrant -/etc/nftables.conf -/usr/local/lib/pi-fortress'; do
+  grep -qxF "${_l}" "${_fu}" || fail "feeds.service has no '${_l}'"
+done
+grep -qxF 'ExecStart=/usr/local/sbin/pf fetch --request /var/lib/pi-fortress/feeds-in/request --policy /var/lib/pi-fortress/feeds-in --out /var/lib/pi-fortress-feeds/stage --cache /var/lib/pi-fortress-feeds/cache --seed /var/lib/pi-fortress/feeds-in/seed' "${_fu}" ||
+  fail "feeds.service does not run pf fetch in stage mode on the fixed paths"
+grep -qE '^AmbientCapabilities=.' "${_fu}" && fail "feeds.service gives a capability"
+# Loopback (the resolver stub) and public addresses only: the allow list
+# wins over the deny list, so it must hold loopback and nothing more.
+[[ "$(grep '^IPAddressAllow=' "${_fu}")" == "IPAddressAllow=localhost" ]] ||
+  fail "feeds.service allows more than loopback past its address deny list"
+[[ "$(grep -c '^IPAddressDeny=' "${_fu}")" == 1 ]] || fail "feeds.service has more than one IPAddressDeny line"
+# pf feeds run starts this unit from the refresh, a ship and a first boot,
+# and waits. An order on a pi-fortress unit would wait for itself.
+grep -qE '^(After|Before|Requires|Requisite|BindsTo|PartOf|Wants)=.*pi-fortress' "${_fu}" &&
+  fail "feeds.service orders on a pi-fortress unit"
+(($(_oom feeds) > $(_oom fetch))) || fail "the OOM killer does not take the feed download before the refresh"
+
+# feeds_prepare (lib/feeds.sh) in a temp root: the account, the unit, the
+# input directory, and the drop-in that keeps the unit on lo and the
+# uplink. A second run with the same value reloads nothing. A value that
+# is not an interface name changes nothing.
+_fr="${tmp}/feeds-root"
+mkdir -p "${_fr}/units" "${_fr}/bin"
+for _c in getent id; do
+  printf '#!/bin/sh\necho "%s $*" >>"%s/calls"\nexit 2\n' "${_c}" "${_fr}" >"${_fr}/bin/${_c}"
+done
+for _c in groupadd useradd systemctl; do
+  printf '#!/bin/sh\necho "%s $*" >>"%s/calls"\nexit 0\n' "${_c}" "${_fr}" >"${_fr}/bin/${_c}"
+done
+chmod 0755 "${_fr}"/bin/*
+printf 'nameserver 127.0.0.1\noptions timeout:2\n' >"${_fr}/resolv.conf"
+_fp() {
+  PATH="${_fr}/bin:${PATH}" FEEDS_UNITS="${_fr}/units" FEEDS_IN="${_fr}/feeds-in" FEEDS_RESOLV="${_fr}/resolv.conf" \
+    bash -c 'set -euo pipefail; source "$1"; shift; feeds_prepare "$@"' _ "${here}/lib/feeds.sh" "${_fu}" "$@"
+}
+_drop="${_fr}/units/pi-fortress-feeds.service.d/uplink.conf"
+_fp eth0 >/dev/null 2>&1 || fail "feeds_prepare eth0 failed"
+cmp -s "${_fu}" "${_fr}/units/pi-fortress-feeds.service" || fail "feeds_prepare did not install feeds.service"
+[[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth0' ]] ||
+  fail "feeds_prepare wrote the drop-in $(printf '%q' "$(cat "${_drop}")")"
+[[ -d "${_fr}/feeds-in" ]] || fail "feeds_prepare did not make the input directory"
+grep -qxF 'useradd --system --no-create-home --gid pf-feeds --home /nonexistent --shell /usr/sbin/nologin pf-feeds' "${_fr}/calls" ||
+  fail "feeds_prepare did not add the account pf-feeds"
+[[ "$(grep -c '^systemctl daemon-reload$' "${_fr}/calls")" == 1 ]] || fail "feeds_prepare did not reload systemd one time"
+: >"${_fr}/calls"
+# A second argument (the WireGuard interface of an earlier apply.sh) does
+# not go into the drop-in.
+_fp eth0 wg0 >/dev/null 2>&1 || fail "a second feeds_prepare failed"
+grep -q 'daemon-reload' "${_fr}/calls" && fail "feeds_prepare reloads systemd with no change"
+grep -q 'wg0' "${_drop}" && fail "feeds_prepare put the WireGuard interface in the drop-in"
+_fp eth1 >/dev/null 2>&1 || fail "feeds_prepare eth1 failed"
+[[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth1' ]] || fail "feeds_prepare did not follow the uplink"
+for _bad in 'eth0 lo2' 'eth0;x' '' 'a-very-long-ifname0'; do
+  _fp "${_bad}" >/dev/null 2>&1 && fail "feeds_prepare took the uplink '${_bad}'"
+done
+[[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth1' ]] || fail "a refused value changed the drop-in"
+# A resolver of resolv.conf that is not loopback (the router of the uplink,
+# from DHCP) is opened by its address. Loopback, a zone, a comment and
+# other text are not. The last line has no newline. When the resolver goes
+# back to loopback, the line goes.
+printf 'nameserver 192.168.124.1\nnameserver 127.0.0.53\nnameserver ::1\nnameserver fe80::1%%eth0\n# nameserver 10.0.0.9\nnameserver 1.2.3.4;x\nsearch lan\nnameserver 2001:db8::53' >"${_fr}/resolv.conf"
+: >"${_fr}/calls"
+_fp eth1 >/dev/null 2>&1 || fail "feeds_prepare with a LAN resolver failed"
+[[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth1\nIPAddressAllow=192.168.124.1 2001:db8::53' ]] ||
+  fail "feeds_prepare wrote the resolver drop-in $(printf '%q' "$(cat "${_drop}")")"
+[[ "$(grep -c '^systemctl daemon-reload$' "${_fr}/calls")" == 1 ]] || fail "a new resolver did not reload systemd"
+printf 'nameserver 127.0.0.1\n' >"${_fr}/resolv.conf"
+_fp eth1 >/dev/null 2>&1 || fail "feeds_prepare back to loopback failed"
+[[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth1' ]] || fail "feeds_prepare kept a resolver that is gone"
+# feeds_uplink takes the IPv4 default route with the lowest metric, as
+# pf render does for an empty WAN_IF. No default route gives nothing.
+printf '#!/bin/sh\nprintf "%%s\\n" "default via 10.0.0.1 dev wlan0 proto dhcp metric 600" "default via 192.168.1.1 dev eth0 proto dhcp src 192.168.1.5 metric 100" "default dev wg0 scope link metric 900"\n' >"${_fr}/bin/ip"
+chmod 0755 "${_fr}/bin/ip"
+_got="$(PATH="${_fr}/bin:${PATH}" bash -c 'source "$1"; feeds_uplink' _ "${here}/lib/feeds.sh")"
+[[ "${_got}" == eth0 ]] || fail "feeds_uplink gives '${_got}', not eth0"
+printf '#!/bin/sh\nexit 0\n' >"${_fr}/bin/ip"
+_got="$(PATH="${_fr}/bin:${PATH}" bash -c 'source "$1"; feeds_uplink' _ "${here}/lib/feeds.sh")"
+[[ -z "${_got}" ]] || fail "feeds_uplink with no default route gives '${_got}'"
+_fp '' >/dev/null 2>&1 && fail "feeds_prepare took an empty uplink"
+# apply downloads no feed as root. It gets the lists through pf feeds run,
+# after feeds_prepare, and only on a full apply or a refresh.
+grep -vE '^[[:space:]]*#' "${apply}" | grep -qE '"\$\{PF\}" fetch( |$)' && fail "apply.sh runs pf fetch as root"
+_fl="$(grep -nF 'feeds_prepare "${PI_LIB}/feeds.service" "${_uplink}" ||' "${apply}" | head -1 | cut -d: -f1 || true)"
+_rl="$(grep -nF '! "${PF}" feeds run --policy "${POLICY}" --fresh "${_fresh}"; then' "${apply}" | head -1 | cut -d: -f1 || true)"
+[[ -n "${_fl}" && -n "${_rl}" && $((_rl - _fl)) -eq 1 ]] || fail "apply.sh does not run feeds_prepare and then pf feeds run"
+grep -qxF '  source "${LIB_DIR}/feeds.sh"' "${apply}" || fail "apply.sh does not source lib/feeds.sh"
+
 # The root oneshots run sandboxed. fetch runs apply --refresh, and ship and
 # ship-deadman run a full apply. All three stay root, because apply loads
 # nft, sets sysctls and adds accounts.
 for _u in fetch ship ship-deadman; do
   for _l in NoNewPrivileges=yes PrivateTmp=yes ProtectSystem=strict ProtectKernelModules=yes ProtectKernelLogs=yes \
     ProtectControlGroups=yes RestrictNamespaces=yes MemoryMax=1G TasksMax=256 SystemCallArchitectures=native \
-    SystemCallFilter=@system-service 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK'; do
+    SystemCallFilter=@system-service; do
     grep -qxF "${_l}" "${here}/${_u}.service" || fail "${_u}.service has no '${_l}'"
   done
   grep -q '^User=' "${here}/${_u}.service" && fail "${_u}.service names a User=; apply needs root"
@@ -3738,6 +4224,29 @@ for _u in fetch ship ship-deadman; do
   grep -qE '^(ProtectKernelTunables|RestrictSUIDSGID)=yes' "${here}/${_u}.service" &&
     fail "${_u}.service blocks the sysctl writes or the setgid directories of apply"
 done
+# The refresh opens no IP socket: pi-fortress-feeds.service downloads. A
+# ship or a dead-man rollback is a full apply, and keeps the IP families.
+for _u in ship ship-deadman; do
+  grep -qxF 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK' "${here}/${_u}.service" ||
+    fail "${_u}.service has a different set of address families"
+done
+# The refresh dials only the DoT stubs on loopback (stub_ready). Thus it
+# has the IP families, and its address lists keep it on loopback.
+[[ "$(grep '^RestrictAddressFamilies=' "${here}/fetch.service")" == "RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6" ]] ||
+  fail "fetch.service has a different set of address families"
+[[ "$(grep '^IPAddressAllow=' "${here}/fetch.service")" == "IPAddressAllow=localhost" &&
+  "$(grep '^IPAddressDeny=' "${here}/fetch.service")" == "IPAddressDeny=any" ]] ||
+  fail "fetch.service can reach an address that is not loopback"
+# stub_ready connects with the /dev/tcp of bash. If a unit that runs apply
+# loses AF_INET, each apply on a DoT box reports a dead stub.
+grep -q '/dev/tcp/' "${here}/lib/netman.sh" &&
+  for _u in fetch ship ship-deadman; do
+    grep -E '^RestrictAddressFamilies=' "${here}/${_u}.service" | grep -qw AF_INET ||
+      fail "${_u}.service runs apply, and stub_ready needs AF_INET"
+  done
+grep -qxF 'ProtectProc=invisible' "${here}/fetch.service" || fail "fetch.service sees the processes of other users"
+# The refresh writes /proc/sys/net.
+grep -q '^ProcSubset=' "${here}/fetch.service" && fail "fetch.service hides /proc/sys from apply"
 # ssh_local_addrs finds the admin SSH sessions by the local port 22, not by
 # process. ss -p would read the sockets of sshd, another uid, only with
 # SYS_PTRACE, and fetch.service does not have it. ship keeps SYS_PTRACE for

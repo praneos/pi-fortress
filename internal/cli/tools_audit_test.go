@@ -98,6 +98,7 @@ func TestCompileRecordsAFailure(t *testing.T) {
 // entry must appear because the command ran, not because it changed
 // something by chance.
 func TestFetchWritesAnAuditLine(t *testing.T) {
+	notAsRoot(t)
 	dir := t.TempDir()
 	log := filepath.Join(dir, "audit.jsonl")
 	t.Setenv(audit.PathEnv, log)
@@ -128,6 +129,7 @@ func TestFetchWritesAnAuditLine(t *testing.T) {
 // helper in internal/fetch pins the partial run (some feeds answer, err
 // is nil).
 func TestFetchAuditsFeedFailures(t *testing.T) {
+	notAsRoot(t)
 	dir := t.TempDir()
 	log := filepath.Join(dir, "audit.jsonl")
 	t.Setenv(audit.PathEnv, log)

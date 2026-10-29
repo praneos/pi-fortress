@@ -8,9 +8,11 @@ StartLimitBurst=20
 
 [Service]
 Type=oneshot
-# --refresh is apply --local plus the feed download, in one process. Thus
+# --refresh is apply --local plus the feed refresh, in one process. Thus
 # it holds the apply lock for both, and cannot interleave with an apply that
-# an operator starts from the TUI. It reloads nft and the resolvers. It does
+# an operator starts from the TUI. The download is not in this unit: pf
+# feeds run starts pi-fortress-feeds.service, which downloads as pf-feeds,
+# and then imports only the lines that it checked. It reloads nft and the resolvers. It does
 # not restart the fence, because a restart drops live agent connections at
 # any hour that this timer fires. The compiled list is then newer than the
 # copy in the fence until the next operator apply. apply.sh and the TUI
@@ -32,11 +34,12 @@ IOSchedulingClass=idle
 # Root, with a sandbox. apply --refresh changes the box: it loads nft,
 # sets sysctls, adds the daemon accounts, writes /etc and restarts units.
 # Each of these needs root, so a User= here would stop the refresh. The
-# sandbox keeps the rest of the system out of reach.
+# sandbox limits the effect of a mistake in apply. It is not a security
+# boundary: this unit can write /etc and talks to systemd. Thus the unit
+# reaches loopback only, and the download runs in pi-fortress-feeds.service.
 #
-# Resource caps (pf-broker.service explains the scheme). The run is pf
-# fetch, pf compile and nft with the full feed sets. Each feed body is
-# 8 MiB at most.
+# Resource caps (pf-broker.service explains the scheme). The run is the
+# import of the lists, pf compile and nft with the full feed sets.
 MemoryHigh=768M
 MemoryMax=1G
 # The OOM killer takes the refresh first. The live lists stay, and the
@@ -58,9 +61,19 @@ LockPersonality=yes
 MemoryDenyWriteExecute=yes
 # Not RestrictSUIDSGID: apply makes setgid directories (the fake-IP
 # journal directory is 2750).
-# AF_NETLINK is for nft, ip, conntrack and ss. AF_INET and AF_INET6 are
-# for the feed download. AF_UNIX is for systemctl and nmcli.
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+# AF_NETLINK is for nft, ip, conntrack and ss. AF_UNIX is for systemctl
+# and nmcli. AF_INET and AF_INET6 are for loopback only: after a restart
+# of a DoT stub, apply connects to it (stub_ready in lib/netman.sh, on
+# 127.0.0.1 and 127.0.0.2). Without the family, that probe fails, and the
+# refresh reports a dead stub on a box where the stub is up. The address
+# lists keep the unit off every other address: the download is in
+# pi-fortress-feeds.service, and nothing else here dials out.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+IPAddressAllow=localhost
+IPAddressDeny=any
+# Hides the processes of other users. Not ProcSubset=pid: apply writes
+# /proc/sys/net.
+ProtectProc=invisible
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 # The same removal as in pf-broker.service (it gives the reason).
@@ -77,8 +90,8 @@ CapabilityBoundingSet=CAP_NET_ADMIN CAP_CHOWN CAP_FOWNER CAP_FSETID CAP_DAC_OVER
 # All of /etc: useradd replaces /etc/passwd and /etc/group through a
 # rename, and apply writes nftables.conf, resolv.conf and files in many
 # directories under /etc. /usr/local: apply installs pf there. The tree:
-# pf fetch writes only generated/. A full apply makes generated/, and the
-# timer exists only after a full apply. /run/pi-fortress: the apply lock.
+# pf feeds run writes only generated/ and feeds-in/. A full apply makes
+# generated/, and the timer exists only after a full apply. /run/pi-fortress: the apply lock.
 # Each "-" path is optional, because a box has only one of the two trees.
 ReadWritePaths=/etc /usr/local /var/lib/pi-fortress /var/log/pi-fortress -/var/lib/systemd/timesync -/run/pi-fortress -/opt/pi-fortress/vm/policy/generated -/vagrant/vm/policy/generated
 # A --local apply does not use the secrets, the CA key or the claims. Only

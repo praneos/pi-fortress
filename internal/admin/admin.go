@@ -41,12 +41,17 @@ const (
 
 // Units is the list for a box with no DoT stubs. The list that the code
 // queries comes from Config.units, because the stubs that exist depend on
-// what apply wrote.
+// what apply wrote. The uplink watchdog is a timer: "active" means that
+// it runs its checks, "inactive" that the operator paused it.
 var Units = []string{
-	"nftables", AgentDNSUnit, HouseDNSUnit,
+	"nftables", "pi-fortress-netgate", AgentDNSUnit, HouseDNSUnit,
 	"pi-fortress-engine", "pi-fortress-broker", "pi-fortress-www",
 	"pi-fortress-observe", "pi-fortress-monitor", "pi-fortress-alert",
+	UplinkWatchTimer,
 }
+
+// UplinkWatchTimer runs pf uplink watch (internal/uplink).
+const UplinkWatchTimer = "pi-fortress-uplink-watch.timer"
 
 // etcDir is the directory where apply puts the per-instance stub config
 // files. It comes from house.env and is not hard-coded. Thus a test, or a
@@ -109,6 +114,11 @@ type Config struct {
 	Store       *secrets.Store
 	AuditPath   string
 
+	// PID1Status and ModulesDisabled are the files of the kernel locks
+	// (KernelLock). Empty reads nothing.
+	PID1Status      string
+	ModulesDisabled string
+
 	// Audit records each verb that makes a change. Nil disables it. A test
 	// wants this, and a front end that did not opt in gets this.
 	Audit *audit.Log
@@ -150,6 +160,9 @@ func Defaults() *Config {
 		LockPath:    ApplyLockPath,
 		RebootFlag:  RebootFlagPath,
 		AuditPath:   audit.DefaultPath,
+
+		PID1Status:      PID1StatusPath,
+		ModulesDisabled: ModulesDisabledPath,
 	}
 	// This is the same override that apply.sh and the observer use. Thus the
 	// TUI shows the segments of a box that keeps them in a different location.

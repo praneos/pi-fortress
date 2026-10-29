@@ -11,6 +11,14 @@ echo
 echo "== routes =="
 ip route
 echo
+# pf uplink watch: the uplink connection that apply recorded, and the last
+# check. "inactive" means that the operator paused the timer.
+echo "== uplink watchdog =="
+echo "timer: $(systemctl is-active pi-fortress-uplink-watch.timer 2>/dev/null || true)"
+if [[ -x /usr/local/sbin/pf ]]; then
+  /usr/local/sbin/pf uplink show 2>&1 || true
+fi
+echo
 # Lines of a manual list (ssh_allow.ips, direct_ip.allow) that pf compile skipped
 # in the last apply. The output of that apply shows the lines themselves.
 _cw="$(tr -cd '0-9' </var/lib/pi-fortress/compile-warnings 2>/dev/null || true)"
@@ -20,6 +28,28 @@ if [[ -n "${_cw}" && "${_cw}" != 0 ]]; then
 fi
 echo "== sysctl =="
 sysctl net.ipv4.ip_forward net.ipv6.conf.all.disable_ipv6 2>/dev/null || true
+echo
+# The kernel locks (docs/user_guide/pi_setup.md "Kernel locks"). PID 1
+# drops CAP_SYS_RAWIO (bit 17 of CapBnd) at boot, so no process can open
+# /dev/mem or /proc/kcore. pi-fortress-modlock.timer locks module loads
+# 10 minutes after boot, until the next boot.
+echo "== kernel locks =="
+_capbnd="$(awk '$1 == "CapBnd:" {print $2}' /proc/1/status 2>/dev/null || true)"
+if [[ ! "${_capbnd}" =~ ^[0-9a-fA-F]{1,16}$ ]]; then
+  echo "PID 1 has CAP_SYS_RAWIO: ? (no CapBnd in /proc/1/status)"
+elif (( 16#${_capbnd} & 0x20000 )); then
+  _rawio_why=""
+  [[ -f /etc/systemd/system.conf.d/50-pi-fortress.conf ]] && _rawio_why=" (the drop-in applies at the next boot: a reboot waits)"
+  echo "PID 1 has CAP_SYS_RAWIO: yes${_rawio_why}"
+else
+  echo "PID 1 has CAP_SYS_RAWIO: no"
+fi
+case "$(cat /proc/sys/kernel/modules_disabled 2>/dev/null || true)" in
+  1) _modlock=yes ;;
+  0) _modlock=no ;;
+  *) _modlock='?' ;;
+esac
+echo "modules locked: ${_modlock} (timer: $(systemctl is-active pi-fortress-modlock.timer 2>/dev/null || true))"
 echo
 echo "== resources =="
 # Disk: the logs, the journal and the fake-IP journal are all on the root of
@@ -109,6 +139,9 @@ echo
 # what it serves comes from its own segment list.
 echo "== pf dns =="
 systemctl is-active pi-fortress-dns-agent-go || true
+# netgate writes the gate sets for pf dns. When it is down, each answer
+# that is not in the cache of pf dns is SERVFAIL.
+echo "netgate: $(systemctl is-active pi-fortress-netgate 2>/dev/null || true)"
 # One line for each segment, from the -check of the daemon: the interface,
 # address, upstream and nft set that it would serve. A house segment that
 # fed resolved_v4 instead of resolved_house_v4 shows here and
@@ -167,13 +200,18 @@ echo "--- ${P}/blacklist.ips ---"
 cat "${P}/blacklist.ips"
 echo "--- ${P}/blacklist.domains ---"
 cat "${P}/blacklist.domains"
+# The feed report holds text from the feed servers: a redirect URL and the
+# text of a TLS or HTTP error, which can hold the names in a certificate.
+# Thus this prints only TAB, newline and printable ASCII from it. An escape
+# sequence from a server does not get to the terminal of the operator.
+printable_file() { tr -cd '\11\12\40-\176' <"$1"; }
 if [[ -f "${P}/generated/fetch.report" ]]; then
   echo
   echo "== feed fetch =="
-  cat "${P}/generated/fetch.report"
+  printable_file "${P}/generated/fetch.report"
 fi
 if [[ -f "${P}/generated/sample.domain" ]]; then
-  echo "sample.domain=$(tr -d '[:space:]' < "${P}/generated/sample.domain")"
+  echo "sample.domain=$(tr -cd '\41-\176' < "${P}/generated/sample.domain")"
 fi
 echo
 echo "== observe =="

@@ -218,8 +218,18 @@ func (a *App) buildStatus() []row {
 		lines = append(lines, "apply      idle")
 	}
 	if st.RebootRequired {
-		lines = append(lines, "system     reboot required (updates installed, kernel or libc still old)")
+		lines = append(lines, "system     reboot required (an installed update or a pi-fortress setting waits for it)")
 	}
+	// The kernel locks: PID 1 drops CAP_SYS_RAWIO at boot, and
+	// pi-fortress-modlock locks module loads 10 minutes after boot. An
+	// empty value is a status that did not come: it is not a "no".
+	known := func(s string) string {
+		if s == "" {
+			return "?"
+		}
+		return s
+	}
+	lines = append(lines, "kernel     PID 1 has CAP_SYS_RAWIO "+known(st.Kernel.RawIO)+"  modules locked "+known(st.Kernel.ModulesLocked))
 	e := get[admin.EnrollStats](a, "enroll.stats", admin.Args{})
 	// "never" is a claim about the full ledger. LedgerPartial says that
 	// the code read only a tail of it: a generation rotated away, or the
@@ -996,7 +1006,7 @@ func (a *App) runAction(i int) {
 	case 1:
 		a.runApply(applyLocal)
 	case 2:
-		a.stream("pf fetch", "fetch", admin.Args{})
+		a.stream("pf feeds run", "fetch", admin.Args{})
 	case 3:
 		a.confirm("restart "+admin.HouseDNSUnit, func() { a.report("restarted", "dns.restart") })
 	case 4:

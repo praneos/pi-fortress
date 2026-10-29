@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -16,7 +15,7 @@ import (
 )
 
 // refreshNFT is fakeNFT that can also restart the timeout of an
-// element, as nftCmd does. A test can make only that restart fail.
+// element, as gateset.Cmd does. A test can make only that restart fail.
 type refreshNFT struct {
 	fakeNFT
 	rmu       sync.Mutex
@@ -214,34 +213,6 @@ func TestAskersCaseRewritesOnlyACaseFold(t *testing.T) {
 		if got := q.Name.String(); got != c.want {
 			t.Errorf("%s asked as %s: %s, want %s", c.stored, c.asked, got, c.want)
 		}
-	}
-}
-
-// The refresh is one nft invocation, so one transaction: add (so the
-// delete finds the element), delete, add (back with the whole timeout).
-func TestNftCmdRefreshIsOneCommandLine(t *testing.T) {
-	dir := t.TempDir()
-	argv := filepath.Join(dir, "argv")
-	if err := os.WriteFile(filepath.Join(dir, "nft"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" >>"+argv+"\n"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", dir)
-	n := &nftCmd{table: "inet fortress"}
-	addrs := []netip.Addr{netip.MustParseAddr("93.184.216.34"), netip.MustParseAddr("2001:db8::1"), netip.MustParseAddr("1.1.1.1")}
-	if err := n.Refresh("resolved_v4", addrs); err != nil {
-		t.Fatal(err)
-	}
-	if err := n.Add("resolved_v4", addrs); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(argv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	el := "element inet fortress resolved_v4 { 93.184.216.34, 1.1.1.1 }"
-	want := "add " + el + "; delete " + el + "; add " + el + "\nadd " + el + "\n"
-	if string(raw) != want {
-		t.Fatalf("nft argv:\n%s\nwant:\n%s", raw, want)
 	}
 }
 

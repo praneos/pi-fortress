@@ -1,0 +1,92 @@
+[Unit]
+Description=pi-fortress blocklist feed download, as pf-feeds with no capability
+After=network-online.target
+Wants=network-online.target
+# No After= on a pi-fortress unit. pf feeds run starts this unit from the
+# feed refresh, from a ship and from a first boot, and waits for it. An
+# order on one of those units would make the start wait for itself.
+
+[Service]
+Type=oneshot
+# pf feeds run (root) writes the inputs and the request into feeds-in,
+# starts this unit, and then imports the stage through a strict check of
+# each line (internal/feedstage). This unit does the download and all
+# feed parsing: HTTP, TLS, gzip, CSV, JSON and the list formats. It writes
+# only its state directory: the stage and the last-good copies.
+ExecStart=/usr/local/sbin/pf fetch --request /var/lib/pi-fortress/feeds-in/request --policy /var/lib/pi-fortress/feeds-in --out /var/lib/pi-fortress-feeds/stage --cache /var/lib/pi-fortress-feeds/cache --seed /var/lib/pi-fortress/feeds-in/seed
+User=pf-feeds
+Group=pf-feeds
+StateDirectory=pi-fortress-feeds
+StateDirectoryMode=0700
+UMask=0077
+# Each feed has its own timeout (sources.json, 60 s by default). The
+# refresh that waits for this unit has 15 minutes in all.
+TimeoutStartSec=10min
+Nice=10
+IOSchedulingClass=idle
+# Resource caps (pf-broker.service explains the scheme). The run is the
+# download and the parse of the feeds; the eyeball feeds are the largest.
+# Compile and nft run in the refresh, not here.
+MemoryHigh=512M
+MemoryMax=768M
+# The OOM killer takes this unit first. The lists stay as they are, and
+# the next refresh runs it again.
+OOMScoreAdjust=900
+TasksMax=64
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateIPC=yes
+RemoveIPC=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+# Not PrivateUsers=yes: lib/harden.sh sets user.max_user_namespaces=0, so
+# systemd cannot make the namespace, and the unit would not start.
+#
+# pf is built with CGO_ENABLED=0. Its resolver and the feed client use
+# UDP and TCP sockets only. The log goes to the journal through the
+# descriptors that systemd opens.
+RestrictAddressFamilies=AF_INET AF_INET6
+# What the unit can reach: loopback (the resolver stub on 127.0.0.1:53)
+# and public addresses through the uplink. IPAddressDeny takes out the
+# private, shared (100.64.0.0/10), link-local and multicast ranges. Thus
+# no segment gateway address of the Pi (the engine, www, the resolvers of
+# each segment, sshd), no client and no host on the LAN of the uplink
+# (the router of the ISP). When an address is in both lists, the allow
+# list wins, so loopback stays open. A public address of the Pi itself on
+# the uplink goes through lo, and stays open. When resolv.conf names a
+# resolver that is not loopback (the router of the uplink, from DHCP), the
+# drop-in of apply opens that address, and only it.
+IPAddressAllow=localhost
+IPAddressDeny=link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7
+# RestrictNetworkInterfaces=lo <WAN_IF> is in the drop-in
+# pi-fortress-feeds.service.d/uplink.conf, which apply writes from
+# net.env (lib/feeds.sh). The unit cannot use the agent, house, desk,
+# segment or WireGuard interfaces.
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged
+# The same removal as in pf-broker.service (it gives the reason).
+SystemCallFilter=~@aio @keyring userfaultfd
+SystemCallErrorNumber=EPERM
+# The file view: the state directory (read-write), the inputs of root
+# (read-only) and the system files that DNS and TLS need. Not the policy
+# tree, /etc/pi-fortress, the logs or the rest of /var/lib/pi-fortress.
+# The unit has the network, so a file that it can read can leave the box.
+TemporaryFileSystem=/var/lib/pi-fortress:ro
+BindReadOnlyPaths=/var/lib/pi-fortress/feeds-in
+InaccessiblePaths=-/etc/pi-fortress -/var/log/pi-fortress -/opt/pi-fortress -/vagrant -/etc/nftables.conf -/usr/local/lib/pi-fortress

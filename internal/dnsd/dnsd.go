@@ -30,6 +30,8 @@ import (
 	"pi-fortress/internal/base"
 	"pi-fortress/internal/corepolicy"
 	"pi-fortress/internal/dnslog"
+	"pi-fortress/internal/gateset"
+	"pi-fortress/internal/netgate"
 )
 
 const (
@@ -231,7 +233,8 @@ type Config struct {
 	// limit applies only to lines, never to answers.
 	LogRate  float64
 	LogBurst int
-	// NFT writes set elements. Nil uses the nft command.
+	// NFT writes set elements. Nil asks pf netgate (netgate.GateClient):
+	// pf dns holds no CAP_NET_ADMIN, and netgate does the write.
 	NFT NFTWriter
 	// Now is time.Now except in tests.
 	Now func() time.Time
@@ -266,6 +269,11 @@ type Server struct {
 	links                           func() (map[string]int, error)
 	pinDev                          func(fd int, iface string) error
 	linkEvents                      func(ctx context.Context) (<-chan struct{}, error)
+	// openSNI binds the SNI queue of a segment through netgate, and
+	// sniRetry is the wait before the next try when it fails. A test
+	// replaces both.
+	openSNI  func(num uint16) (sniQueue, error)
+	sniRetry time.Duration
 
 	// queries counts the goroutines that each answer one query. Run can then
 	// wait for them. Otherwise Run returns into a CloseLogs that removes the
@@ -298,9 +306,13 @@ func New(cfg Config) (*Server, error) {
 		links:        ifIndexes,
 		pinDev:       pinToDevice,
 		linkEvents:   routeEvents,
+		openSNI: func(num uint16) (sniQueue, error) {
+			return netgate.DialSNI(netgate.DNSSocket, num)
+		},
+		sniRetry: 5 * time.Second,
 	}
 	if s.nft == nil {
-		s.nft = &nftCmd{table: cfg.NFTTable}
+		s.nft = netgate.NewGateClient(netgate.DNSSocket)
 	}
 	seen := map[string]bool{}
 	names := map[string]bool{}
@@ -933,7 +945,7 @@ func (s *Server) answer(ctx context.Context, seg *Segment, src netip.Addr, req [
 	// the address as a direct dial, which it is. Only this upstream path
 	// filters. A fixture in the local list is the word of the operator. It
 	// goes in as written.
-	addrs = public(addrs)
+	addrs = gateset.Public(addrs)
 	// An address-only A answer gives the client the first maxFlatA
 	// addresses (flattenA). The gate set gets the first maxFlatA public
 	// addresses, which include each public address that the client gets.

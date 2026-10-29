@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // sample is one read of the pressure files. Percentages are 0 to 100. A
@@ -270,6 +271,23 @@ func (r *procReader) bootID() string {
 		return ""
 	}
 	return strings.TrimSpace(string(raw))
+}
+
+// bootTime is the time of the boot: btime in /proc/stat, in seconds since
+// the epoch.
+func (r *procReader) bootTime() (time.Time, bool) {
+	raw, err := os.ReadFile(r.path("proc/stat"))
+	if err != nil {
+		return time.Time{}, false
+	}
+	for line := range strings.SplitSeq(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(line, "btime "); ok {
+			if n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64); err == nil && n > 0 {
+				return time.Unix(n, 0), true
+			}
+		}
+	}
+	return time.Time{}, false
 }
 
 // unitDirs are the cgroups of the pi-fortress units. A template unit

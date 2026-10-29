@@ -24,15 +24,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-)
 
-// carried names the sets with elements that the resolver fills: resolved_v4
-// of the agent, the set of the house, and one resolved_<segment>_v4 for each
-// plain segment. No other set is carried. A compiled set (blacklist_v4,
-// direct_ip_v4, ssh_allow_v4) comes back full from the new ruleset. If the
-// code added the old elements again, it would put back exactly what the
-// operator just removed from the compile.
-var carried = regexp.MustCompile(`^(resolved_v4|resolved_[a-z0-9_]+_v4)$`)
+	"pi-fortress/internal/gateset"
+)
 
 // setHead matches the `set <name> {` line of an nft listing.
 var setHead = regexp.MustCompile(`(?m)^[ \t]*set[ \t]+([A-Za-z0-9_]+)[ \t]*\{`)
@@ -53,8 +47,13 @@ type Set struct {
 	Elements []Element
 }
 
-// Carried reports if this package moves the set with this name.
-func Carried(name string) bool { return carried.MatchString(name) }
+// Carried reports if this package moves the set with this name: a set
+// with elements that the resolver fills (gateset.IsResolverSet). No other
+// set is carried. A compiled set (blacklist_v4, direct_ip_v4,
+// ssh_allow_v4) comes back full from the new ruleset. If the code added
+// the old elements again, it would put back exactly what the operator
+// just removed from the compile.
+func Carried(name string) bool { return gateset.IsResolverSet(name) }
 
 // SetNames gets the set names from `nft list sets table inet fortress`, in
 // the order that the listing printed them. In some nft versions, that listing

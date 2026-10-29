@@ -46,7 +46,7 @@ func policyTests(t *testing.T) {
 			{"pi-fortress-broker", 0},
 			{"pi-fortress-engine", 0},
 			{"pi-fortress-www", capNetBindService},
-			{"pi-fortress-observe", capNetAdmin},
+			{"pi-fortress-observe", 0},
 			{"pi-fortress-alert", 0},
 			{"pi-fortress-monitor", 0},
 		} {
@@ -77,6 +77,49 @@ func policyTests(t *testing.T) {
 			}
 		}
 		noSeccompKill(t, since, "pf", "nft", "journalctl", "conntrack", "ip")
+	})
+	// observe has no capability. pf netgate runs the conntrack dump for it
+	// on ct.sock, which only the group pf-ctgate opens. The account has no
+	// other way to the dump. With netgate stopped, observe says that the
+	// flow rows stop; with netgate back, it says that netgate answers.
+	t.Run("observe reads conntrack through netgate", func(t *testing.T) {
+		if got := strings.TrimSpace(pi(t, "sudo stat -c '%a %U %G' /run/pi-fortress-netgate/ct.sock")); got != "660 pf-netgate pf-ctgate" {
+			t.Errorf("ct.sock is %q, want 660 pf-netgate pf-ctgate", got)
+		}
+		out, _ := ssh(t, 20*time.Second, "pi", "sudo setpriv --reuid=pf-observe --regid=pf-fortress --clear-groups conntrack -L -o extended 2>&1 >/dev/null; echo rc=$?")
+		// conntrack-tools checks the capability itself and refuses before
+		// the kernel can say EPERM; an older one gets EPERM. Both fail.
+		if !(contains(out, "Operation not permitted") || contains(out, "get CAP_NET_ADMIN")) || contains(out, "rc=0") {
+			t.Errorf("as pf-observe, conntrack -L did not fail for want of CAP_NET_ADMIN:\n%s", out)
+		}
+		if !destructiveOK() {
+			t.Skip("the rest stops netgate, and with it the new DNS answers of each segment")
+		}
+		since := piClock(t)
+		journal := func() string {
+			return pi(t, "sudo journalctl -u pi-fortress-observe --since '"+since+"' --no-pager -o cat")
+		}
+		pi(t, "sudo systemctl stop pi-fortress-netgate.service")
+		stopped := true
+		defer func() {
+			if stopped {
+				pi(t, "sudo systemctl start pi-fortress-netgate.service")
+			}
+		}()
+		eventually(t, 40*time.Second, func() string {
+			if contains(journal(), "conntrack through netgate:") {
+				return ""
+			}
+			return "observe said nothing while netgate was stopped; does it still read conntrack itself?"
+		})
+		pi(t, "sudo systemctl start pi-fortress-netgate.service")
+		stopped = false
+		eventually(t, 40*time.Second, func() string {
+			if contains(journal(), "conntrack through netgate answers again") {
+				return ""
+			}
+			return "observe did not get the table from netgate after its start"
+		})
 	})
 }
 

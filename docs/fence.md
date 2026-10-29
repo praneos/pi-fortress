@@ -599,13 +599,18 @@ in the same /24 as one that it resolves to now. The /24 lets a CDN that
 rotates its addresses through. The 24 hours let a device that opens a flow
 with an expired answer after a long idle through, also when the CDN has moved
 the name to a different range. A flow with Encrypted Client Hello (ECH) shows only the outer name
-of the provider: it passes to a resolved address of that name or into the
-ranges of `vm/policy/house_ech.ips`, whatever the inner name, and never by
-the /24. A ClientHello that does not parse, or that has an extension type
-two times, does not pass.
+of the provider: it passes by the rules above, as a plain flow with that
+name does, or into the ranges of `vm/policy/house_ech.ips`, whatever the
+inner name. The outer name must still have an address through the house:
+a name with no address (NXDOMAIN or an empty answer) passes nowhere. The /24 rule comes before the ranges: Chrome and Firefox send
+an ECH extension with random content (GREASE) in each hello to a site with
+no ECH config, and that hello names the real site. A ClientHello that does
+not parse, or that has an extension type two times, does not pass.
 The verdict of a flow is in its conntrack mark, and only a flow with no
 verdict goes to the check. Thus a flow that the check passed continues when
-pf dns restarts (each apply restarts it). A flow that is in its check at the
+pf dns or pf netgate restarts (each apply restarts both). pf netgate binds
+the queue and relays its packets to pf dns, which holds no
+`CAP_NET_ADMIN` (`privilege_split.md`). A flow that is in its check at the
 restart gets a TCP reset (`data with no SYN before it` in the journal), and
 the client opens it again.
 `direct_ip.allow` ships empty: nothing that an agent runs has needed it.
@@ -726,8 +731,11 @@ time for each name and ASN while the broker runs. The next rows for that
 pair go only to the log. Thus a second home server does not hide behind the
 first one.
 
-The table: `pf fetch` builds `generated/eyeball.table` from the `eyeball`
-section of `sources.json`. `pf apply` installs it as
+The table: `pf fetch` builds the table from the `eyeball` section of
+`sources.json`, in `pi-fortress-feeds.service` as `pf-feeds`. Root (`pf
+feeds run`) reads it with the strict parser of the broker, and writes it
+again as `generated/eyeball.table`. A table that does not parse stops the
+import of all lists. `pf apply` installs it as
 `/etc/pi-fortress/eyeball.table`. The copy goes to a temp file in the same
 directory, then to the disk, then into place with one rename. Thus the
 broker reads the old table or the full new table, never no table or a part
@@ -1237,7 +1245,7 @@ of the broker. This stalls TLS.
 | Path | What |
 |---|---|
 | `/var/log/pi-fortress/strip.jsonl` | One line for each match: `host`, `where`, `rule`, `t`, and `client_ip` when the preamble carried a source. Refusals add `ev`, `sni`, `cause`, `slot`, `kind`, and `alert` when the broker marks them. An `eyeball_network` row also adds `dest_ip`. A §5.2d budget crossing adds `threat`, `slot`, `count`, `limit`. A §5.2e expiry row adds `threat` and `slot`, and `host` is `-`. An expiring row also adds `count`. A name that the engine refused because the blocklist has it is a refusal with `cause` and `threat` `sni_blocked` and `where` `sni`. It never has `alert`, and one client and name give at most one such row each minute. |
-| `pf alert` (`internal/alert`) | Tails the jsonl file and `notice.jsonl`. Writes the last event. Optional webhook. |
+| `pf alert` (`internal/alert`) | Tails the jsonl file, `notice.jsonl` and the `events.jsonl` of the uplink watchdog (`/var/lib/pi-fortress/uplink`). Writes the last event. Optional webhook. |
 | `./vm/bin/alerts.sh follow` | Host terminal bell + `notify-send`. |
 | `vm/policy/alert.url` | One URL: ntfy / Slack / Discord. |
 

@@ -395,7 +395,7 @@ func TestStreamActions(t *testing.T) {
 		t.Fatal(out.String(), err)
 	}
 	out.Reset()
-	if err := c.Fetch(context.Background(), &out); err != nil || out.String() != "pf fetch\n" {
+	if err := c.Fetch(context.Background(), &out); err != nil || out.String() != "pf feeds run --fresh 0\n" {
 		t.Fatal(out.String(), err)
 	}
 }
@@ -686,7 +686,7 @@ func TestFetchTakesApplyLock(t *testing.T) {
 		t.Fatal(err, out.String())
 	}
 	l.Release()
-	if _, err := c.Call(RoleAdmin, "fetch", Args{Out: &out}); err != nil || out.String() != "pf fetch\n" {
+	if _, err := c.Call(RoleAdmin, "fetch", Args{Out: &out}); err != nil || out.String() != "pf feeds run --fresh 0\n" {
 		t.Fatal(err, out.String())
 	}
 	if Held(c.LockPath) {

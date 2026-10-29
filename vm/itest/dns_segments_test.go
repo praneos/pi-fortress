@@ -433,15 +433,15 @@ func dnsSegmentTests(t *testing.T) {
 	// The resolver parses DNS from the wire from all segments, and is the
 	// only thing that answers 53 on this box. Thus it gets the same
 	// seccomp box that pf-broker and pf-engine (the same binary) already
-	// run under. A resolve is also the nft set write: pf dns forks nft to
-	// add the answer to resolved_v4, and that child is under this same
-	// filter. If it dies, the 443 gate closes on a name that just
-	// resolved. That is why the fetch below is part of this subtest, not
-	// a separate one.
+	// run under, and only CAP_NET_BIND_SERVICE. A resolve is also the set
+	// write: pf dns asks pf netgate to add the answer to resolved_v4, and
+	// netgate forks nft under its own filter. If either fails, the 443
+	// gate closes on a name that just resolved. That is why the fetch
+	// below is part of this subtest, not a separate one.
 	t.Run("the resolver runs boxed in", func(t *testing.T) {
 		since := piClock(t)
 		pid, filter := unitSandbox(t, "pi-fortress-dns-agent-go", "pf-dns",
-			capNetBindService|capNetAdmin)
+			capNetBindService)
 		// No @chown re-add, unlike the DHCP daemon: no code that pf dns
 		// reaches chowns a file. It reopens its log with O_APPEND and
 		// keeps the owner that apply.sh gave it.
@@ -465,7 +465,7 @@ func dnsSegmentTests(t *testing.T) {
 			if contains(pi(t, "sudo nft list set inet fortress resolved_v4"), ips[0]) {
 				return ""
 			}
-			return "resolved_v4 has no " + ips[0] + " after the agent resolved " + fresh + "; the nft the resolver forks never ran"
+			return "resolved_v4 has no " + ips[0] + " after the agent resolved " + fresh + "; the nft that netgate forks for pf dns never ran"
 		})
 		// And the gate that set feeds, end to end.
 		if a := digA(t, allow, piIP); len(a) == 0 || a[len(a)-1] == "0.0.0.0" {
@@ -481,9 +481,73 @@ func dnsSegmentTests(t *testing.T) {
 		noSeccompKill(t, since, "pf", "nft")
 	})
 
-	// The loopback DoT stub: same binary and same account, one capability
-	// fewer. It feeds no nft set, so it forks no nft. It is present only
-	// when the box has DOT_IPS. The default lab does not.
+	// pf netgate is the one daemon with CAP_NET_ADMIN for pf dns. The
+	// subtest above saw its write arrive. This one checks its box, that the
+	// account of pf dns has no other way to the capability, and that only
+	// the agent resolver passes its two checks: the group of the socket,
+	// and the uid and gid of the peer. A DoT stub runs as pf-dns too, with
+	// the group pf-fortress.
+	t.Run("netgate holds NET_ADMIN for pf dns", func(t *testing.T) {
+		since := piClock(t)
+		unitSandbox(t, "pi-fortress-netgate", "pf-netgate", capNetAdmin)
+		if got := strings.TrimSpace(pi(t, "sudo stat -c '%a %U %G' /run/pi-fortress-netgate/dns.sock")); got != "660 pf-netgate pf-dnsgate" {
+			t.Errorf("dns.sock is %q, want 660 pf-netgate pf-dnsgate", got)
+		}
+		// As pf-dns, with no capability from sudo: no file capability and no
+		// group gives NET_ADMIN back. The dummy link is never made.
+		for _, cmd := range []string{"nft list ruleset", "ip link add pfngcheck0 type dummy"} {
+			out, _ := ssh(t, 20*time.Second, "pi", "sudo setpriv --reuid=pf-dns --regid=pf-dnsgate --clear-groups "+cmd+" 2>&1; echo rc=$?")
+			if !contains(out, "Operation not permitted") || contains(out, "rc=0") {
+				t.Errorf("as pf-dns, %s did not fail with EPERM:\n%s", cmd, out)
+			}
+		}
+		pi(t, "sudo ip link del pfngcheck0 2>/dev/null || true")
+		ping := func(groups string) string {
+			out, _ := ssh(t, 20*time.Second, "pi", "sudo setpriv --reuid=pf-dns "+groups+" /usr/local/sbin/pf netgate ping 2>&1; echo rc=$?")
+			return out
+		}
+		if out := ping("--regid=pf-dnsgate --clear-groups"); !contains(out, "pf netgate: ok") {
+			t.Fatalf("the agent resolver account and group do not reach netgate:\n%s", out)
+		}
+		// The gid of a stub. With pf-dnsgate as a supplementary group, the
+		// socket opens and netgate refuses the gid. Without it, the socket
+		// refuses the connect.
+		for _, groups := range []string{"--regid=pf-fortress --groups=pf-dnsgate", "--regid=pf-fortress --clear-groups"} {
+			if out := ping(groups); contains(out, "pf netgate: ok") || !contains(out, "rc=1") {
+				t.Errorf("a GATE as pf-dns %s passed:\n%s", groups, out)
+			}
+		}
+		if out := pi(t, "sudo journalctl -u pi-fortress-netgate --since '"+since+"' --no-pager -o cat"); !contains(out, "refused") {
+			t.Errorf("netgate logged no refusal of the gid of a stub:\n%s", out)
+		}
+		noSeccompKill(t, since, "pf", "nft")
+	})
+
+	// pf dns fails closed without netgate: an answer that needs a set write
+	// is SERVFAIL, and it resolves again when netgate is back.
+	t.Run("pf dns answers SERVFAIL while netgate is stopped", func(t *testing.T) {
+		if !destructiveOK() {
+			t.Skip("it stops netgate, and with it the new DNS answers of each segment")
+		}
+		piIP := netenv(t)["PI_IP"]
+		fresh := "ng-" + strconv.FormatInt(time.Now().UnixNano(), 36) + ".pf-open-echo.test"
+		pi(t, "sudo systemctl stop pi-fortress-netgate.service")
+		out, _ := ssh(t, 20*time.Second, "agent", "dig +time=3 +tries=1 "+fresh+" @"+piIP)
+		pi(t, "sudo systemctl start pi-fortress-netgate.service")
+		if !contains(out, "status: SERVFAIL") {
+			t.Fatalf("with netgate stopped, %s got no SERVFAIL:\n%s", fresh, out)
+		}
+		eventually(t, 20*time.Second, func() string {
+			if len(digA(t, fresh, piIP)) > 0 {
+				return ""
+			}
+			return fresh + " does not resolve after netgate started again"
+		})
+	})
+
+	// The loopback DoT stub: same binary, account and capability, another
+	// group. It feeds no nft set, so it never asks netgate. It is present
+	// only when the box has DOT_IPS. The default lab does not.
 	t.Run("the DoT stub runs boxed in", func(t *testing.T) {
 		if mainPID(t, "pi-fortress-dns-stub@main") == "0" {
 			t.Skip("no DoT stub on this box (no DOT_IPS)")

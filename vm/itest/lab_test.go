@@ -30,9 +30,14 @@ func TestLab(t *testing.T) {
 	// Opt-in: PF_E2E_FUZZ_NTP=1, a lab gateway only.
 	runGroup(t, "ntp-fuzz", ntpFuzzOptIn(ntpFuzzTests))
 	runGroup(t, "uplink", uplinkTests)
+	runGroup(t, "uplink-watch", uplinkWatchTests)
+	runGroup(t, "feeds", feedsTests)
 	// Last: with PF_E2E_REBOOT=1 it reboots the Pi.
 	runGroup(t, "tui", labOnly(tuiTests))
 	runGroup(t, "ops", opsTests)
+	// After the reboot of ops: PID 1 reads its drop-in only at boot. It
+	// locks kernel module loads for the rest of the boot.
+	runGroup(t, "kernel-lock", kernelLockTests)
 	// Very last: it ships bundles and does a rollback of the gateway,
 	// PF_E2E_LIFECYCLE=1 only (docs/signed_ship.md).
 	runGroup(t, "lifecycle", lifecycleOptIn(lifecycleTests))
