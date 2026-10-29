@@ -202,11 +202,30 @@ func feedsRootTests(t *testing.T) {
 	if after := pi(t, hash); after != before {
 		t.Errorf("sudo pf fetch changed generated/:\nbefore %s\nafter  %s", before, after)
 	}
-	pr := showProps(t, "pi-fortress-fetch.service", "RestrictAddressFamilies", "ProtectProc")
+	pr := showProps(t, "pi-fortress-fetch.service", "RestrictAddressFamilies", "ProtectProc", "IPAddressAllow", "IPAddressDeny")
 	fams := strings.Fields(pr["RestrictAddressFamilies"])
 	slices.Sort(fams)
-	if got := strings.Join(fams, " "); got != "AF_NETLINK AF_UNIX" {
-		t.Errorf("pi-fortress-fetch.service RestrictAddressFamilies=%q, want AF_UNIX AF_NETLINK", pr["RestrictAddressFamilies"])
+	if got := strings.Join(fams, " "); got != "AF_INET AF_INET6 AF_NETLINK AF_UNIX" {
+		t.Errorf("pi-fortress-fetch.service RestrictAddressFamilies=%q, want AF_UNIX AF_NETLINK AF_INET AF_INET6", pr["RestrictAddressFamilies"])
+	}
+	// The IP families are for the DoT stub probe on loopback only.
+	allow := strings.Fields(pr["IPAddressAllow"])
+	slices.Sort(allow)
+	if got := strings.Join(allow, " "); got != "127.0.0.0/8 ::1/128" {
+		t.Errorf("pi-fortress-fetch.service IPAddressAllow=%q, want loopback only", pr["IPAddressAllow"])
+	}
+	if deny := strings.Fields(pr["IPAddressDeny"]); !slices.Contains(deny, "0.0.0.0/0") || !slices.Contains(deny, "::/0") {
+		t.Errorf("pi-fortress-fetch.service IPAddressDeny=%q, want any", pr["IPAddressDeny"])
+	}
+	// The probe of apply (stub_ready: the /dev/tcp of bash) works in the
+	// sandbox of the unit on loopback, and nothing goes past it. sshd
+	// listens on each address, so port 22 on loopback answers.
+	lists := "-p " + shellQuote("RestrictAddressFamilies="+pr["RestrictAddressFamilies"]) +
+		" -p " + shellQuote("IPAddressAllow="+pr["IPAddressAllow"]) + " -p " + shellQuote("IPAddressDeny="+pr["IPAddressDeny"]) + " "
+	out, _ = ssh(t, 30*time.Second, "pi", "sudo systemd-run --wait --pipe --quiet "+lists+
+		"bash -c 'timeout 5 bash -c \"</dev/tcp/127.0.0.1/22\" && echo LOOPBACK-OK; timeout 5 bash -c \"</dev/tcp/104.16.123.96/443\" && echo OUT-REACHED || echo OUT-BLOCKED' 2>&1")
+	if !contains(out, "LOOPBACK-OK") || !contains(out, "OUT-BLOCKED") || contains(out, "OUT-REACHED") {
+		t.Errorf("the refresh sandbox: loopback must answer and 104.16.123.96:443 (www.cloudflare.com) must not:\n%s", out)
 	}
 	if pr["ProtectProc"] != "invisible" {
 		t.Errorf("pi-fortress-fetch.service ProtectProc=%q, want invisible", pr["ProtectProc"])

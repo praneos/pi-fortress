@@ -216,9 +216,10 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   apply does not use them. Its bounding set has no `CAP_SYS_PTRACE` and no
   `CAP_SYS_ADMIN`: the refresh finds the admin SSH sessions by port 22,
   not by process, and it does not set the kernel sysctls of
-  `lib/harden.sh`. `fetch.service` opens no IP socket
-  (`RestrictAddressFamilies=AF_UNIX AF_NETLINK`) and has
-  `ProtectProc=invisible`. The sandbox of a root unit that writes `/etc`
+  `lib/harden.sh`. `fetch.service` reaches loopback only
+  (`IPAddressAllow=localhost`, `IPAddressDeny=any`): after a restart of a
+  DoT stub, apply connects to it on `127.0.0.1` or `127.0.0.2` to check
+  that it is up. It has `ProtectProc=invisible`. The sandbox of a root unit that writes `/etc`
   and talks to systemd limits the effect of a mistake. It is not a
   security boundary. Thus the refresh does not download a feed: the unit
   of the next item does that.

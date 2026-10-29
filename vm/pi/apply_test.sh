@@ -4035,8 +4035,20 @@ for _u in ship ship-deadman; do
   grep -qxF 'RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK' "${here}/${_u}.service" ||
     fail "${_u}.service has a different set of address families"
 done
-[[ "$(grep '^RestrictAddressFamilies=' "${here}/fetch.service")" == "RestrictAddressFamilies=AF_UNIX AF_NETLINK" ]] ||
-  fail "fetch.service can open an IP socket"
+# The refresh dials only the DoT stubs on loopback (stub_ready). Thus it
+# has the IP families, and its address lists keep it on loopback.
+[[ "$(grep '^RestrictAddressFamilies=' "${here}/fetch.service")" == "RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6" ]] ||
+  fail "fetch.service has a different set of address families"
+[[ "$(grep '^IPAddressAllow=' "${here}/fetch.service")" == "IPAddressAllow=localhost" &&
+  "$(grep '^IPAddressDeny=' "${here}/fetch.service")" == "IPAddressDeny=any" ]] ||
+  fail "fetch.service can reach an address that is not loopback"
+# stub_ready connects with the /dev/tcp of bash. If a unit that runs apply
+# loses AF_INET, each apply on a DoT box reports a dead stub.
+grep -q '/dev/tcp/' "${here}/lib/netman.sh" &&
+  for _u in fetch ship ship-deadman; do
+    grep -E '^RestrictAddressFamilies=' "${here}/${_u}.service" | grep -qw AF_INET ||
+      fail "${_u}.service runs apply, and stub_ready needs AF_INET"
+  done
 grep -qxF 'ProtectProc=invisible' "${here}/fetch.service" || fail "fetch.service sees the processes of other users"
 # The refresh writes /proc/sys/net.
 grep -q '^ProcSubset=' "${here}/fetch.service" && fail "fetch.service hides /proc/sys from apply"

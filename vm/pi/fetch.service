@@ -36,7 +36,7 @@ IOSchedulingClass=idle
 # Each of these needs root, so a User= here would stop the refresh. The
 # sandbox limits the effect of a mistake in apply. It is not a security
 # boundary: this unit can write /etc and talks to systemd. Thus the unit
-# opens no IP socket, and the download runs in pi-fortress-feeds.service.
+# reaches loopback only, and the download runs in pi-fortress-feeds.service.
 #
 # Resource caps (pf-broker.service explains the scheme). The run is the
 # import of the lists, pf compile and nft with the full feed sets.
@@ -62,9 +62,15 @@ MemoryDenyWriteExecute=yes
 # Not RestrictSUIDSGID: apply makes setgid directories (the fake-IP
 # journal directory is 2750).
 # AF_NETLINK is for nft, ip, conntrack and ss. AF_UNIX is for systemctl
-# and nmcli. No AF_INET or AF_INET6: nothing in a --local apply opens an
-# IP socket (pf dns -check binds none).
-RestrictAddressFamilies=AF_UNIX AF_NETLINK
+# and nmcli. AF_INET and AF_INET6 are for loopback only: after a restart
+# of a DoT stub, apply connects to it (stub_ready in lib/netman.sh, on
+# 127.0.0.1 and 127.0.0.2). Without the family, that probe fails, and the
+# refresh reports a dead stub on a box where the stub is up. The address
+# lists keep the unit off every other address: the download is in
+# pi-fortress-feeds.service, and nothing else here dials out.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+IPAddressAllow=localhost
+IPAddressDeny=any
 # Hides the processes of other users. Not ProcSubset=pid: apply writes
 # /proc/sys/net.
 ProtectProc=invisible
