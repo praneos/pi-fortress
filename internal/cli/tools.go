@@ -338,7 +338,7 @@ func runAlert(args []string, stdout, stderr io.Writer) int {
 	fs.DurationVar(&pr.CPUFor, "pressure-cpu-for", pr.CPUFor, "how long the CPU condition must hold")
 	fs.Float64Var(&pr.LoadPerCPU, "pressure-load", pr.LoadPerCPU, "without PSI: load for each CPU that a busy CPU must also have")
 	fs.DurationVar(&pr.Repeat, "pressure-repeat", pr.Repeat, "minimum time between two posts while pressure stays")
-	fs.StringVar(&pr.StatePath, "pressure-state", pr.StatePath, "state file for the unclean-restart post; empty for none")
+	fs.StringVar(&pr.StatePath, "pressure-state", pr.StatePath, "state file for the BOOT post at each boot and its unclean-restart detail; empty for none")
 	// The block digest of run (docs/user_guide/pi_setup.md "Block
 	// digest"). It is on when alert.url names a webhook.
 	digest := fs.Duration("digest", alert.DefaultDigestEvery, "run: post a digest of blocked requests a maximum of one time in this time; 0 disables it")
