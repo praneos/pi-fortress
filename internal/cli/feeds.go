@@ -145,6 +145,16 @@ func feedsImport(h feedsHost, policy, run string, startErr error, start time.Tim
 		fields["stage"] = "none"
 	case errors.Is(err, feedstage.ErrRefused):
 		fields["refused"] = res.Refused
+	case err != nil:
+		// Any other error (the stage is not a directory, the account is
+		// gone, a write failed): the report must not keep the OK lines of
+		// an earlier run. The reason is fixed text; the error itself goes
+		// to stderr and the audit entry.
+		res.Report = []string{"FAIL import: the import of the stage stopped on an error; pf feeds run prints the error"}
+		if werr := feedstage.WriteReport(gen, res.Report); werr != nil {
+			fmt.Fprintf(stderr, "pf feeds: %v\n", werr)
+		}
+		fields["stage"] = "error"
 	}
 	if startErr != nil {
 		fields["unit"] = "failed"

@@ -240,6 +240,36 @@ func TestFeedsRunRefusesABadStage(t *testing.T) {
 	}
 }
 
+// An error that is not a refusal and not a missing set (here: the stage
+// is a file) also replaces the report of the earlier run with a FAIL line,
+// and leaves the lists.
+func TestFeedsRunWritesFailImportForAnyOtherError(t *testing.T) {
+	b := newFeedsBox(t)
+	b.write(filepath.Join(b.gen, "fetch.report"), "OK ips: 1 ips\n")
+	stage := filepath.Join(b.state, feedstage.StageName)
+	if err := os.Remove(stage); err != nil {
+		t.Fatal(err)
+	}
+	b.write(stage, "not a directory\x1b[2J\n")
+	code, stdout, stderr := b.run("run", "-policy", b.policy)
+	if code != 1 {
+		t.Fatalf("exit %d\n%s\n%s", code, stdout, stderr)
+	}
+	want := "FAIL import: the import of the stage stopped on an error; pf feeds run prints the error\n"
+	if s := b.read(filepath.Join(b.gen, "fetch.report")); s != want {
+		t.Fatalf("report %q", s)
+	}
+	if s := b.read(filepath.Join(b.gen, "blacklist.ips")); s != "192.0.2.9\n" {
+		t.Fatalf("blacklist.ips changed to %q", s)
+	}
+	if !strings.Contains(stderr, "is not a directory") || strings.ContainsAny(stdout+stderr, "\x1b") {
+		t.Fatalf("stderr %q", stderr)
+	}
+	if raw := b.read(b.log); !strings.Contains(raw, `"stage":"error"`) || !strings.Contains(raw, `"ok":false`) {
+		t.Fatalf("audit entry: %s", raw)
+	}
+}
+
 func TestFeedsImportTakesTheRunIDOfTheStage(t *testing.T) {
 	b := newFeedsBox(t)
 	run := strings.Repeat("5a", 16)
