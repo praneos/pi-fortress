@@ -163,13 +163,13 @@ func feedsImport(h feedsHost, policy, run string, startErr error, start time.Tim
 	}
 	logTool("fetch", fields, time.Since(start), err)
 	for _, l := range res.Report {
-		fmt.Fprintln(stdout, l)
+		fmt.Fprintln(stdout, feedstage.Clean(l))
 	}
 	if res.Imported {
 		fmt.Fprintf(stdout, "imported %s ips, %s domains -> %s\n", orNone(res.IPs), orNone(res.Domains), gen)
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "pf feeds: %v\n", err)
+		fmt.Fprintf(stderr, "pf feeds: %s\n", feedstage.Clean(err.Error()))
 		return 1
 	}
 	return 0

@@ -155,7 +155,7 @@ func Import(c Config) (Result, error) {
 	if raw, err := readStaged(st, EyeballFile, eyeballCap, false, c.UID); err == nil {
 		t, err := eyeball.Parse(bytes.NewReader(raw))
 		if err != nil {
-			return refuse(c, res, EyeballFile+": "+err.Error(), report)
+			return refuse(c, res, EyeballFile+": "+eyeballReason(err), report)
 		}
 		var b bytes.Buffer
 		if err := t.Encode(&b); err != nil {
@@ -181,10 +181,23 @@ func Import(c Config) (Result, error) {
 	return res, nil
 }
 
+// eyeballReason is the reason for a staged eyeball table that does not
+// parse. The error of eyeball.Parse can quote the line, so only the line
+// number goes into the reason.
+func eyeballReason(err error) string {
+	var le *eyeball.LineError
+	if errors.As(err, &le) {
+		return fmt.Sprintf("line %d does not parse", le.Line)
+	}
+	return "does not parse"
+}
+
 // refuse writes the report of a refused set: the reason first, then the
 // lines of the staged report. The reason names the file and the line. It
-// never quotes a staged line.
+// never quotes a staged line. As a second guard, the reason goes through
+// Clean before it goes anywhere.
 func refuse(c Config, res Result, why string, report []string) (Result, error) {
+	why = Clean(why)
 	res.Refused = why
 	res.IPs, res.Domains = -1, -1
 	res.Report = append([]string{"FAIL stage: " + why + "; the lists stay as they were"}, report...)

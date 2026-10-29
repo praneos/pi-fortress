@@ -327,6 +327,32 @@ func TestImportRefusesALinkThatComesAfterTheLstat(t *testing.T) {
 	s.unchanged(prev)
 }
 
+// A table whose built line does not parse is refused with its line number
+// only: the text of the line is not in the reason or the report.
+func TestImportRefusesABadEyeballTableWithoutItsText(t *testing.T) {
+	s := newStage(t)
+	prev := s.old()
+	s.good()
+	s.put(EyeballFile, eyeball.Magic+"\n# built "+strings.Repeat("EVIL", 1000)+"\x1b]0;x\x07\n")
+	res, err := Import(s.cfg())
+	if !errors.Is(err, ErrRefused) || res.Refused != "eyeball.table: line 2 does not parse" {
+		t.Fatalf("Import: %q %v", res.Refused, err)
+	}
+	if strings.Contains(err.Error(), "EVIL") || strings.Contains(s.read(ReportFile), "EVIL") {
+		t.Fatalf("the reason quotes the staged line: %v", err)
+	}
+	s.unchanged(prev)
+}
+
+// The reason of a refusal goes through Clean, also when a future check
+// puts a staged byte into it.
+func TestRefuseCleansTheReason(t *testing.T) {
+	res, err := refuse(Config{OutDir: t.TempDir()}, Result{}, "x\x1b[2J\x07y", nil)
+	if res.Refused != "x?[2J?y" || strings.ContainsAny(err.Error(), "\x1b\x07") || res.Report[0] != "FAIL stage: x?[2J?y; the lists stay as they were" {
+		t.Fatalf("refuse: %q %q %v", res.Refused, res.Report, err)
+	}
+}
+
 func TestImportCutsALongReport(t *testing.T) {
 	was := reportCap
 	reportCap = 30

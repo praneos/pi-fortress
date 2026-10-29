@@ -202,16 +202,7 @@ func FilterReport(text []byte) []string {
 		if len(out) == reportLines {
 			break
 		}
-		b := []byte(line)
-		if len(b) > reportLineMax {
-			b = b[:reportLineMax]
-		}
-		for i, c := range b {
-			if c < 0x20 || c > 0x7e {
-				b[i] = '?'
-			}
-		}
-		l := strings.TrimRight(string(b), " ")
+		l := strings.TrimRight(Clean(line), " ")
 		verb, _, _ := strings.Cut(l, " ")
 		if !reportVerbs[verb] {
 			continue
@@ -219,6 +210,22 @@ func FilterReport(text []byte) []string {
 		out = append(out, l)
 	}
 	return out
+}
+
+// Clean is the byte filter of a report line: each byte outside 0x20 to
+// 0x7e becomes '?', and the text is cut at 512 bytes. Each text that root
+// prints from an import goes through it.
+func Clean(s string) string {
+	b := []byte(s)
+	if len(b) > reportLineMax {
+		b = b[:reportLineMax]
+	}
+	for i, c := range b {
+		if c < 0x20 || c > 0x7e {
+			b[i] = '?'
+		}
+	}
+	return string(b)
 }
 
 // sample gives the first name of a staged domain list that is not an
