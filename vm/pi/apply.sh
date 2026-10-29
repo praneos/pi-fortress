@@ -1723,7 +1723,8 @@ sysctl -p /etc/sysctl.d/97-pi-fortress-conntrack.conf >/dev/null 2>&1 ||
 #   chains (nft_chain_nat), queue (nft_queue) and fib (nft_fib_inet).
 #   Sets, maps, meters, counters, payload, meta, rt and tcp option are in
 #   nf_tables.
-# - nfnetlink_queue: pf dns reads the queue of the house SNI check.
+# - nfnetlink_queue: the queue of the house SNI check, which netgate binds
+#   for pf dns.
 # - nf_conntrack_netlink: the conntrack dump of netgate and of apply.
 # - wireguard when the house uses a tunnel (WG_IF), and 8021q when an
 #   interface of the box is a VLAN.

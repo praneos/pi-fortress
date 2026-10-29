@@ -277,6 +277,19 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
   not set `ProtectKernelModules=yes`, because that hides `/lib/modules`
   and the check compares the running kernel with the installed ones. With
   no capability, it cannot load a module.
+- PID 1 has no `CAP_SYS_RAWIO` in its bounding set
+  (`/etc/systemd/system.conf.d/50-pi-fortress.conf`, from the next boot
+  after a full apply). Thus no unit and no root shell can open `/dev/mem`,
+  `/dev/port` or `/proc/kcore`. No pf unit needs it.
+- `modlock.service` (`pi-fortress-modlock`, one time, 10 minutes after
+  each boot) runs as root with no capability: the kernel lets uid 0 write
+  the sysctl file, and asks for no capability for
+  `kernel.modules_disabled`. `ProtectKernelTunables=yes` makes `/proc/sys`
+  read-only, and `ReadWritePaths` has only
+  `/proc/sys/kernel/modules_disabled`. It has no network
+  (`PrivateNetwork=yes`), and its system-call filter also removes
+  `@privileged`. After it, the kernel refuses each module load until the
+  next boot (`docs/user_guide/pi_setup.md`, Kernel locks).
 - The broker serves one source prefix. The unit reads `AGENT_NET` from
   `net.env` for `-agent-net`. With this flag, the broker refuses with 403 a
   preamble with a source outside that prefix. It does this before it parses
