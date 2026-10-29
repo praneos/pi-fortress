@@ -2061,7 +2061,7 @@ ${_W}type nat hook%nft_chain_nat
 ${_W}queue( |\$)%nft_queue
 ${_W}fib( |\$)%nft_fib_inet
 EOF
-[[ "${_seen}" -ge 10 ]] || fail "only ${_seen} of the expressions with a module are in the renders above; the module list check is weak"
+[[ "${_seen}" -ge 10 ]] || fail "only ${_seen} of the expressions with a module are in the renders above; the module list check proves little"
 if _new="$(grep -oE "${_W}(quota|numgen|jhash|symhash|tproxy|synproxy|osf|xfrm|dup to|fwd to|socket (transparent|mark|wildcard|cgroupv2)|ct (timeout|expectation)|flow (add|offload)|tunnel)( |\$)" "${tmp}/all-renders.nft" | sort -u | tr '\n' ' ')" && [[ -n "${_new}" ]]; then
   fail "render emits an expression with its own kernel module (${_new}); add the module to MODLOCK_LIST in apply.sh and to this check"
 fi
