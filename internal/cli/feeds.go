@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"pi-fortress/internal/admin"
@@ -145,6 +146,16 @@ func feedsImport(h feedsHost, policy, run string, startErr error, start time.Tim
 		fields["stage"] = "none"
 	case errors.Is(err, feedstage.ErrRefused):
 		fields["refused"] = res.Refused
+	case err != nil:
+		// Any other error (the stage is not a directory, the account is
+		// gone, a write failed): the report must not keep the OK lines of
+		// an earlier run. The reason is fixed text; the error itself goes
+		// to stderr and the audit entry.
+		res.Report = []string{"FAIL import: the import of the stage stopped on an error; pf feeds run prints the error"}
+		if werr := feedstage.WriteReport(gen, res.Report); werr != nil {
+			fmt.Fprintf(stderr, "pf feeds: %v\n", werr)
+		}
+		fields["stage"] = "error"
 	}
 	if startErr != nil {
 		fields["unit"] = "failed"
@@ -163,13 +174,13 @@ func feedsImport(h feedsHost, policy, run string, startErr error, start time.Tim
 	}
 	logTool("fetch", fields, time.Since(start), err)
 	for _, l := range res.Report {
-		fmt.Fprintln(stdout, l)
+		fmt.Fprintln(stdout, feedstage.Clean(l))
 	}
 	if res.Imported {
 		fmt.Fprintf(stdout, "imported %s ips, %s domains -> %s\n", orNone(res.IPs), orNone(res.Domains), gen)
 	}
 	if err != nil {
-		fmt.Fprintf(stderr, "pf feeds: %v\n", err)
+		fmt.Fprintf(stderr, "pf feeds: %s\n", feedstage.Clean(err.Error()))
 		return 1
 	}
 	return 0
@@ -329,7 +340,7 @@ func applyLockOrInherited(path string) (func(), error) {
 }
 
 // inheritedLock says if this process has a descriptor open on the lock
-// file at path, and the lock is held.
+// file at path that holds the lock (holdsLock).
 func inheritedLock(path string) bool {
 	want, err := os.Lstat(path)
 	if err != nil || !want.Mode().IsRegular() {
@@ -340,10 +351,24 @@ func inheritedLock(path string) bool {
 		return false
 	}
 	for _, e := range ents {
+		fd, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
 		got, err := os.Stat(filepath.Join("/proc/self/fd", e.Name()))
-		if err == nil && os.SameFile(want, got) {
-			return admin.Held(path)
+		if err == nil && os.SameFile(want, got) && holdsLock(fd, path) {
+			return true
 		}
 	}
 	return false
+}
+
+// holdsLock says if fd holds the apply lock at path. The lock must be held,
+// and a flock on fd must succeed. flock succeeds again only on the open
+// file description that holds the lock; on a descriptor of a different
+// open of the file, it fails while that lock is held. If the holder lets
+// go between the two steps, the flock takes the lock on fd, which is then
+// also held for this process.
+func holdsLock(fd int, path string) bool {
+	return admin.Held(path) && syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB) == nil
 }

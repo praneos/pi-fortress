@@ -280,6 +280,79 @@ func TestImportRefusesAFileOverItsByteCap(t *testing.T) {
 	s.unchanged(prev)
 }
 
+// The byte cap of a list is its line cap times the longest line and its
+// newline; the cap of feeds.map comes from the lines of the staged lists.
+// Root reads no more than a file that can pass.
+func TestImportByteCapFollowsTheLineCap(t *testing.T) {
+	s := newStage(t)
+	c := s.cfg()
+	c.Limits.MaxIPs = 2
+	s.put(IPsFile, strings.Repeat("\n", 39))
+	res, err := Import(c)
+	if !errors.Is(err, ErrRefused) || !strings.Contains(res.Refused, "blacklist.ips: larger than 38 bytes") {
+		t.Fatalf("list: %+v %v", res, err)
+	}
+	s.put(IPsFile, "1.2.3.4\n")
+	s.put(FeedsMapFile, strings.Repeat("\n", 320))
+	res, err = Import(c)
+	if !errors.Is(err, ErrRefused) || !strings.Contains(res.Refused, "feeds.map: larger than 319 bytes") {
+		t.Fatalf("map: %+v %v", res, err)
+	}
+}
+
+// pf-feeds puts a link to a different file of the stage in place of a
+// list, after the Lstat of root and before its open. The open follows the
+// link, and the check of the open file against the Lstat refuses it.
+func TestImportRefusesALinkThatComesAfterTheLstat(t *testing.T) {
+	s := newStage(t)
+	prev := s.old()
+	s.good()
+	t.Cleanup(func() { afterLstat = func(string) {} })
+	afterLstat = func(name string) {
+		if name != HouseVPNFile {
+			return
+		}
+		p := filepath.Join(s.dir, HouseVPNFile)
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(HouseDomainsFile, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := Import(s.cfg())
+	if !errors.Is(err, ErrRefused) || !strings.Contains(res.Refused, "house_vpn.domains: changed while it was opened") {
+		t.Fatalf("Import: %+v %v", res, err)
+	}
+	s.unchanged(prev)
+}
+
+// A table whose built line does not parse is refused with its line number
+// only: the text of the line is not in the reason or the report.
+func TestImportRefusesABadEyeballTableWithoutItsText(t *testing.T) {
+	s := newStage(t)
+	prev := s.old()
+	s.good()
+	s.put(EyeballFile, eyeball.Magic+"\n# built "+strings.Repeat("EVIL", 1000)+"\x1b]0;x\x07\n")
+	res, err := Import(s.cfg())
+	if !errors.Is(err, ErrRefused) || res.Refused != "eyeball.table: line 2 does not parse" {
+		t.Fatalf("Import: %q %v", res.Refused, err)
+	}
+	if strings.Contains(err.Error(), "EVIL") || strings.Contains(s.read(ReportFile), "EVIL") {
+		t.Fatalf("the reason quotes the staged line: %v", err)
+	}
+	s.unchanged(prev)
+}
+
+// The reason of a refusal goes through Clean, also when a future check
+// puts a staged byte into it.
+func TestRefuseCleansTheReason(t *testing.T) {
+	res, err := refuse(Config{OutDir: t.TempDir()}, Result{}, "x\x1b[2J\x07y", nil)
+	if res.Refused != "x?[2J?y" || strings.ContainsAny(err.Error(), "\x1b\x07") || res.Report[0] != "FAIL stage: x?[2J?y; the lists stay as they were" {
+		t.Fatalf("refuse: %q %q %v", res.Refused, res.Report, err)
+	}
+}
+
 func TestImportCutsALongReport(t *testing.T) {
 	was := reportCap
 	reportCap = 30

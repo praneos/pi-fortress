@@ -1,6 +1,7 @@
 package feedstage
 
 import (
+	"bytes"
 	"fmt"
 	"net/netip"
 	"strings"
@@ -39,6 +40,27 @@ func (k Kind) lineMax() int {
 		return len("255.255.255.255/32")
 	}
 	return 253
+}
+
+// mapLineMax is the longest line of feeds.map: a name, a TAB and a feed id.
+const mapLineMax = 253 + 1 + 64
+
+// byteCap is the most bytes that lines lines of lineMax bytes each, with
+// their newlines, can have. Root reads no more of a staged file than a
+// file that can pass, and never more than hard.
+func byteCap(lines, lineMax int, hard int64) int64 {
+	n := int64(lines) * int64(lineMax+1)
+	if n < 0 || n > hard {
+		return hard
+	}
+	return n
+}
+
+// countLines counts the lines of a text that ends with a newline. It
+// makes no copy, so a check can refuse a file over its line cap before it
+// splits the file.
+func countLines(text []byte) int {
+	return bytes.Count(text, []byte{'\n'})
 }
 
 // allowed says if c can be in a line of the kind. The parser gives the
@@ -93,8 +115,9 @@ func CheckLine(k Kind, line string) string {
 }
 
 // CheckList checks a staged list and gives its lines. The text is empty
-// (an empty list) or ends with a newline. max caps the number of lines. A
-// line that repeats is refused: pf fetch writes each entry once.
+// (an empty list) or ends with a newline. max caps the number of lines; a
+// text over the cap is refused before it is split. A line that repeats is
+// refused: pf fetch writes each entry once.
 func CheckList(k Kind, text []byte, max int) ([]string, error) {
 	if len(text) == 0 {
 		return nil, nil
@@ -102,10 +125,10 @@ func CheckList(k Kind, text []byte, max int) ([]string, error) {
 	if text[len(text)-1] != '\n' {
 		return nil, fmt.Errorf("no newline at the end")
 	}
-	lines := strings.Split(string(text[:len(text)-1]), "\n")
-	if len(lines) > max {
-		return nil, fmt.Errorf("%d lines, more than the cap of %d", len(lines), max)
+	if n := countLines(text); n > max {
+		return nil, fmt.Errorf("%d lines, more than the cap of %d", n, max)
 	}
+	lines := strings.Split(string(text[:len(text)-1]), "\n")
 	seen := make(map[string]struct{}, len(lines))
 	for i, l := range lines {
 		if why := CheckLine(k, l); why != "" {
@@ -122,7 +145,8 @@ func CheckList(k Kind, text []byte, max int) ([]string, error) {
 // CheckMap checks a staged feeds.map: "<item>\t<feed id>" lines. Each item
 // is in items (the staged lists). Each id is a feed of ids. An item can
 // repeat only with the same id: pf fetch writes an item once for each list
-// that has it. max caps the lines.
+// that has it. max caps the lines; a text over the cap is refused before
+// it is split.
 func CheckMap(text []byte, items map[string]struct{}, ids map[string]bool, max int) error {
 	if len(text) == 0 {
 		return nil
@@ -130,10 +154,10 @@ func CheckMap(text []byte, items map[string]struct{}, ids map[string]bool, max i
 	if text[len(text)-1] != '\n' {
 		return fmt.Errorf("no newline at the end")
 	}
-	lines := strings.Split(string(text[:len(text)-1]), "\n")
-	if len(lines) > max {
-		return fmt.Errorf("%d lines, more than the %d entries of the lists", len(lines), max)
+	if n := countLines(text); n > max {
+		return fmt.Errorf("%d lines, more than the %d entries of the lists", n, max)
 	}
+	lines := strings.Split(string(text[:len(text)-1]), "\n")
 	feedOf := make(map[string]string, len(lines))
 	for i, l := range lines {
 		item, id, ok := strings.Cut(l, "\t")
@@ -178,16 +202,7 @@ func FilterReport(text []byte) []string {
 		if len(out) == reportLines {
 			break
 		}
-		b := []byte(line)
-		if len(b) > reportLineMax {
-			b = b[:reportLineMax]
-		}
-		for i, c := range b {
-			if c < 0x20 || c > 0x7e {
-				b[i] = '?'
-			}
-		}
-		l := strings.TrimRight(string(b), " ")
+		l := strings.TrimRight(Clean(line), " ")
 		verb, _, _ := strings.Cut(l, " ")
 		if !reportVerbs[verb] {
 			continue
@@ -195,6 +210,22 @@ func FilterReport(text []byte) []string {
 		out = append(out, l)
 	}
 	return out
+}
+
+// Clean is the byte filter of a report line: each byte outside 0x20 to
+// 0x7e becomes '?', and the text is cut at 512 bytes. Each text that root
+// prints from an import goes through it.
+func Clean(s string) string {
+	b := []byte(s)
+	if len(b) > reportLineMax {
+		b = b[:reportLineMax]
+	}
+	for i, c := range b {
+		if c < 0x20 || c > 0x7e {
+			b[i] = '?'
+		}
+	}
+	return string(b)
 }
 
 // sample gives the first name of a staged domain list that is not an

@@ -3868,13 +3868,18 @@ for _l in Type=oneshot User=pf-feeds Group=pf-feeds CapabilityBoundingSet= NoNew
   ProtectHome=yes PrivateTmp=yes PrivateDevices=yes RestrictSUIDSGID=yes ProtectKernelTunables=yes \
   StateDirectory=pi-fortress-feeds StateDirectoryMode=0700 UMask=0077 \
   TemporaryFileSystem=/var/lib/pi-fortress:ro BindReadOnlyPaths=/var/lib/pi-fortress/feeds-in \
-  'IPAddressDeny=link-local multicast' \
+  'IPAddressDeny=link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7' \
   'InaccessiblePaths=-/etc/pi-fortress -/var/log/pi-fortress -/opt/pi-fortress -/vagrant -/etc/nftables.conf -/usr/local/lib/pi-fortress'; do
   grep -qxF "${_l}" "${_fu}" || fail "feeds.service has no '${_l}'"
 done
 grep -qxF 'ExecStart=/usr/local/sbin/pf fetch --request /var/lib/pi-fortress/feeds-in/request --policy /var/lib/pi-fortress/feeds-in --out /var/lib/pi-fortress-feeds/stage --cache /var/lib/pi-fortress-feeds/cache --seed /var/lib/pi-fortress/feeds-in/seed' "${_fu}" ||
   fail "feeds.service does not run pf fetch in stage mode on the fixed paths"
 grep -qE '^AmbientCapabilities=.' "${_fu}" && fail "feeds.service gives a capability"
+# Loopback (the resolver stub) and public addresses only: the allow list
+# wins over the deny list, so it must hold loopback and nothing more.
+[[ "$(grep '^IPAddressAllow=' "${_fu}")" == "IPAddressAllow=localhost" ]] ||
+  fail "feeds.service allows more than loopback past its address deny list"
+[[ "$(grep -c '^IPAddressDeny=' "${_fu}")" == 1 ]] || fail "feeds.service has more than one IPAddressDeny line"
 # pf feeds run starts this unit from the refresh, a ship and a first boot,
 # and waits. An order on a pi-fortress unit would wait for itself.
 grep -qE '^(After|Before|Requires|Requisite|BindsTo|PartOf|Wants)=.*pi-fortress' "${_fu}" &&
@@ -3882,9 +3887,9 @@ grep -qE '^(After|Before|Requires|Requisite|BindsTo|PartOf|Wants)=.*pi-fortress'
 (($(_oom feeds) > $(_oom fetch))) || fail "the OOM killer does not take the feed download before the refresh"
 
 # feeds_prepare (lib/feeds.sh) in a temp root: the account, the unit, the
-# input directory, and the drop-in that keeps the unit on lo, the uplink
-# and WireGuard. A second run with the same values reloads nothing. A
-# value that is not an interface name changes nothing.
+# input directory, and the drop-in that keeps the unit on lo and the
+# uplink. A second run with the same value reloads nothing. A value that
+# is not an interface name changes nothing.
 _fr="${tmp}/feeds-root"
 mkdir -p "${_fr}/units" "${_fr}/bin"
 for _c in getent id; do
@@ -3899,17 +3904,20 @@ _fp() {
     bash -c 'set -euo pipefail; source "$1"; shift; feeds_prepare "$@"' _ "${here}/lib/feeds.sh" "${_fu}" "$@"
 }
 _drop="${_fr}/units/pi-fortress-feeds.service.d/uplink.conf"
-_fp eth0 wg0 >/dev/null 2>&1 || fail "feeds_prepare eth0 wg0 failed"
+_fp eth0 >/dev/null 2>&1 || fail "feeds_prepare eth0 failed"
 cmp -s "${_fu}" "${_fr}/units/pi-fortress-feeds.service" || fail "feeds_prepare did not install feeds.service"
-[[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth0 wg0' ]] ||
+[[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth0' ]] ||
   fail "feeds_prepare wrote the drop-in $(printf '%q' "$(cat "${_drop}")")"
 [[ -d "${_fr}/feeds-in" ]] || fail "feeds_prepare did not make the input directory"
 grep -qxF 'useradd --system --no-create-home --gid pf-feeds --home /nonexistent --shell /usr/sbin/nologin pf-feeds' "${_fr}/calls" ||
   fail "feeds_prepare did not add the account pf-feeds"
 [[ "$(grep -c '^systemctl daemon-reload$' "${_fr}/calls")" == 1 ]] || fail "feeds_prepare did not reload systemd one time"
 : >"${_fr}/calls"
+# A second argument (the WireGuard interface of an earlier apply.sh) does
+# not go into the drop-in.
 _fp eth0 wg0 >/dev/null 2>&1 || fail "a second feeds_prepare failed"
 grep -q 'daemon-reload' "${_fr}/calls" && fail "feeds_prepare reloads systemd with no change"
+grep -q 'wg0' "${_drop}" && fail "feeds_prepare put the WireGuard interface in the drop-in"
 _fp eth1 >/dev/null 2>&1 || fail "feeds_prepare eth1 failed"
 [[ "$(cat "${_drop}")" == $'[Service]\nRestrictNetworkInterfaces=lo eth1' ]] || fail "feeds_prepare did not follow the uplink"
 for _bad in 'eth0 lo2' 'eth0;x' '' 'a-very-long-ifname0'; do
@@ -3929,7 +3937,7 @@ _fp '' >/dev/null 2>&1 && fail "feeds_prepare took an empty uplink"
 # apply downloads no feed as root. It gets the lists through pf feeds run,
 # after feeds_prepare, and only on a full apply or a refresh.
 grep -vE '^[[:space:]]*#' "${apply}" | grep -qE '"\$\{PF\}" fetch( |$)' && fail "apply.sh runs pf fetch as root"
-_fl="$(grep -nF 'feeds_prepare "${PI_LIB}/feeds.service" "${_uplink}" "${WG_IF:-}" ||' "${apply}" | head -1 | cut -d: -f1 || true)"
+_fl="$(grep -nF 'feeds_prepare "${PI_LIB}/feeds.service" "${_uplink}" ||' "${apply}" | head -1 | cut -d: -f1 || true)"
 _rl="$(grep -nF '! "${PF}" feeds run --policy "${POLICY}" --fresh "${_fresh}"; then' "${apply}" | head -1 | cut -d: -f1 || true)"
 [[ -n "${_fl}" && -n "${_rl}" && $((_rl - _fl)) -eq 1 ]] || fail "apply.sh does not run feeds_prepare and then pf feeds run"
 grep -qxF '  source "${LIB_DIR}/feeds.sh"' "${apply}" || fail "apply.sh does not source lib/feeds.sh"

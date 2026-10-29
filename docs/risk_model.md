@@ -197,12 +197,15 @@ traffic metadata, or captive portals. For details and checks, refer to
 `user_guide/public_wifi.md`.
 
 The blocklist download is the one process of the Pi that reads feed bodies
-from the internet. It runs as `pf-feeds` with no capability, and it can use
-only `lo` and the uplink (`privilege_split.md`). Root imports only list
-lines that pass a strict check, and one bad line stops the import of all
-lists. Thus a hostile feed server or uplink can change which names and
-addresses the lists block, within the size caps, `never_block` and
-`core.hosts`. It cannot add a firewall rule.
+from the internet. It runs as `pf-feeds` with no capability. It can reach
+loopback (the resolver stub) and public addresses through the uplink; no
+private, shared or link-local address, thus no service of the Pi on a
+segment address and no host on the LAN of the uplink. A public address of
+the Pi itself on the uplink stays open to it (`privilege_split.md`). Root
+imports only list lines that pass a strict check, and one bad line stops
+the import of all lists. Thus a hostile feed server or uplink can change
+which names and addresses the lists block, within the size caps,
+`never_block` and `core.hosts`. It cannot add a firewall rule.
 
 
 ## 7. Non-goals

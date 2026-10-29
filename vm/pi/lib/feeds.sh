@@ -36,15 +36,15 @@ feeds_uplink() {
     END { print best }'
 }
 
-# feeds_prepare SRC WAN_IF [WG_IF]: SRC is the feeds.service of the tree.
-# The unit may use only lo, the uplink and the WireGuard interface. Each
-# step does nothing when it is already done. A daemon-reload runs only
-# when a unit file changed.
+# feeds_prepare SRC WAN_IF: SRC is the feeds.service of the tree. The
+# unit may use only lo and the uplink: the traffic of the Pi itself does
+# not go through the house tunnel. Each step does nothing when it is
+# already done. A daemon-reload runs only when a unit file changed.
 feeds_prepare() {
-  local src="$1" wan="$2" wg="${3:-}"
+  local src="$1" wan="$2"
   local unit="${FEEDS_UNITS}/pi-fortress-feeds.service"
   local drop="${FEEDS_UNITS}/pi-fortress-feeds.service.d/uplink.conf"
-  local want _i changed=0
+  local want changed=0
   if [[ ! -f "${src}" ]]; then
     echo "pi-fortress: ${src} is missing, so no feed is downloaded" >&2
     return 1
@@ -53,14 +53,12 @@ feeds_prepare() {
     echo "pi-fortress: no uplink for the feed download (WAN_IF is empty and there is no IPv4 default route), so no feed is downloaded" >&2
     return 1
   fi
-  # The names go into a unit file. Apply checked them already; this
+  # The name goes into a unit file. Apply checked it already; this
   # refuses all that is not an interface name.
-  for _i in "${wan}" ${wg:+"${wg}"}; do
-    if [[ ! "${_i}" =~ ^[A-Za-z0-9_.@-]{1,15}$ ]]; then
-      echo "pi-fortress: '${_i}' is not an interface name; the feed download unit is not changed" >&2
-      return 1
-    fi
-  done
+  if [[ ! "${wan}" =~ ^[A-Za-z0-9_.@-]{1,15}$ ]]; then
+    echo "pi-fortress: '${wan}' is not an interface name; the feed download unit is not changed" >&2
+    return 1
+  fi
   getent group pf-feeds >/dev/null || groupadd --system pf-feeds
   if ! id -u pf-feeds >/dev/null 2>&1; then
     useradd --system --no-create-home --gid pf-feeds --home /nonexistent --shell /usr/sbin/nologin pf-feeds
@@ -70,7 +68,7 @@ feeds_prepare() {
     install -m 0644 "${src}" "${unit}"
     changed=1
   fi
-  want="$(printf '[Service]\nRestrictNetworkInterfaces=lo %s%s' "${wan}" "${wg:+ ${wg}}")"
+  want="$(printf '[Service]\nRestrictNetworkInterfaces=lo %s' "${wan}")"
   if [[ "$(cat "${drop}" 2>/dev/null || true)" != "${want}" ]]; then
     install -d -m 0755 "${drop%/*}"
     printf '%s\n' "${want}" >"${drop}"

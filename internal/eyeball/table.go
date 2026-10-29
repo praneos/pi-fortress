@@ -205,6 +205,19 @@ var (
 	errBuilt = errors.New("eyeball table: no '# built' line")
 )
 
+// LineError is a Parse error at one line of the table. Err can quote the
+// line; Line alone does not.
+type LineError struct {
+	Line int
+	Err  error
+}
+
+func (e *LineError) Error() string { return fmt.Sprintf("eyeball table: line %d: %v", e.Line, e.Err) }
+
+func (e *LineError) Unwrap() error { return e.Err }
+
+func lineErr(line int, err error) error { return &LineError{Line: line, Err: err} }
+
 // Parse reads a table. It refuses the full file for one bad line. A table
 // with a wrong line is not a table to trust in part: the line can be the
 // first sign of a file that is cut or changed.
@@ -229,14 +242,14 @@ func Parse(r io.Reader) (*Table, error) {
 			if v, ok := strings.CutPrefix(s, builtPrefix); ok {
 				when, err := time.Parse(time.RFC3339, strings.TrimSpace(v))
 				if err != nil {
-					return nil, fmt.Errorf("eyeball table: line %d: %w", line, err)
+					return nil, lineErr(line, err)
 				}
 				// Write keeps the time to the second, and pf fetch never
 				// writes a fraction. Parse refuses a fraction of a second.
 				// Thus a table that Parse accepts gives the same Built time
 				// after Write.
 				if when.Nanosecond() != 0 {
-					return nil, fmt.Errorf("eyeball table: line %d: built time has a fraction of a second", line)
+					return nil, lineErr(line, errors.New("built time has a fraction of a second"))
 				}
 				t.Built = when.UTC()
 			}
@@ -244,17 +257,17 @@ func Parse(r io.Reader) (*Table, error) {
 		}
 		f := strings.Fields(s)
 		if len(f) != 3 {
-			return nil, fmt.Errorf("eyeball table: line %d: want first, last, asn", line)
+			return nil, lineErr(line, errors.New("want first, last, asn"))
 		}
 		rg, ok := ParseRange(f[0], f[1], f[2])
 		if !ok {
-			return nil, fmt.Errorf("eyeball table: line %d: not a range", line)
+			return nil, lineErr(line, errors.New("not a range"))
 		}
 		if rg.Wide() {
-			return nil, fmt.Errorf("eyeball table: line %d: range has more than %d addresses", line, MaxRangeAddrs)
+			return nil, lineErr(line, fmt.Errorf("range has more than %d addresses", MaxRangeAddrs))
 		}
 		if n := len(t.ranges); n > 0 && rg.First <= t.ranges[n-1].Last {
-			return nil, fmt.Errorf("eyeball table: line %d: not sorted, or overlaps the line before", line)
+			return nil, lineErr(line, errors.New("not sorted, or overlaps the line before"))
 		}
 		if len(t.ranges) == MaxRanges {
 			return nil, fmt.Errorf("eyeball table: more than %d ranges", MaxRanges)
@@ -262,7 +275,7 @@ func Parse(r io.Reader) (*Table, error) {
 		t.ranges = append(t.ranges, rg)
 	}
 	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("eyeball table: line %d: %w", line+1, err)
+		return nil, lineErr(line+1, err)
 	}
 	if line == 0 {
 		return nil, errMagic

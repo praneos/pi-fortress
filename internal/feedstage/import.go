@@ -12,9 +12,10 @@ import (
 	"pi-fortress/internal/eyeball"
 )
 
-// The byte caps of the staged files. Each is far above a real file, and
-// below what the memory caps of the root units hold. They are variables
-// only so that a test can make them small.
+// The hard byte caps of the staged files. Each is far above a real file,
+// and below what the memory caps of the root units hold. A list and
+// feeds.map also have a smaller cap: the bytes of their line cap (byteCap).
+// They are variables only so that a test can make them small.
 var (
 	listCap    int64 = 64 << 20
 	mapCap     int64 = 96 << 20
@@ -116,14 +117,15 @@ func Import(c Config) (Result, error) {
 	var domains []string
 	hasDomains := false
 	for _, l := range lists() {
-		raw, err := readStaged(st, l.name, listCap, false, c.UID)
+		limit := l.max(c.Limits)
+		raw, err := readStaged(st, l.name, byteCap(limit, l.kind.lineMax(), listCap), false, c.UID)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return refuse(c, res, l.name+": "+err.Error(), report)
 		}
-		got, err := CheckList(l.kind, raw, l.max(c.Limits))
+		got, err := CheckList(l.kind, raw, limit)
 		if err != nil {
 			return refuse(c, res, l.name+": "+err.Error(), report)
 		}
@@ -138,9 +140,11 @@ func Import(c Config) (Result, error) {
 			res.Domains = len(got)
 			domains, hasDomains = got, true
 		}
-		files = append(files, File{l.name, lines(got)})
+		// CheckList passed, so raw is the lines of got, each with its
+		// newline: no second copy.
+		files = append(files, File{l.name, raw})
 	}
-	if raw, err := readStaged(st, FeedsMapFile, mapCap, false, c.UID); err == nil {
+	if raw, err := readStaged(st, FeedsMapFile, byteCap(total, mapLineMax, mapCap), false, c.UID); err == nil {
 		if err := CheckMap(raw, items, c.Limits.FeedIDs, total); err != nil {
 			return refuse(c, res, FeedsMapFile+": "+err.Error(), report)
 		}
@@ -151,7 +155,7 @@ func Import(c Config) (Result, error) {
 	if raw, err := readStaged(st, EyeballFile, eyeballCap, false, c.UID); err == nil {
 		t, err := eyeball.Parse(bytes.NewReader(raw))
 		if err != nil {
-			return refuse(c, res, EyeballFile+": "+err.Error(), report)
+			return refuse(c, res, EyeballFile+": "+eyeballReason(err), report)
 		}
 		var b bytes.Buffer
 		if err := t.Encode(&b); err != nil {
@@ -177,10 +181,23 @@ func Import(c Config) (Result, error) {
 	return res, nil
 }
 
+// eyeballReason is the reason for a staged eyeball table that does not
+// parse. The error of eyeball.Parse can quote the line, so only the line
+// number goes into the reason.
+func eyeballReason(err error) string {
+	var le *eyeball.LineError
+	if errors.As(err, &le) {
+		return fmt.Sprintf("line %d does not parse", le.Line)
+	}
+	return "does not parse"
+}
+
 // refuse writes the report of a refused set: the reason first, then the
 // lines of the staged report. The reason names the file and the line. It
-// never quotes a staged line.
+// never quotes a staged line. As a second guard, the reason goes through
+// Clean before it goes anywhere.
 func refuse(c Config, res Result, why string, report []string) (Result, error) {
+	why = Clean(why)
 	res.Refused = why
 	res.IPs, res.Domains = -1, -1
 	res.Report = append([]string{"FAIL stage: " + why + "; the lists stay as they were"}, report...)
@@ -225,6 +242,10 @@ func openStage(stateDir string) (*os.Root, error) {
 	return r.OpenRoot(StageName)
 }
 
+// afterLstat runs between the Lstat and the open of readStaged. A test
+// changes the stage there.
+var afterLstat = func(string) {}
+
 // readStaged reads one staged file. The file must be a regular file (no
 // link, FIFO or device), owned by uid when uid >= 0, and at most max bytes.
 // With cut, a larger file gives its first max bytes, and no error. The
@@ -238,8 +259,13 @@ func readStaged(r *os.Root, name string, max int64, cut bool, uid int) ([]byte, 
 	if !fi.Mode().IsRegular() {
 		return nil, errors.New("not a regular file")
 	}
-	// O_NONBLOCK: if the name became a FIFO after the Lstat, the open
-	// does not wait for a writer. The Stat below then refuses it.
+	afterLstat(name)
+	// The name can change between the Lstat and the open. os.Root follows
+	// a link that stays in the stage, also with O_NOFOLLOW. Thus the open
+	// does not refuse a link; the checks after it do: the open file must
+	// be the file of the Lstat (SameFile), a regular file, and owned by
+	// uid. O_NONBLOCK: a FIFO in place of the file does not make the open
+	// wait for a writer.
 	f, err := r.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err

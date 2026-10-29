@@ -616,13 +616,8 @@ func (s *Spec) settings() (ua string, timeout time.Duration, maxIPs, maxDoms int
 	if timeout == 0 {
 		timeout = 60 * time.Second
 	}
-	maxIPs, maxDoms = s.MaxIPs, s.MaxDomains
-	if maxIPs == 0 {
-		maxIPs = feedstage.DefaultMaxIPs
-	}
-	if maxDoms == 0 {
-		maxDoms = feedstage.DefaultMaxDomains
-	}
+	maxIPs = feedstage.Cap(s.MaxIPs, feedstage.DefaultMaxIPs)
+	maxDoms = feedstage.Cap(s.MaxDomains, feedstage.DefaultMaxDomains)
 	return ua, timeout, maxIPs, maxDoms
 }
 
@@ -816,6 +811,14 @@ func (f *Fetcher) Run() (report []string, nIPs, nDoms int, err error) {
 		return nil, 0, 0, err
 	}
 	ua, timeout, maxIPs, maxDoms := spec.settings()
+	for _, c := range []struct {
+		key      string
+		set, use int
+	}{{"max_ips", spec.MaxIPs, maxIPs}, {"max_domains", spec.MaxDomains, maxDoms}} {
+		if c.set > c.use {
+			report = append(report, fmt.Sprintf("WARN sources.json: %s=%d is above the ceiling; the cap is %d", c.key, c.set, c.use))
+		}
+	}
 	agent := policycompile.SegmentFor(policycompile.DenyByDefault)
 	house := policycompile.SegmentFor(policycompile.AllowByDefault)
 	neverNets := neverIPSet(readListFile(filepath.Join(policy, agent.File("never_block.ips")), "ips", &report))

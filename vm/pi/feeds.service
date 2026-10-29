@@ -61,11 +61,20 @@ MemoryDenyWriteExecute=yes
 # UDP and TCP sockets only. The log goes to the journal through the
 # descriptors that systemd opens.
 RestrictAddressFamilies=AF_INET AF_INET6
-IPAddressDeny=link-local multicast
-# RestrictNetworkInterfaces=lo <WAN_IF> [<WG_IF>] is in the drop-in
+# What the unit can reach: loopback (the resolver stub on 127.0.0.1:53)
+# and public addresses through the uplink. IPAddressDeny takes out the
+# private, shared (100.64.0.0/10), link-local and multicast ranges. Thus
+# no segment gateway address of the Pi (the engine, www, the resolvers of
+# each segment, sshd), no client and no host on the LAN of the uplink
+# (the router of the ISP). When an address is in both lists, the allow
+# list wins, so loopback stays open. A public address of the Pi itself on
+# the uplink goes through lo, and stays open.
+IPAddressAllow=localhost
+IPAddressDeny=link-local multicast 10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10 fc00::/7
+# RestrictNetworkInterfaces=lo <WAN_IF> is in the drop-in
 # pi-fortress-feeds.service.d/uplink.conf, which apply writes from
-# net.env (lib/feeds.sh). The unit cannot reach the agent, house, desk or
-# segment interfaces.
+# net.env (lib/feeds.sh). The unit cannot use the agent, house, desk,
+# segment or WireGuard interfaces.
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
 SystemCallFilter=~@privileged
