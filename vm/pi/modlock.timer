@@ -1,0 +1,13 @@
+[Unit]
+Description=pi-fortress: lock kernel module loads 10 minutes after boot
+
+[Timer]
+# One time in each boot. The 10 minutes give udev the drivers of the
+# hardware, and NetworkManager, nftables and pf their modules, also on a
+# slow boot. When apply enables the timer more than 10 minutes after the
+# boot, the lock comes at once.
+OnBootSec=10min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target

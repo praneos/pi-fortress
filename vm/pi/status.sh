@@ -29,6 +29,28 @@ fi
 echo "== sysctl =="
 sysctl net.ipv4.ip_forward net.ipv6.conf.all.disable_ipv6 2>/dev/null || true
 echo
+# The kernel locks (docs/user_guide/pi_setup.md "Kernel locks"). PID 1
+# drops CAP_SYS_RAWIO (bit 17 of CapBnd) at boot, so no process can open
+# /dev/mem or /proc/kcore. pi-fortress-modlock.timer locks module loads
+# 10 minutes after boot, until the next boot.
+echo "== kernel locks =="
+_capbnd="$(awk '$1 == "CapBnd:" {print $2}' /proc/1/status 2>/dev/null || true)"
+if [[ ! "${_capbnd}" =~ ^[0-9a-fA-F]{1,16}$ ]]; then
+  echo "PID 1 has CAP_SYS_RAWIO: ? (no CapBnd in /proc/1/status)"
+elif (( 16#${_capbnd} & 0x20000 )); then
+  _rawio_why=""
+  [[ -f /etc/systemd/system.conf.d/50-pi-fortress.conf ]] && _rawio_why=" (the drop-in applies at the next boot: a reboot waits)"
+  echo "PID 1 has CAP_SYS_RAWIO: yes${_rawio_why}"
+else
+  echo "PID 1 has CAP_SYS_RAWIO: no"
+fi
+case "$(cat /proc/sys/kernel/modules_disabled 2>/dev/null || true)" in
+  1) _modlock=yes ;;
+  0) _modlock=no ;;
+  *) _modlock='?' ;;
+esac
+echo "modules locked: ${_modlock} (timer: $(systemctl is-active pi-fortress-modlock.timer 2>/dev/null || true))"
+echo
 echo "== resources =="
 # Disk: the logs, the journal and the fake-IP journal are all on the root of
 # the SD card. A full card stops all writers at the same time. Thus this warns

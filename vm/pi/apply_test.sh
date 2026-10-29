@@ -1983,6 +1983,100 @@ grep -qF 'systemctl disable --now pi-fortress-uplink-watch.timer' "${apply}" || 
 grep -qF '"pi-fortress-uplink-watch.timer"' "${here}/../../internal/admin/admin.go" || fail "the TUI unit list does not show the uplink watchdog"
 grep -qF 'pi-fortress-uplink-watch.timer' "${here}/status.sh" || fail "status.sh does not show the uplink watchdog"
 
+# The kernel module lock. The unit stays root with no capability: the
+# kernel lets uid 0 write the sysctl file. It writes only that file, and
+# has no network.
+_ml="${here}/modlock.service"
+for _l in Type=oneshot 'ExecStart=/sbin/sysctl -w kernel.modules_disabled=1' \
+  'ConditionPathExists=/proc/sys/kernel/modules_disabled' NoNewPrivileges=yes 'CapabilityBoundingSet=' \
+  'AmbientCapabilities=' ProtectKernelTunables=yes 'ReadWritePaths=/proc/sys/kernel/modules_disabled' \
+  PrivateNetwork=yes 'RestrictAddressFamilies=AF_UNIX' ProtectSystem=strict ProtectHome=yes PrivateTmp=yes \
+  PrivateDevices=yes ProtectKernelModules=yes ProtectKernelLogs=yes ProtectControlGroups=yes ProtectClock=yes \
+  ProtectHostname=yes ProtectProc=invisible RestrictNamespaces=yes RestrictRealtime=yes RestrictSUIDSGID=yes \
+  LockPersonality=yes MemoryDenyWriteExecute=yes SystemCallArchitectures=native SystemCallFilter=@system-service \
+  SystemCallFilter=~@privileged SystemCallErrorNumber=EPERM \
+  'InaccessiblePaths=-/etc/pi-fortress/broker -/var/lib/pi-fortress/engine -/var/lib/pi-fortress/www'; do
+  grep -qxF "${_l}" "${_ml}" || fail "modlock.service has no '${_l}'"
+done
+grep -qE '^(CapabilityBoundingSet|AmbientCapabilities)=.' "${_ml}" &&
+  fail "modlock.service gives a capability; the sysctl write of uid 0 needs none"
+grep -qE '^(User|DynamicUser|StateDirectory|RuntimeDirectory|ProcSubset)=' "${_ml}" &&
+  fail "modlock.service runs as another user, writes a directory, or hides /proc/sys"
+[[ "$(grep -c '^ReadWritePaths=' "${_ml}")" == 1 ]] || fail "modlock.service writes more than modules_disabled"
+for _d in MemoryMax TasksMax; do
+  grep -qE "^${_d}=[0-9]" "${_ml}" || fail "modlock.service has no ${_d}"
+done
+# One time in each boot, 10 minutes after it.
+for _l in OnBootSec=10min 'WantedBy=timers.target'; do
+  grep -qxF "${_l}" "${here}/modlock.timer" || fail "modlock.timer has no '${_l}'"
+done
+grep -qE '^(OnUnitActiveSec|OnUnitInactiveSec|OnCalendar|OnActiveSec|OnStartupSec)=' "${here}/modlock.timer" &&
+  fail "modlock.timer fires more than one time in a boot"
+# apply: on a full apply only, as its last unit step: on a box that is up
+# for more than 10 minutes, the lock comes when apply enables the timer.
+# MODULE_LOCK=0 disables the timer.
+_ml_on="$(grep -nF 'systemctl enable --now pi-fortress-modlock.timer' "${apply}" | head -1 | cut -d: -f1 || true)"
+_ml_list="$(grep -nF 'install -m 0644 "${WORKDIR}/pi-fortress-modlock.conf" /etc/modules-load.d/pi-fortress-modlock.conf' "${apply}" | head -1 | cut -d: -f1 || true)"
+_ml_last="$(grep -nE 'systemctl (enable|restart|start)' "${apply}" | tail -1 | cut -d: -f1 || true)"
+[[ -n "${_ml_on}" && "${_ml_on}" -gt "${_uw_local}" ]] || fail "apply.sh does not enable the module lock timer on a full apply"
+[[ -n "${_ml_list}" && "${_ml_list}" -lt "${_ml_on}" ]] || fail "apply.sh does not write the module list before it enables the lock"
+[[ "${_ml_on}" == "${_ml_last}" ]] || fail "apply.sh enables or restarts a unit after the module lock timer (line ${_ml_last})"
+grep -qxF 'MODULE_LOCK=1' "${here}/net.env" || fail "net.env does not document MODULE_LOCK"
+grep -qF "MODULE_LOCK='\${MODULE_LOCK}' is not 0 or 1" "${apply}" || fail "apply.sh does not check MODULE_LOCK"
+grep -qF 'systemctl disable --now pi-fortress-modlock.timer' "${apply}" || fail "MODULE_LOCK=0 does not disable the module lock"
+grep -qF 'pi-fortress-modlock.timer' "${here}/status.sh" && grep -qF 'modules locked: ' "${here}/status.sh" ||
+  fail "status.sh does not show the module lock"
+grep -qF 'PID 1 has CAP_SYS_RAWIO: ' "${here}/status.sh" || fail "status.sh does not show CAP_SYS_RAWIO of PID 1"
+
+# The module list (MODLOCK_LIST in apply.sh). After the lock, a rule that
+# needs a module that is not loaded cannot load. Thus each expression with
+# its own module that render emits in the rulesets above must have that
+# module in the list. An expression with a module that the list does not
+# know fails here, so that a new one gets its module too.
+eval "$(sed -n '/^MODLOCK_LIST=(/,/)$/p' "${apply}")"
+[[ "${#MODLOCK_LIST[@]}" -gt 10 ]] || fail "apply.sh has no MODLOCK_LIST"
+grep -hv '^[[:space:]]*#' "${tmp}"/*.nft >"${tmp}/all-renders.nft"
+grep -qF 'masquerade' "${tmp}/all-renders.nft" && grep -qF 'ct count' "${tmp}/all-renders.nft" ||
+  fail "the renders above are gone; the module list check would prove nothing"
+_W='(^|[^A-Za-z0-9_@."-])'
+_seen=0
+while IFS=% read -r _re _mods; do
+  grep -qE "${_re}" "${tmp}/all-renders.nft" || continue
+  _seen=$((_seen + 1))
+  for _m in ${_mods}; do
+    [[ " ${MODLOCK_LIST[*]} " == *" ${_m} "* ]] || fail "render emits '${_re}', but MODLOCK_LIST in apply.sh has no ${_m}"
+  done
+done <<EOF
+${_W}(ct (state|status|mark|direction|zone|helper|original|reply|expiration|label|event)|notrack)( |\$)%nft_ct
+${_W}ct count( |\$)%nft_connlimit
+${_W}limit rate( |\$)%nft_limit
+${_W}log( |\$)%nft_log nf_log_syslog
+${_W}reject( |\$)%nft_reject_inet
+${_W}(dnat|snat)( |\$)%nft_nat
+${_W}masquerade( |\$)%nft_masq
+${_W}redirect( |\$)%nft_redir
+${_W}type nat hook%nft_chain_nat
+${_W}queue( |\$)%nft_queue
+${_W}fib( |\$)%nft_fib_inet
+EOF
+[[ "${_seen}" -ge 10 ]] || fail "only ${_seen} of the expressions with a module are in the renders above; the module list check is weak"
+if _new="$(grep -oE "${_W}(quota|numgen|jhash|symhash|tproxy|synproxy|osf|xfrm|dup to|fwd to|socket (transparent|mark|wildcard|cgroupv2)|ct (timeout|expectation)|flow (add|offload)|tunnel)( |\$)" "${tmp}/all-renders.nft" | sort -u | tr '\n' ' ')" && [[ -n "${_new}" ]]; then
+  fail "render emits an expression with its own kernel module (${_new}); add the module to MODLOCK_LIST in apply.sh and to this check"
+fi
+grep -qF 'MODLOCK_LIST+=(wireguard)' "${apply}" || fail "apply.sh does not load wireguard before the lock on a box with a tunnel"
+grep -qF 'MODLOCK_LIST+=(8021q)' "${apply}" || fail "apply.sh does not load 8021q before the lock on a box with a VLAN"
+# A typo in a name makes systemd-modules-load fail at each boot. When this
+# host has the module index of its kernel, each name must be in it.
+_kmods="/lib/modules/$(uname -r)"
+if [[ -r "${_kmods}/modules.dep" ]]; then
+  for _m in "${MODLOCK_LIST[@]}" wireguard 8021q nf_conntrack; do
+    grep -qE "(^|/)${_m}\.ko(\.[a-z]+)?:" "${_kmods}/modules.dep" || grep -qsE "/${_m}\.ko\$" "${_kmods}/modules.builtin" ||
+      fail "MODLOCK_LIST names ${_m}, which the kernel of this host does not have"
+  done
+else
+  echo "apply_test: no ${_kmods}/modules.dep; the module names are not checked against a kernel" >&2
+fi
+
 # git_push.allow (docs/git_push.md): the Pi owns it. apply installs or
 # removes it. A change restarts the fence. The broker points at it.
 grep -qE '^PI_OWNED = .*\bgit_push\.allow\b' "${here}/../../Makefile" || fail "git_push.allow is not in PI_OWNED"
@@ -2226,6 +2320,56 @@ rm -f "${croot}/cmdline.txt"
 cl_run >/dev/null || fail "harden_cmdline failed with no cmdline.txt (a lab VM)"
 grep -qF 'HARDEN_CMDLINE=/boot/firmware/cmdline.txt HARDEN_REBOOT_FLAG=/var/run/reboot-required harden_cmdline' "${here}/provision.sh" ||
   fail "provision.sh does not add the memory cgroup and PSI to the kernel command line"
+
+# PID 1 drops CAP_SYS_RAWIO (harden_rawio). The file applies when PID 1
+# starts, so a new or changed file flags a reboot through the flag that
+# pf doctor and pf alert updates read, with pi-fortress in its .pkgs.
+rroot="${tmp}/rawioroot"
+mkdir -p "${rroot}/work" "${rroot}/run" "${rroot}/bin"
+# Only these host tools, and no systemctl: only a boot applies the file.
+for _c in cmp install grep mkdir touch; do
+  ln -s "$(type -P "${_c}")" "${rroot}/bin/${_c}"
+done
+rw_run() {
+  (
+    # shellcheck source=lib/harden.sh
+    source "${here}/lib/harden.sh"
+    HARDEN_SYSTEM_CONF_D="${rroot}/system.conf.d" HARDEN_REBOOT_FLAG="${rroot}/run/reboot-required"
+    HARDEN_WORK="${rroot}/work"
+    PATH="${rroot}/bin"
+    harden_rawio
+  )
+}
+_rconf="${rroot}/system.conf.d/50-pi-fortress.conf"
+printf 'linux-image-rpi-2712\n' >"${rroot}/run/reboot-required.pkgs"
+rw_run >"${rroot}/out" 2>&1 || fail "harden_rawio failed: $(cat "${rroot}/out")"
+[[ "$(grep -v '^#' "${_rconf}")" == $'[Manager]\nCapabilityBoundingSet=~CAP_SYS_RAWIO' ]] ||
+  fail "50-pi-fortress.conf is not [Manager] CapabilityBoundingSet=~CAP_SYS_RAWIO: $(cat "${_rconf}")"
+[[ -e "${rroot}/run/reboot-required" ]] || fail "a new 50-pi-fortress.conf did not flag a reboot"
+[[ "$(cat "${rroot}/run/reboot-required.pkgs")" == $'linux-image-rpi-2712\npi-fortress' ]] ||
+  fail "the reboot flag lost a package or did not name pi-fortress: $(cat "${rroot}/run/reboot-required.pkgs")"
+grep -q 'a reboot waits' "${rroot}/out" || fail "harden_rawio did not say that a reboot waits"
+grep -q 'command not found' "${rroot}/out" && fail "harden_rawio ran a tool that it does not need: $(cat "${rroot}/out")"
+# The same file again: no flag, no line, no second name.
+rm -f "${rroot}/run/reboot-required"
+rw_run >"${rroot}/out" 2>&1
+[[ ! -e "${rroot}/run/reboot-required" && ! -s "${rroot}/out" ]] || fail "an unchanged 50-pi-fortress.conf flagged a reboot again"
+# A changed file (an edit by hand) is written again and flags a reboot, but
+# names pi-fortress only one time. A flag directory that is gone comes back.
+echo 'CapabilityBoundingSet=' >>"${_rconf}"
+rm -rf "${rroot}/run"
+rw_run >/dev/null 2>&1 || fail "harden_rawio failed with no flag directory"
+[[ -e "${rroot}/run/reboot-required" ]] || fail "a changed 50-pi-fortress.conf did not flag a reboot"
+rw_run >/dev/null 2>&1
+echo 'CapabilityBoundingSet=' >>"${_rconf}"
+rw_run >/dev/null 2>&1
+[[ "$(grep -cx pi-fortress "${rroot}/run/reboot-required.pkgs")" == 1 ]] || fail "harden_rawio named pi-fortress more than one time"
+grep -qx 'CapabilityBoundingSet=' "${_rconf}" && fail "harden_rawio kept a line that an operator added"
+_at="$(grep -n '^harden_rawio$' "${apply}" | head -1 | cut -d: -f1)"
+[[ -n "${_at}" && "${_at}" -gt "${_local_exit}" ]] || fail "apply.sh does not run harden_rawio on a full apply"
+grep -qxF 'HARDEN_REBOOT_FLAG=/var/run/reboot-required' "${apply}" || fail "apply.sh does not give harden_rawio the reboot flag of pf doctor"
+grep -qF 'Flag:      "/var/run/reboot-required",' "${here}/../../internal/doctor/reboot.go" ||
+  fail "pf doctor no longer reads /var/run/reboot-required; harden_rawio flags a reboot nobody reads"
 
 # Key-only SSH (harden_ssh). The sshd stub passes -t unless sshd.bad
 # exists, and prints sshd.T for -T. The ssh-keygen stub takes a file
@@ -3259,11 +3403,17 @@ else
   # it. nft answers the two listings that the carry reads with one live element.
   # NFT_FAIL names a call that must fail: the run that proves that a refused
   # carry never fails the apply uses it.
+  # NFT_FAIL_CHECK makes the kernel check (-c) fail as it does when a rule
+  # needs a module that the kernel cannot load.
   cat >"${lstub}/nft" <<'EOF'
 #!/bin/sh
 printf 'argv: %s\n' "$*" >>"${NFT_LOG}"
 if [ -n "${NFT_FAIL:-}" ] && [ "$*" = "${NFT_FAIL}" ]; then
   echo "nft: refused on purpose" >&2
+  exit 1
+fi
+if [ -n "${NFT_FAIL_CHECK:-}" ] && [ "$1" = -c ]; then
+  echo "Error: Could not process rule: No such file or directory" >&2
   exit 1
 fi
 case "$*" in
@@ -3278,6 +3428,8 @@ esac
 exit 0
 EOF
   printf '#!/bin/sh\necho "2: lo    inet 10.77.0.1/24"\n' >"${lstub}/ip"
+  # modprobe records each call in MODPROBE_LOG, when the run names one.
+  printf '#!/bin/sh\n[ -z "${MODPROBE_LOG:-}" ] || printf "%%s\\n" "$*" >>"${MODPROBE_LOG}"\nexit 0\n' >"${lstub}/modprobe"
   # The stub records each unit action. Thus the test can ask what apply
   # decided to restart, and need not infer it. is-active answers yes: the
   # restart predicate is for a box whose fence is already up.
@@ -3519,6 +3671,47 @@ EOF
     fail "a refused carry stopped the ruleset from loading"
   grep -q 'could not put the resolved addresses back' "${app2}.log" ||
     fail "a refused carry passed in silence: $(tail -5 "${app2}.log")"
+
+  # The module list of the lock. A box with no house and no VLAN gets the
+  # base list, and apply loads it now while the lock is off.
+  _mlconf="${app2}/etc/modules-load.d/pi-fortress-modlock.conf"
+  grep -v '^#' "${_mlconf}" >"${tmp}/modlock.list" || fail "apply --local wrote no ${_mlconf##*/}"
+  for _m in nf_tables nft_ct nft_connlimit nft_limit nft_log nf_log_syslog nft_reject_inet nft_nat nft_masq \
+    nft_redir nft_chain_nat nft_queue nft_fib_inet nfnetlink_queue nf_conntrack_netlink; do
+    grep -qx "${_m}" "${tmp}/modlock.list" || fail "${_mlconf##*/} has no ${_m}"
+  done
+  grep -qx wireguard "${tmp}/modlock.list" && fail "a box with no tunnel loads wireguard"
+  [[ "${lwan}" == *.* ]] || ! grep -qx 8021q "${tmp}/modlock.list" || fail "a box with no VLAN loads 8021q"
+  # kernel.modules_disabled through PF_MODULES_DISABLED: off, then on.
+  _mlrun() {
+    : >"${app2}.nft"
+    : >"${app2}.modprobe"
+    PATH="${lstub}:${lsafe}" PF_ALLOW_ANY_HOST=1 PF_INT_IF=lo PF_WAN_IF="${lwan}" SYSTEMCTL_LOG="${app2}.systemctl" \
+      NFT_LOG="${app2}.nft" MODPROBE_LOG="${app2}.modprobe" PF_MODULES_DISABLED="${tmp}/modules_disabled" \
+      NFT_FAIL_CHECK="${1}" bash "${app2}/usr/local/lib/pi-fortress/apply.sh" --local >"${app2}.lock.log" 2>&1
+  }
+  echo 0 >"${tmp}/modules_disabled"
+  _mlrun '' || fail "apply --local failed with the lock off: $(tail -5 "${app2}.lock.log")"
+  grep -qxF -e "-a $(grep -v '^#' "${_mlconf}" | tr '\n' ' ' | sed 's/ $//')" "${app2}.modprobe" ||
+    fail "apply did not load the module list while the lock is off: $(cat "${app2}.modprobe")"
+  echo 1 >"${tmp}/modules_disabled"
+  _mlrun '' || fail "apply --local failed with the lock on: $(tail -5 "${app2}.lock.log")"
+  grep -q '^-a ' "${app2}.modprobe" && fail "apply tried to load the module list after the lock"
+  grep -qF 'kernel modules are locked (pi-fortress-modlock); a reboot loads' "${app2}.lock.log" &&
+    fail "a ruleset that passed its check got the lock line"
+  # A check that the kernel refuses: with the lock on, apply says why, and
+  # it never loads the ruleset. With the lock off, it does not blame the lock.
+  if _mlrun 1; then
+    fail "apply --local passed a ruleset that the kernel check refused"
+  fi
+  grep -qF 'kernel modules are locked (pi-fortress-modlock); a reboot loads the new ones, or set MODULE_LOCK=0' "${app2}.lock.log" ||
+    fail "a refused check with the lock on does not name the lock: $(tail -5 "${app2}.lock.log")"
+  grep -qE '^argv: -f /' "${app2}.nft" && fail "apply loaded the ruleset after the kernel check refused it"
+  echo 0 >"${tmp}/modules_disabled"
+  if _mlrun 1; then
+    fail "apply --local passed a ruleset that the kernel check refused (lock off)"
+  fi
+  grep -qF 'kernel modules are locked' "${app2}.lock.log" && fail "a refused check with the lock off names the lock"
 
   # The same-file box: core.hosts.local is next to core.hosts in
   # /etc/pi-fortress, and core.hosts is both the source and the installed
