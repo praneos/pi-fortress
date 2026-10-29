@@ -69,6 +69,13 @@ func uplinkWatchUnitTests(t *testing.T) {
 		"MemoryMax":               "67108864",
 		"TasksMax":                "32",
 	}
+	// The race tier of lab.sh lifts the memory and task caps of each pf
+	// unit with a drop-in (90-lab-race.conf). Then the caps are not those
+	// of the unit file.
+	if strings.TrimSpace(pi(t, "test -e /etc/systemd/system/"+uplinkWatchUnit+".d/90-lab-race.conf && echo race || true")) == "race" {
+		delete(want, "MemoryMax")
+		delete(want, "TasksMax")
+	}
 	props := make([]string, 0, len(want))
 	for k := range want {
 		props = append(props, k)
