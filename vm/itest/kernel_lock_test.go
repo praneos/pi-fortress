@@ -62,7 +62,10 @@ func kernelRawioTests(t *testing.T) {
 			t.Logf("%s does not exist on this kernel: nothing to open", f)
 			continue
 		}
-		out, _ := ssh(t, 15*time.Second, "pi", "sudo head -c1 "+f+" 2>&1 >/dev/null; echo rc=$?")
+		out, _ := ssh(t, 15*time.Second, "pi", "sudo -n head -c1 "+f+" 2>&1 >/dev/null; echo rc=$?")
+		if sudoRefused(out) {
+			skipNoSudo(t, "pi", "sudo head -c1 "+f)
+		}
 		if !contains(out, "Operation not permitted") || contains(out, "rc=0") {
 			t.Errorf("root opened %s, or failed with an error other than EPERM:\n%s", f, out)
 		}
