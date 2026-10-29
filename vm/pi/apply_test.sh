@@ -2027,6 +2027,8 @@ grep -qF 'systemctl disable --now pi-fortress-modlock.timer' "${apply}" || fail 
 grep -qF 'pi-fortress-modlock.timer' "${here}/status.sh" && grep -qF 'modules locked: ' "${here}/status.sh" ||
   fail "status.sh does not show the module lock"
 grep -qF 'PID 1 has CAP_SYS_RAWIO: ' "${here}/status.sh" || fail "status.sh does not show CAP_SYS_RAWIO of PID 1"
+grep -qF 'ModulesDisabledPath = "/proc/sys/kernel/modules_disabled"' "${here}/../../internal/admin/kernel.go" ||
+  fail "the TUI does not read the module lock"
 
 # The module list (MODLOCK_LIST in apply.sh). After the lock, a rule that
 # needs a module that is not loaded cannot load. Thus each expression with

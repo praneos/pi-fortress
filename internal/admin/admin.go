@@ -114,6 +114,11 @@ type Config struct {
 	Store       *secrets.Store
 	AuditPath   string
 
+	// PID1Status and ModulesDisabled are the files of the kernel locks
+	// (KernelLock). Empty reads nothing.
+	PID1Status      string
+	ModulesDisabled string
+
 	// Audit records each verb that makes a change. Nil disables it. A test
 	// wants this, and a front end that did not opt in gets this.
 	Audit *audit.Log
@@ -155,6 +160,9 @@ func Defaults() *Config {
 		LockPath:    ApplyLockPath,
 		RebootFlag:  RebootFlagPath,
 		AuditPath:   audit.DefaultPath,
+
+		PID1Status:      PID1StatusPath,
+		ModulesDisabled: ModulesDisabledPath,
 	}
 	// This is the same override that apply.sh and the observer use. Thus the
 	// TUI shows the segments of a box that keeps them in a different location.
