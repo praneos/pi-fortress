@@ -164,6 +164,20 @@ func feedsLiveTests(t *testing.T) {
 	if pid == "" || pid == "0" {
 		t.Fatalf("%s did not start", feedsUnit)
 	}
+	// systemd 257 forks systemd-executor first: root, all capabilities,
+	// no filter. It sets up the sandbox and then runs the command. Read
+	// the process only when it is the command.
+	comm := ""
+	for range 20 {
+		comm = strings.TrimSpace(pi(t, "sudo cat /proc/"+pid+"/comm"))
+		if comm == "sleep" {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if comm != "sleep" {
+		t.Fatalf("%s control process %s is %q, not the ExecStartPre sleep", feedsUnit, pid, comm)
+	}
 	status := pi(t, "sudo cat /proc/"+pid+"/status")
 	if got, want := procStatus(status, "Uid"), strings.TrimSpace(pi(t, "id -u pf-feeds")); got != want {
 		t.Errorf("%s runs as uid %q, want %q (pf-feeds)", feedsUnit, got, want)
