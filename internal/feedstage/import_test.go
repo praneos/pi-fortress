@@ -280,6 +280,26 @@ func TestImportRefusesAFileOverItsByteCap(t *testing.T) {
 	s.unchanged(prev)
 }
 
+// The byte cap of a list is its line cap times the longest line and its
+// newline; the cap of feeds.map comes from the lines of the staged lists.
+// Root reads no more than a file that can pass.
+func TestImportByteCapFollowsTheLineCap(t *testing.T) {
+	s := newStage(t)
+	c := s.cfg()
+	c.Limits.MaxIPs = 2
+	s.put(IPsFile, strings.Repeat("\n", 39))
+	res, err := Import(c)
+	if !errors.Is(err, ErrRefused) || !strings.Contains(res.Refused, "blacklist.ips: larger than 38 bytes") {
+		t.Fatalf("list: %+v %v", res, err)
+	}
+	s.put(IPsFile, "1.2.3.4\n")
+	s.put(FeedsMapFile, strings.Repeat("\n", 320))
+	res, err = Import(c)
+	if !errors.Is(err, ErrRefused) || !strings.Contains(res.Refused, "feeds.map: larger than 319 bytes") {
+		t.Fatalf("map: %+v %v", res, err)
+	}
+}
+
 func TestImportCutsALongReport(t *testing.T) {
 	was := reportCap
 	reportCap = 30

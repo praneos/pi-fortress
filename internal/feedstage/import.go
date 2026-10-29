@@ -12,9 +12,10 @@ import (
 	"pi-fortress/internal/eyeball"
 )
 
-// The byte caps of the staged files. Each is far above a real file, and
-// below what the memory caps of the root units hold. They are variables
-// only so that a test can make them small.
+// The hard byte caps of the staged files. Each is far above a real file,
+// and below what the memory caps of the root units hold. A list and
+// feeds.map also have a smaller cap: the bytes of their line cap (byteCap).
+// They are variables only so that a test can make them small.
 var (
 	listCap    int64 = 64 << 20
 	mapCap     int64 = 96 << 20
@@ -116,14 +117,15 @@ func Import(c Config) (Result, error) {
 	var domains []string
 	hasDomains := false
 	for _, l := range lists() {
-		raw, err := readStaged(st, l.name, listCap, false, c.UID)
+		limit := l.max(c.Limits)
+		raw, err := readStaged(st, l.name, byteCap(limit, l.kind.lineMax(), listCap), false, c.UID)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return refuse(c, res, l.name+": "+err.Error(), report)
 		}
-		got, err := CheckList(l.kind, raw, l.max(c.Limits))
+		got, err := CheckList(l.kind, raw, limit)
 		if err != nil {
 			return refuse(c, res, l.name+": "+err.Error(), report)
 		}
@@ -138,9 +140,11 @@ func Import(c Config) (Result, error) {
 			res.Domains = len(got)
 			domains, hasDomains = got, true
 		}
-		files = append(files, File{l.name, lines(got)})
+		// CheckList passed, so raw is the lines of got, each with its
+		// newline: no second copy.
+		files = append(files, File{l.name, raw})
 	}
-	if raw, err := readStaged(st, FeedsMapFile, mapCap, false, c.UID); err == nil {
+	if raw, err := readStaged(st, FeedsMapFile, byteCap(total, mapLineMax, mapCap), false, c.UID); err == nil {
 		if err := CheckMap(raw, items, c.Limits.FeedIDs, total); err != nil {
 			return refuse(c, res, FeedsMapFile+": "+err.Error(), report)
 		}

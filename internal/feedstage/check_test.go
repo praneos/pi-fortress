@@ -1,8 +1,10 @@
 package feedstage
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -244,5 +246,50 @@ func TestCommitRefusesAPathBeforeAnyRename(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(out, "a")); !os.IsNotExist(err) {
 		t.Fatalf("a was renamed in before the refusal: %v", err)
+	}
+}
+
+// allocated gives the bytes that f allocates.
+func allocated(f func()) uint64 {
+	var a, b runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&a)
+	f()
+	runtime.ReadMemStats(&b)
+	return b.TotalAlloc - a.TotalAlloc
+}
+
+// A file of 8 Mi empty lines is refused on its count, before a split: a
+// split would allocate 128 MiB of line headers.
+func TestCheckRefusesTooManyLinesBeforeItSplits(t *testing.T) {
+	text := bytes.Repeat([]byte{'\n'}, 8<<20)
+	var err error
+	if n := allocated(func() { _, err = CheckList(KindBlockDomains, text, 1000) }); n > 1<<20 {
+		t.Errorf("CheckList allocated %d bytes for a file over its line cap", n)
+	}
+	if err == nil || err.Error() != "8388608 lines, more than the cap of 1000" {
+		t.Errorf("CheckList: %v", err)
+	}
+	if n := allocated(func() { err = CheckMap(text, nil, nil, 1000) }); n > 1<<20 {
+		t.Errorf("CheckMap allocated %d bytes for a file over its line cap", n)
+	}
+	if err == nil || !strings.HasPrefix(err.Error(), "8388608 lines, more than") {
+		t.Errorf("CheckMap: %v", err)
+	}
+}
+
+func TestByteCapFollowsTheLineCap(t *testing.T) {
+	for _, c := range []struct {
+		lines, lineMax int
+		hard, want     int64
+	}{
+		{2, 18, 64 << 20, 38},
+		{50000, 253, 64 << 20, 12_700_000},
+		{MaxCap, 253, 64 << 20, 64 << 20},
+		{0, 318, 96 << 20, 0},
+	} {
+		if got := byteCap(c.lines, c.lineMax, c.hard); got != c.want {
+			t.Errorf("byteCap(%d, %d, %d) = %d, want %d", c.lines, c.lineMax, c.hard, got, c.want)
+		}
 	}
 }
