@@ -300,6 +300,33 @@ func TestImportByteCapFollowsTheLineCap(t *testing.T) {
 	}
 }
 
+// pf-feeds puts a link to a different file of the stage in place of a
+// list, after the Lstat of root and before its open. The open follows the
+// link, and the check of the open file against the Lstat refuses it.
+func TestImportRefusesALinkThatComesAfterTheLstat(t *testing.T) {
+	s := newStage(t)
+	prev := s.old()
+	s.good()
+	t.Cleanup(func() { afterLstat = func(string) {} })
+	afterLstat = func(name string) {
+		if name != HouseVPNFile {
+			return
+		}
+		p := filepath.Join(s.dir, HouseVPNFile)
+		if err := os.Remove(p); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(HouseDomainsFile, p); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := Import(s.cfg())
+	if !errors.Is(err, ErrRefused) || !strings.Contains(res.Refused, "house_vpn.domains: changed while it was opened") {
+		t.Fatalf("Import: %+v %v", res, err)
+	}
+	s.unchanged(prev)
+}
+
 func TestImportCutsALongReport(t *testing.T) {
 	was := reportCap
 	reportCap = 30

@@ -229,6 +229,10 @@ func openStage(stateDir string) (*os.Root, error) {
 	return r.OpenRoot(StageName)
 }
 
+// afterLstat runs between the Lstat and the open of readStaged. A test
+// changes the stage there.
+var afterLstat = func(string) {}
+
 // readStaged reads one staged file. The file must be a regular file (no
 // link, FIFO or device), owned by uid when uid >= 0, and at most max bytes.
 // With cut, a larger file gives its first max bytes, and no error. The
@@ -242,8 +246,13 @@ func readStaged(r *os.Root, name string, max int64, cut bool, uid int) ([]byte, 
 	if !fi.Mode().IsRegular() {
 		return nil, errors.New("not a regular file")
 	}
-	// O_NONBLOCK: if the name became a FIFO after the Lstat, the open
-	// does not wait for a writer. The Stat below then refuses it.
+	afterLstat(name)
+	// The name can change between the Lstat and the open. os.Root follows
+	// a link that stays in the stage, also with O_NOFOLLOW. Thus the open
+	// does not refuse a link; the checks after it do: the open file must
+	// be the file of the Lstat (SameFile), a regular file, and owned by
+	// uid. O_NONBLOCK: a FIFO in place of the file does not make the open
+	// wait for a writer.
 	f, err := r.OpenFile(name, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
