@@ -1690,7 +1690,7 @@ _djs="$(grep -nxF 'install -m 0644 "${WORKDIR}/dns.json" /etc/pi-fortress/dns.js
 [[ -n "${_ngr}" && -n "${_dsr}" && -n "${_dss}" && -n "${_djs}" &&
   "${_djs}" -lt "${_dss}" && "${_dss}" -lt "${_ngr}" && "${_ngr}" -lt "${_dsr}" ]] ||
   fail "apply.sh does not restart netgate after dns.json and the pf dns stop, and before the pf dns restart (lines ${_djs:-?} ${_dss:-?} ${_ngr:-?} ${_dsr:-?})"
-grep -qxF '  pi-fortress-netgate.service \' "${apply}" || fail "netgate is not in units.required"
+grep -qxF "  pi-fortress-netgate.service \\" "${apply}" || fail "netgate is not in units.required"
 
 # The house dnsmasq parses DHCP off the wire from all devices that the
 # house connects. It was the last long-running daemon with no seccomp
