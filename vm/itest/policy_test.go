@@ -87,8 +87,10 @@ func policyTests(t *testing.T) {
 			t.Errorf("ct.sock is %q, want 660 pf-netgate pf-ctgate", got)
 		}
 		out, _ := ssh(t, 20*time.Second, "pi", "sudo setpriv --reuid=pf-observe --regid=pf-fortress --clear-groups conntrack -L -o extended 2>&1 >/dev/null; echo rc=$?")
-		if !contains(out, "Operation not permitted") || contains(out, "rc=0") {
-			t.Errorf("as pf-observe, conntrack -L did not fail with EPERM:\n%s", out)
+		// conntrack-tools checks the capability itself and refuses before
+		// the kernel can say EPERM; an older one gets EPERM. Both fail.
+		if !(contains(out, "Operation not permitted") || contains(out, "get CAP_NET_ADMIN")) || contains(out, "rc=0") {
+			t.Errorf("as pf-observe, conntrack -L did not fail for want of CAP_NET_ADMIN:\n%s", out)
 		}
 		if !destructiveOK() {
 			t.Skip("the rest stops netgate, and with it the new DNS answers of each segment")
