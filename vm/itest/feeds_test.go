@@ -22,6 +22,7 @@ func feedsTests(t *testing.T) {
 	t.Run("a refresh downloads as pf-feeds and keeps the canaries", feedsRefreshTests)
 	t.Run("a bad staged line refuses the whole set", labOnly(feedsRefuseTests))
 	t.Run("the unit reaches no segment", labOnly(feedsFenceTests))
+	t.Run("the unit reaches no service of the Pi on a segment address", labOnly(feedsOwnAddrTests))
 	t.Run("two applies in 30 minutes reuse the copies", labOnly(feedsReuseTests))
 }
 
@@ -68,7 +69,7 @@ func feedsFence(t *testing.T) string {
 func feedsUnitTests(t *testing.T) {
 	p := showProps(t, feedsUnit, "User", "CapabilityBoundingSet", "AmbientCapabilities", "NoNewPrivileges",
 		"ProtectProc", "ProcSubset", "RestrictAddressFamilies", "ProtectSystem", "PrivateTmp",
-		"StateDirectory", "RestrictNetworkInterfaces", "IPAddressDeny", "LoadState")
+		"StateDirectory", "RestrictNetworkInterfaces", "IPAddressAllow", "IPAddressDeny", "LoadState")
 	for k, want := range map[string]string{
 		"LoadState":               "loaded",
 		"User":                    "pf-feeds",
@@ -96,8 +97,17 @@ func feedsUnitTests(t *testing.T) {
 			t.Errorf("%s RestrictNetworkInterfaces=%q lacks %s of the drop-in", feedsUnit, p["RestrictNetworkInterfaces"], i)
 		}
 	}
-	if p["IPAddressDeny"] == "" {
-		t.Errorf("%s has no IPAddressDeny", feedsUnit)
+	// systemd shows the lists as prefixes: localhost is 127.0.0.0/8 and
+	// ::1/128, link-local and multicast are their prefixes.
+	allow := strings.Fields(p["IPAddressAllow"])
+	slices.Sort(allow)
+	if got := strings.Join(allow, " "); got != "127.0.0.0/8 ::1/128" {
+		t.Errorf("%s IPAddressAllow=%q, want loopback only", feedsUnit, p["IPAddressAllow"])
+	}
+	for _, pfx := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "fc00::/7", "169.254.0.0/16", "224.0.0.0/4"} {
+		if !slices.Contains(strings.Fields(p["IPAddressDeny"]), pfx) {
+			t.Errorf("%s IPAddressDeny=%q lacks %s", feedsUnit, p["IPAddressDeny"], pfx)
+		}
 	}
 	if mode := strings.TrimSpace(pi(t, "sudo stat -c %a "+feedsState)); mode != "700" {
 		t.Errorf("%s has mode %s, want 700", feedsState, mode)
@@ -259,6 +269,38 @@ func feedsFenceTests(t *testing.T) {
 	open, _ := ssh(t, 30*time.Second, "pi", base+dial)
 	if !contains(open, "REACHED") {
 		t.Errorf("control: pf-feeds with no fence did not reach the agent %s:22, so the check above proves nothing:\n%s", agentIP, open)
+	}
+}
+
+// L6, the address half: a service of the Pi on its agent gateway address
+// (the resolver on 53, the engine on 8080). Traffic to an own address goes
+// through lo, so the interface fence lets it pass: the control, with the
+// fence only, reaches at least one port. With the address lists of the
+// unit as well, no port answers. systemd-run takes prefixes, not the
+// names link-local or multicast; systemctl show gives the lists of the
+// unit as prefixes.
+func feedsOwnAddrTests(t *testing.T) {
+	piIP := netenv(t)["PI_IP"]
+	p := showProps(t, feedsUnit, "IPAddressAllow", "IPAddressDeny")
+	if p["IPAddressAllow"] == "" || p["IPAddressDeny"] == "" {
+		t.Fatalf("%s has no address lists: %v", feedsUnit, p)
+	}
+	base := "sudo systemd-run --wait --pipe --quiet -p User=pf-feeds -p 'RestrictAddressFamilies=AF_INET AF_INET6' " +
+		"-p " + shellQuote("RestrictNetworkInterfaces="+feedsFence(t)) + " "
+	lists := "-p " + shellQuote("IPAddressAllow="+p["IPAddressAllow"]) + " -p " + shellQuote("IPAddressDeny="+p["IPAddressDeny"]) + " "
+	opened := 0
+	for _, port := range []string{"53", "8080"} {
+		dial := "/usr/bin/timeout 8 /bin/bash -c " + shellQuote("</dev/tcp/"+piIP+"/"+port+" && echo REACHED")
+		if out, _ := ssh(t, 30*time.Second, "pi", base+dial); !contains(out, "REACHED") {
+			continue
+		}
+		opened++
+		if out, _ := ssh(t, 30*time.Second, "pi", base+lists+dial); contains(out, "REACHED") {
+			t.Errorf("pf-feeds with the address lists of the unit reached %s:%s", piIP, port)
+		}
+	}
+	if opened == 0 {
+		t.Errorf("control: pf-feeds with the fence only reached neither %s:53 nor %s:8080, so the check proves nothing", piIP, piIP)
 	}
 }
 

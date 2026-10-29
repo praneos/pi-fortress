@@ -164,7 +164,15 @@ holds live credentials. The broker can move to the cloud later (unix → mTLS).
 - `pi-fortress-feeds.service` downloads the feeds. It runs `pf fetch` as
   `pf-feeds`, with no capability and `NoNewPrivileges`. It can use only
   `lo` and the uplink (`RestrictNetworkInterfaces`, from a drop-in that
-  apply writes) and only `AF_INET` and `AF_INET6`. Of
+  apply writes) and only `AF_INET` and `AF_INET6`. It can reach loopback
+  (the resolver stub on `127.0.0.1:53`) and public addresses through the
+  uplink. `IPAddressDeny` takes out `10.0.0.0/8`, `172.16.0.0/12`,
+  `192.168.0.0/16`, `100.64.0.0/10`, `fc00::/7`, link-local and
+  multicast; `IPAddressAllow=localhost` keeps loopback open. Thus it
+  cannot reach a segment gateway address of the Pi (the engine, www, the
+  resolvers, sshd), a client, or a host on the LAN of the uplink. A public
+  address of the Pi itself on the uplink goes through `lo`, and stays
+  open to it. Of
   `/var/lib/pi-fortress`, it sees only `feeds-in`: the copies of
   `sources.json` and the `never_block` lists that root puts there. It
   writes only `/var/lib/pi-fortress-feeds` (`0700`): the lists of the run

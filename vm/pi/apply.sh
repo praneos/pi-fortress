@@ -461,7 +461,7 @@ else
     # an empty WAN_IF takes the default route here, as render does.
     _uplink="${WAN_IF:-${PF_WAN_IF:-}}"
     [[ -n "${_uplink}" ]] || _uplink="$(feeds_uplink)"
-    if ! feeds_prepare "${PI_LIB}/feeds.service" "${_uplink}" "${WG_IF:-}" ||
+    if ! feeds_prepare "${PI_LIB}/feeds.service" "${_uplink}" ||
       ! "${PF}" feeds run --policy "${POLICY}" --fresh "${_fresh}"; then
       echo "pi-fortress: feed fetch failed; compiling from the last generated lists" >&2
       if [[ ! -s "${POLICY}/generated/blacklist.domains" ]]; then
