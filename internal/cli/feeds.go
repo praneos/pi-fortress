@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"pi-fortress/internal/admin"
@@ -339,7 +340,7 @@ func applyLockOrInherited(path string) (func(), error) {
 }
 
 // inheritedLock says if this process has a descriptor open on the lock
-// file at path, and the lock is held.
+// file at path that holds the lock (holdsLock).
 func inheritedLock(path string) bool {
 	want, err := os.Lstat(path)
 	if err != nil || !want.Mode().IsRegular() {
@@ -350,10 +351,24 @@ func inheritedLock(path string) bool {
 		return false
 	}
 	for _, e := range ents {
+		fd, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
 		got, err := os.Stat(filepath.Join("/proc/self/fd", e.Name()))
-		if err == nil && os.SameFile(want, got) {
-			return admin.Held(path)
+		if err == nil && os.SameFile(want, got) && holdsLock(fd, path) {
+			return true
 		}
 	}
 	return false
+}
+
+// holdsLock says if fd holds the apply lock at path. The lock must be held,
+// and a flock on fd must succeed. flock succeeds again only on the open
+// file description that holds the lock; on a descriptor of a different
+// open of the file, it fails while that lock is held. If the holder lets
+// go between the two steps, the flock takes the lock on fd, which is then
+// also held for this process.
+func holdsLock(fd int, path string) bool {
+	return admin.Held(path) && syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB) == nil
 }

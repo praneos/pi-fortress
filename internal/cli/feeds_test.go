@@ -348,6 +348,28 @@ func TestInheritedLockSeesTheOpenLockFile(t *testing.T) {
 	release()
 }
 
+// A descriptor on the lock file that a different open gave does not hold
+// the lock while the lock is held, so it is not an inherited lock.
+func TestHoldsLockNeedsTheLockingDescriptor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "apply.lock")
+	l, err := admin.TryLock(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Release()
+	other, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if holdsLock(int(other.Fd()), path) {
+		t.Fatal("a second open of the lock file passed as the holder")
+	}
+	if !inheritedLock(path) {
+		t.Fatal("the descriptor of the lock is open in this process, but inheritedLock is false")
+	}
+}
+
 func TestFeedInputsRemoveAFileThatIsGone(t *testing.T) {
 	b := newFeedsBox(t)
 	b.write(filepath.Join(b.policy, "never_block.domains"), "keep.example.com\n")
